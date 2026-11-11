@@ -1,3 +1,4 @@
+import { withoutAtyAbout } from "../lib/houseDescription.js";
 import { requireUser, cronKeyOk } from "../lib/auth.js";
 /**
  * eBay Trading API proxy — uses Auth'n'Auth token (no OAuth flow needed).
@@ -520,7 +521,7 @@ export async function publishEbayListing(body = {}) {
   /* We ship Delivered Duty Paid, but eBay's page still warns US buyers they'll
      pay import fees to the carrier. The description says otherwise, first. */
   const DDP_LINE = "DELIVERED DUTY PAID: all US import duties, taxes and fees are prepaid by us. You pay nothing extra on delivery.";
-  const descText = String(description || title);
+  const descText = withoutAtyAbout(String(description || title)) || String(title);
   const withDdp = /duty paid|\bDDP\b/i.test(descText) ? descText : `${DDP_LINE}\n\n${descText}`;
   const safeDesc = withDdp.split(/\n\n+/).map(ebaySafe).filter(Boolean).join("\n\n") || ebaySafe(title);
   console.log("[ebay publish_listing] description preview:", JSON.stringify(safeDesc.slice(0, 200)));

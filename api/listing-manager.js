@@ -1,6 +1,6 @@
 import { requireUser, hasStoreSecret, adminClient, cronKeyOk } from "../lib/auth.js";
 import { aiFetch } from "../lib/ai-meter.js";
-import { houseDescription, BODY_VOICE } from "../lib/houseDescription.js";
+import { houseDescription, BODY_VOICE, withoutAtyAbout } from "../lib/houseDescription.js";
 /**
  * Listing Manager API — cross-platform publishing hub
  * Supports: Etsy, Shopify (Earth Editions), Shopify (Atyahara), eBay (future)
@@ -381,6 +381,9 @@ async function aiJson(prompt, maxTokens = 3000) {
   return JSON.parse(m[0]);
 }
 
+// The Atyahara shop keeps its "About Atyāhāra"; the EarthEditions shop never shows it.
+const ownShopText = d => etsyShop().key === "atyahara" ? d : withoutAtyAbout(d);
+
 async function aiGenerate(listing) {
   const { title, description, material, shape, origin, size, weight, tags = [], productType } = listing;
   /* A repeatable line (many alike, one picked from stock) sells on the
@@ -474,7 +477,7 @@ Return JSON with these fields:
   {
     const dims = [listing.width, listing.height, listing.depth].filter(Boolean).join(" x ");
     ai.etsy_description = houseDescription({
-      similar: repeatable, brand: repeatable ? "earth" : "atyahara", title, body: ai.etsy_description,
+      similar: repeatable, brand: repeatable || listing._brand === "earth" ? "earth" : "atyahara", title, body: ai.etsy_description,
       photos: (listing.images || []).length > 0,
       specs: { material: material || ai.material, finish: ai.finish, origin: origin || ai.origin, weight,
         dimensions: dims ? `${dims}${listing.dim_unit ? " " + listing.dim_unit : ""}` : (size || ai.size), pantone: listing.pantone || "" },
@@ -1001,7 +1004,7 @@ export async function publishEtsy(listing, ai, { activate = true } = {}) {
   } = listing;
 
   const etsyTitle = ai?.etsy_title || title;
-  const etsyDesc  = withStandLine(stripWarehouseNote(ai?.etsy_description || listing.description || title), "etsy", title);
+  const etsyDesc  = withStandLine(ownShopText(stripWarehouseNote(ai?.etsy_description || listing.description || title)), "etsy", title);
   const etsyTags  = curatedTags(listing.tags, ai?.etsy_tags).slice(0, 13);
 
   // The numbered sections and the return policy below are Atyahara's; another shop goes by section name and its own policy.
@@ -1238,7 +1241,7 @@ async function applyEtsyPlainInventory(listingId, listing, hdrs, readinessId, qu
 
 async function updateEtsyListing(listingId, listing, ai, { forcePhotos = false } = {}) {
   const etsyTitle = ai?.etsy_title || listing.title;
-  const etsyDesc  = withStandLine(stripWarehouseNote(ai?.etsy_description || listing.description || listing.title), "etsy", listing.title);
+  const etsyDesc  = withStandLine(ownShopText(stripWarehouseNote(ai?.etsy_description || listing.description || listing.title)), "etsy", listing.title);
   const etsyTags  = curatedTags(listing.tags, ai?.etsy_tags).slice(0, 13);
   const quantity  = listing.type === "unique" ? 1 : Math.max(1, +listing.qty || 1);
   const dims      = listingDimensions(listing);

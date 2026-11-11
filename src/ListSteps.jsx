@@ -540,7 +540,7 @@ export default function ListSteps({ form, orders, stock = [], weightKg: weightKg
           {renderPlatform && chosen.some(c => c.key === step) && <>
             <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
               <div style={{ fontFamily: serif, fontSize: 28, color: C.ink, flex: 1 }}>{STEPS[at][1]}</div>
-              {step !== "trade" && onAI && <button type="button" onClick={onAI} disabled={aiBusy || !form.title}
+              {step !== "trade" && onAI && <button type="button" onClick={() => onAI(step)} disabled={aiBusy || !form.title}
                 style={{ padding: "9px 14px", borderRadius: 10, border: "none", background: C.gold, color: "#fff", fontWeight: 800, fontSize: 13, cursor: aiBusy ? "wait" : "pointer", opacity: form.title ? 1 : .5 }}>
                 {aiBusy ? "Filling…" : "✨ Fill with AI"}</button>}
             </div>

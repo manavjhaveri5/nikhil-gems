@@ -2023,13 +2023,16 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
   };
 
   // AI: generate description + 13 Etsy tags in one call
-  const generateAI = async () => {
+  const generateAI = async target => {
     if (!form.title) return;
     setGenerating(true);
+    /* Filled from an EarthEditions tab (its Etsy shop, eBay, eartheditions.co)
+       for a piece not on the Atyahara shop: no "About Atyāhāra" in it. */
+    const earth = ["etsy_ee", "ebay", "store"].includes(target) && !form.platforms?.etsy?.listing_id;
     try {
       const r = await fetch("/api/listing-manager", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "ai_generate", listing: { ...form, tags } }),
+        body: JSON.stringify({ action: "ai_generate", listing: { ...form, tags, ...(earth ? { _brand: "earth" } : {}) } }),
       });
       const d = await lmJson(r).catch(() => ({}));
       if (!d.ai) throw new Error(d.error || `AI failed (${r.status})`);
