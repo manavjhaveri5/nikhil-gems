@@ -2073,7 +2073,8 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
     const e = {};
     if (!String(f.title || "").trim()) e.title = "Title required";
     // Every one-of-a-kind piece that can still sell has to be findable on the shelf.
-    if (needsLocation(f, sold) && !locationOf(f, stock)) e.location = "Where is it? A one-of-a-kind piece needs a location before it's saved.";
+    // "Exception: no stock card or shelf" (ticked on The piece step) waives it.
+    if (needsLocation(f, sold) && !locationOf(f, stock) && !f.stock_exception) e.location = "Where is it? A one-of-a-kind piece needs a location before it's saved.";
     setErrors(e);
     if (e.title) goTab("overview");
     else if (e.location) setSteps("where");
@@ -2306,7 +2307,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
     const f = { ...form, ...patch };
     if (!validate(f)) {
       // Say what's missing, not just that something is.
-      const loc = needsLocation(f, sold) && !locationOf(f, stock);
+      const loc = needsLocation(f, sold) && !locationOf(f, stock) && !f.stock_exception;
       throw new Error(!String(f.title || "").trim() ? "It needs a title first — add one on Overview."
         : loc ? "Where is it? Set its location on the first step (Where) — a one-of-a-kind piece needs a shelf place before it goes up."
         : "Fix the listing first");
