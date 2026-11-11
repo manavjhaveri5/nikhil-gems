@@ -2304,7 +2304,13 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
      returned (its ids) so the next save updates rather than duplicates. */
   const publishOneFromSteps = async (patch, key, opts = {}) => {
     const f = { ...form, ...patch };
-    if (!validate(f)) throw new Error("Fix the listing first");
+    if (!validate(f)) {
+      // Say what's missing, not just that something is.
+      const loc = needsLocation(f, sold) && !locationOf(f, stock);
+      throw new Error(!String(f.title || "").trim() ? "It needs a title first — add one on Overview."
+        : loc ? "Where is it? Set its location on the first step (Where) — a one-of-a-kind piece needs a shelf place before it goes up."
+        : "Fix the listing first");
+    }
     const r = await onPublishOne(ensureListingOrderId({ ...withLocationLog(f, initial?.officeLocation, who), tags, _ai: f._ai || null, updated_at: now() }), key, opts);
     setForm(x => ({ ...x, ...patch, id: r.listing.id, listing_order_id: r.listing.listing_order_id, images: r.listing.images, video: r.listing.video, platforms: r.listing.platforms }));
     return { url: r.url, warning: r.warning || "", queued: r.queued || "" };
