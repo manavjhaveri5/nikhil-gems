@@ -312,6 +312,22 @@ function listingDimensions(listing) {
   const num = v => { const n = parseFloat(v); return isFinite(n) && n > 0 ? +n.toFixed(2) : null; };
   let width = num(listing.width), height = num(listing.height), depth = num(listing.depth);
 
+  if (!width && !height && !depth && !String(listing.size || "").trim()) {
+    /* No dimensions and no size: read them off the title, then the Etsy
+       title, then the description — "55mm", "3 inch", "40 x 30 mm",
+       "25-35mm" (the top of a range). A weight (79g) is never taken. */
+    const re = /(\d+(?:\.\d+)?)(?:\s*[-–]\s*(\d+(?:\.\d+)?))?\s*(?:[x×]\s*(\d+(?:\.\d+)?)\s*)?(?:[x×]\s*(\d+(?:\.\d+)?)\s*)?(mm|cm|inch(?:es)?|in\b)/i;
+    for (const t of [listing.title, listing.etsy_title, listing.etsy_ee_title, listing.description]) {
+      const m = String(t || "").match(re);
+      if (!m) continue;
+      const w = num(m[2] || m[1]);
+      if (!w) continue;
+      const u = normDimUnit(m[5]) || "mm";
+      const h = m[3] ? num(m[3]) : null, d = m[4] ? num(m[4]) : null;
+      const round = /sphere|ball|orb/i.test(`${listing.shape || ""} ${listing.title || ""}`);
+      return { width: w, height: h || (round ? w : null), depth: d || (round ? w : null), unit: u };
+    }
+  }
   if (!width && !height && !depth) {
     const size = String(listing.size || "");
     const parts = size.match(/([\d.]+)\s*(?:[x×*]\s*([\d.]+))?\s*(?:[x×*]\s*([\d.]+))?/);
