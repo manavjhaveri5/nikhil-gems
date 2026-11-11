@@ -8,6 +8,8 @@ import { C, FI } from "./lmTheme.js";
 import { locationOf, needsLocation, knownLocations, tradeRowOf } from "./listingChannels.js";
 import { useStoriesDone, listedAt } from "./storyState.js";
 import { sbThumb } from "./photoUrls.js";
+import { loadK } from "./utils.js";
+import { QUEUE_KEY as ETSY_QUEUE_KEY } from "./etsyQueue.jsx";
 
 const PhotoEditor = lazy(() => import("./PhotoEditor.jsx"));
 const StoryStudio = lazy(() => import("./StoryStudio.jsx"));
@@ -225,10 +227,11 @@ function Tile({ l, store, facts, orders, stock, sales, etsy, etsyAt, onOpen, onE
             const on = st === "active", draft = st && st !== "active" && st !== "deleted";
             // Filled = live and on sale; dashed = there but not on sale (a draft, or sold out); faint = not on it.
             const expired = (p.key === "etsy" || p.key === "etsy_ee") && draft && st !== "sold" && l.platforms?.[p.key]?.expired;
-            return <span key={p.key} title={`${p.label}: ${on ? "live" : st === "sold" ? "sold" : expired ? "expired — renew it (Renew tab)" : draft ? "draft — there, not on sale" : "not listed"}`}
+            const inQ = draft && !expired && st !== "sold" ? facts?.queued?.get(`${p.key}:${l.id}`) : null;
+            return <span key={p.key} title={`${p.label}: ${on ? "live" : st === "sold" ? "sold" : expired ? "expired — renew it (Renew tab)" : inQ ? `in the Etsy queue, ${inQ.place} of ${inQ.of} — it goes live on its own` : draft ? "draft — there, not on sale" : "not listed"}`}
               style={{ fontSize: 9.5, fontWeight: 700, padding: "2px 6px", borderRadius: 10, letterSpacing: .2,
               background: on ? p.color : "transparent", color: on ? "#fff" : draft ? p.color : C.inkFaint,
-              border: `1px ${draft ? "dashed" : "solid"} ${on ? p.color : draft ? p.color : C.border}`, opacity: on || draft ? 1 : .7 }}>{p.short}{draft ? (st === "sold" ? " · sold" : expired ? " · expired" : " · draft") : ""}</span>;
+              border: `1px ${draft ? "dashed" : "solid"} ${on ? p.color : draft ? p.color : C.border}`, opacity: on || draft ? 1 : .7 }}>{p.short}{draft ? (st === "sold" ? " · sold" : expired ? " · expired" : inQ ? ` · queued ${inQ.place}/${inQ.of}` : " · draft") : ""}</span>;
           })}
         </div>
         <div onClick={() => onOpen(l, "platforms")} style={{ cursor: "pointer" }}>
@@ -491,7 +494,20 @@ export default function ListingGrid({ listings, orders, stock = [], loadStoreFac
     notesSeen.current = storeNotes;
     refreshStore();
   }, [storeNotes]); // eslint-disable-line react-hooks/exhaustive-deps
-  const facts = useMemo(() => ({ store, trade }), [store, trade]);
+  /* The Etsy drip queue: a draft waiting there says so (and its place in
+     line), rather than looking like a draft nobody published. */
+  const [queue, setQueue] = useState(null);
+  useEffect(() => { loadK(ETSY_QUEUE_KEY).then(q => setQueue(Array.isArray(q) ? q : [])).catch(() => setQueue([])); }, [listings]);
+  const queued = useMemo(() => {
+    const m = new Map();
+    for (const shop of ["atyahara", "earth"]) {
+      (queue || []).filter(i => i.status === "queued" && (i.shop || "atyahara") === shop)
+        .sort((a, b) => (a.order || 0) - (b.order || 0))
+        .forEach((i, n, all) => m.set(`${shop === "earth" ? "etsy_ee" : "etsy"}:${i.listing_id}`, { place: n + 1, of: all.length }));
+    }
+    return m;
+  }, [queue]);
+  const facts = useMemo(() => ({ store, trade, queued }), [store, trade, queued]);
   const sales = useMemo(() => salesByListing(orders), [orders]);
   const etsy = useMemo(etsyOnDevice, []);
   useEffect(() => { try { localStorage.setItem("lm-grid-cols", String(cols)); } catch {} }, [cols]);
