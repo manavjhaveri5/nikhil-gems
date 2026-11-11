@@ -914,6 +914,11 @@ export default function ListSteps({ form, orders, stock = [], weightKg = 0, comp
           {step !== "list"
             ? <button type="button" disabled={!canNext} onClick={() => { setStep(STEPS[at + 1][0]); const box = document.getElementById("ls-box"); if (box) box.scrollTop = 0; }}
                 style={{ padding: "13px 26px", borderRadius: 10, border: "none", background: C.ink, color: "#FAF0DC", fontWeight: 800, fontSize: 15, cursor: canNext ? "pointer" : "not-allowed", opacity: canNext ? 1 : .4 }}>Next</button>
+            : Object.values(one).some(x => x?.busy)
+            /* Something is publishing: it carries on without this window, so
+               the way out is the next piece, not a wait. */
+            ? <button type="button" onClick={() => (onDone || onClose)()}
+                style={{ padding: "13px 26px", borderRadius: 10, border: "none", background: C.ink, color: "#FAF0DC", fontWeight: 800, fontSize: 15, cursor: "pointer" }}>Close — it carries on</button>
             : allLive
             ? <button type="button" onClick={() => (onDone || onClose)()}
                 style={{ padding: "13px 30px", borderRadius: 10, border: "none", background: C.green, color: "#fff", fontWeight: 800, fontSize: 15, cursor: "pointer" }}>✓ Done</button>
