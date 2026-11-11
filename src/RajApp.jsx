@@ -7,6 +7,7 @@ import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { supabase } from "./supabase.js";
 import { C, mob, FI } from "./lmTheme.js";
 import { fetchWithRetry } from "./aiClient.js";
+import { DRAFTABLE, AI_CHECKS } from "../lib/raj-fix-kinds.js";
 
 export const RAJ_KEYS = { notes: "raj-notes-v1", briefings: "raj-briefings-v1", snapshots: "raj-snapshots-v1", audit: "raj-audit-v1", proposals: "raj-proposals-v1" };
 const FONT = "-apple-system,'SF Pro Display','Figtree',system-ui,sans-serif";
@@ -312,24 +313,38 @@ function AskTab({ briefings, notes }) {
 const SEV = { high: [C.red, C.redBg, "Urgent"], medium: [C.amber, C.amberBg, "Important"], low: [C.inkFaint, C.card, "Minor"] };
 const CHN = { ...CH, all: "All channels" };
 
-function Proposal({ p, onDecide }) {
+/* What an approved fix changes on the ERP listing, so the next save from
+   Listing Manager doesn't put the old value back on Etsy. */
+function erpPatch(p) {
+  const ee = p.channel === "etsy_ee";
+  if (p.field === "tags") return { tags: p.proposed };
+  if (p.field === "title") return { etsy_title: p.proposed };
+  if (p.field === "taxonomy_id") return { etsy_taxonomy_id: p.proposed };
+  if (p.field === "shop_section_id") return ee ? {} : { etsy_section_id: p.proposed };
+  if (p.field === "should_auto_renew") return { etsy_auto_renew: p.proposed };
+  return {};   // materials: the ERP keeps one material, read off the stone
+}
+
+function Proposal({ p, onDecide, applyRef }) {
   const [busy, setBusy] = useState(false);
-  const cur = p.field === "tags" ? (p.current || []) : [p.current];
-  const next = p.field === "tags" ? (p.proposed || []) : [p.proposed];
+  const list = Array.isArray(p.proposed);
+  const cur = list ? (p.current || []) : [p.current];
+  const next = list ? (p.proposed || []) : [p.proposed];
   const chip = (t, kind) => <span key={kind + t} style={{ fontSize: 11.5, padding: "2px 7px", borderRadius: 10, margin: "0 4px 4px 0", display: "inline-block",
     background: kind === "add" ? C.greenBg : kind === "drop" ? C.redBg : C.card, color: kind === "add" ? C.green : kind === "drop" ? C.red : C.inkMid,
     textDecoration: kind === "drop" ? "line-through" : "none" }}>{t}</span>;
   // The ERP listing first (it feeds EarthEditions, eBay and the store), then the Etsy
   // listing itself, which a shop on hold (vacation mode) refuses.
   const apply = async () => {
+    if (busy) return;
     setBusy(true);
     let erp = false;
     try {
-      if (p.erp_id) {
+      if (p.erp_id && Object.keys(erpPatch(p)).length) {
         const { data, error } = await supabase.from("app_rows").select("data").eq("key", "ng-listings-v1").eq("id", p.erp_id).eq("deleted", false).maybeSingle();
         if (error) throw new Error(error.message);
         if (data?.data) {
-          const item = { ...data.data, [p.field]: p.proposed, updated_at: new Date().toISOString() };
+          const item = { ...data.data, ...erpPatch(p), updated_at: new Date().toISOString() };
           const { error: e2 } = await supabase.rpc("app_rows_upsert", { p_key: "ng-listings-v1", p_item: item, p_prepend: false });
           if (e2) throw new Error(e2.message);
           erp = true;
@@ -346,6 +361,7 @@ function Proposal({ p, onDecide }) {
     } catch (e) { await onDecide(p, "failed", e.message); }
     setBusy(false);
   };
+  if (applyRef) applyRef.current[p.id] = apply;
   return (
     <div style={{ ...card, padding: 14, marginBottom: 10 }}>
       <div style={{ display: "flex", gap: 10, alignItems: "flex-start", flexWrap: "wrap" }}>
@@ -359,18 +375,57 @@ function Proposal({ p, onDecide }) {
         </div>
       </div>
       <div style={{ marginTop: 8 }}>
-        {p.field === "tags" ? <>
+        {list ? <>
           {cur.filter(t => !next.includes(t)).map(t => chip(t, "drop"))}
           {next.map(t => chip(t, cur.includes(t) ? "keep" : "add"))}
-        </> : <div style={{ fontSize: 12.5 }}><div style={{ color: C.red, textDecoration: "line-through" }}>{p.current}</div><div style={{ color: C.green }}>{p.proposed}</div></div>}
+        </> : <div style={{ fontSize: 12.5 }}><div style={{ color: C.red, textDecoration: "line-through" }}>{String(p.current)}</div><div style={{ color: C.green }}>{p.proposed_label || String(p.proposed)}</div></div>}
       </div>
     </div>
   );
 }
 
-function CheckRow({ c }) {
+/* Where Sir fixes a listing by hand, for checks no field change can fix. */
+const editUrl = (c, i) => /^etsy/.test(c.channel) && /^\d+$/.test(String(i.id)) ? `https://www.etsy.com/your/shops/me/listing-editor/edit/${i.id}`
+  : c.channel === "ebay" && /^\d+$/.test(String(i.id)) ? `https://www.ebay.com/sl/list?mode=ReviseItem&itemId=${i.id}`
+  : i.url || "";
+
+function CheckRow({ c, props, onDrafted, showToast }) {
   const [open, setOpen] = useState(false);
   const [all, setAll] = useState(false);
+  const [busy, setBusy] = useState("");
+  const field = DRAFTABLE[c.check];
+  const known = new Set((props || []).filter(p => p.check === c.check && p.channel === c.channel && (p.status === "pending" || p.status === "applied" || p.status === "applied_erp")).map(p => String(p.listing_id)));
+  const todo = (c.items || []).filter(i => !known.has(String(i.id)));
+  // Draft: ten at a time for the AI checks, the rest in one go; each lands as a proposal to approve.
+  const draft = async () => {
+    const size = AI_CHECKS.has(c.check) ? 10 : 500;
+    let made = 0, skipped = 0;
+    try {
+      for (let k = 0; k < todo.length; k += size) {
+        setBusy(`Drafting ${Math.min(k + size, todo.length)}/${todo.length}…`);
+        const r = await fetch("/api/listing-manager", { method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "raj_draft", check: c.check, channel: c.channel,
+            items: todo.slice(k, k + size).map(i => ({ id: i.id, title: i.title, tags: i.tags, materials: i.materials, detail: i.detail, erp_id: i.erp_id })) }) });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(d.error || `Draft failed (${r.status})`);
+        await onDrafted(d.proposals || []);
+        made += (d.proposals || []).length; skipped += (d.skipped || []).length;
+      }
+      showToast(`${made} fix${made === 1 ? "" : "es"} drafted above, waiting for your approval${skipped ? ` · ${skipped} left as they are` : ""}`);
+    } catch (e) { showToast(`⚠ ${e.message}${made ? ` (${made} drafted before it stopped)` : ""}`); }
+    setBusy("");
+  };
+  // No field fixes it (photos, a sale to chase): it becomes a follow-up with the pieces listed.
+  const followup = async () => {
+    setBusy("Saving…");
+    try {
+      const due = new Date(Date.now() + 7 * 864e5 + IST).toISOString().slice(0, 10);
+      await saveNote({ kind: "followup", status: "open", due, title: `${c.title} · ${CHN[c.channel] || c.channel} (${c.count})`,
+        body: `${c.fix}\n\n${(c.items || []).slice(0, 60).map(i => `- ${i.title || i.id}${i.detail ? ` (${i.detail})` : ""}`).join("\n")}${c.count > 60 ? `\n- …and ${c.count - 60} more on the Audit tab` : ""}` });
+      showToast("Added to Follow-ups, due in a week");
+    } catch (e) { showToast("⚠ " + e.message); }
+    setBusy("");
+  };
   const [fg, bg, label] = SEV[c.severity] || SEV.low;
   const items = all ? c.items : (c.items || []).slice(0, 40);
   const trend = (c.history || []).slice(-8).map(h => h.count);
@@ -388,12 +443,25 @@ function CheckRow({ c }) {
       {open && (
         <div style={{ borderTop: `1px solid ${C.border}`, padding: "10px 14px" }}>
           <div style={{ fontSize: 12.5, color: C.inkMid, marginBottom: 8 }}><b>Why it matters:</b> {c.why} <b>Fix:</b> {c.fix}</div>
+          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 10 }}>
+            {field ? <>
+              <button disabled={!!busy || !todo.length} onClick={draft} style={btn(C.ink, "#fff")}>
+                {busy || (todo.length ? `Draft fixes for ${todo.length}` : "All drafted")}</button>
+              <span style={{ fontSize: 11.5, color: C.inkFaint }}>
+                {AI_CHECKS.has(c.check) ? `AI writes new ${field === "tags" ? "tags" : "titles"}, about one call per 10 listings. ` : ""}
+                Nothing changes until you approve each one (or Approve all) above.{c.channel === "etsy" ? " Atyahara is on hold, so approved fixes land in the ERP until Etsy reopens it." : ""}</span>
+            </> : <>
+              <button disabled={!!busy} onClick={followup} style={btn(C.ink, "#fff")}>{busy || "Add to Follow-ups"}</button>
+              <span style={{ fontSize: 11.5, color: C.inkFaint }}>This needs hands, not a field change: it goes on your follow-ups with the pieces listed. Each piece below has its edit link.</span>
+            </>}
+          </div>
           {items.map(i => (
             <div key={i.id} style={{ fontSize: 12.5, padding: "5px 0", borderTop: `1px solid ${C.border}`, display: "flex", gap: 8 }}>
               <div style={{ flex: 1, minWidth: 0 }}>
                 {i.url ? <a href={i.url} target="_blank" rel="noreferrer" style={{ color: C.ink }}>{i.title || i.id}</a> : <span>{i.title || i.id}</span>}
                 {i.detail && <div style={{ fontSize: 11.5, color: C.inkMid }}>{i.detail}</div>}
               </div>
+              {!field && editUrl(c, i) && <a href={editUrl(c, i)} target="_blank" rel="noreferrer" style={{ fontSize: 11, color: C.blue, flexShrink: 0 }}>Edit ↗</a>}
               <span style={{ fontSize: 10.5, color: C.inkFaint, flexShrink: 0 }}>since {i.since}</span>
             </div>
           ))}
@@ -419,6 +487,24 @@ function AuditTab({ showToast }) {
     setProps(ps => ps.map(x => x.id === p.id ? item : x));
     showToast(status === "applied" ? "Applied in the ERP and on Etsy" : status === "applied_erp" ? `Fixed in the ERP listing (${error})` : status === "failed" ? `⚠ Not applied: ${error}` : "Rejected");
   };
+  const drafted = async list => {
+    const now = new Date().toISOString();
+    const items = list.map(p => ({ ...p, status: "pending", created_at: now }));
+    for (const item of items) {
+      const { error: e } = await supabase.rpc("app_rows_upsert", { p_key: RAJ_KEYS.proposals, p_item: item, p_prepend: false });
+      if (e) throw new Error(e.message);
+    }
+    setProps(ps => [...ps.filter(x => !items.some(i => i.id === x.id)), ...items]);
+  };
+  const applyRef = useRef({});
+  const [allBusy, setAllBusy] = useState("");
+  const approveAll = async list => {
+    for (let k = 0; k < list.length; k++) {
+      setAllBusy(`Applying ${k + 1}/${list.length}…`);
+      await applyRef.current[list[k].id]?.();
+    }
+    setAllBusy("");
+  };
   if (!rows) return <div style={{ color: C.inkFaint, padding: 30 }}>Loading…</div>;
   const sum = rows.find(r => r.id === "summary");
   if (!sum) return <div style={{ ...card, padding: 24, color: C.inkMid }}>The first audit runs at 7:30 IST.</div>;
@@ -437,15 +523,18 @@ function AuditTab({ showToast }) {
       </div>
       {sum.errors && Object.keys(sum.errors).length > 0 && <div style={{ ...card, padding: 12, fontSize: 12.5, marginBottom: 12, color: C.red }}>⚠ Not checked today: {Object.entries(sum.errors).map(([k, v]) => `${k} (${v})`).join("; ")}</div>}
       {pending.length > 0 && <>
-        <div style={{ ...lab, marginTop: 6 }}>Fixes Raj drafted · {pending.length} waiting for you</div>
-        {pending.map(p => <Proposal key={p.id} p={p} onDecide={decide} />)}
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 6, marginBottom: 6 }}>
+          <div style={{ ...lab, margin: 0, flex: 1 }}>Fixes Raj drafted · {pending.length} waiting for you</div>
+          <button disabled={!!allBusy} onClick={() => confirm(`Apply all ${pending.length} drafted fixes?`) && approveAll(pending)} style={btn(C.ink, "#fff")}>{allBusy || `Approve all ${pending.length}`}</button>
+        </div>
+        {pending.map(p => <Proposal key={p.id} p={p} onDecide={decide} applyRef={applyRef} />)}
       </>}
       <div style={{ display: "flex", gap: 8, margin: "14px 0 10px" }}>
         {[["problem", "Problems"], ["opportunity", "Sales leads"]].map(([k, l]) => (
           <button key={k} onClick={() => setKind(k)} style={btn(kind === k ? C.ink : C.surface, kind === k ? "#fff" : C.ink)}>{l}</button>
         ))}
       </div>
-      {checks.map(c => <CheckRow key={c.id} c={c} />)}
+      {checks.map(c => <CheckRow key={c.id} c={c} props={props} onDrafted={drafted} showToast={showToast} />)}
     </div>
   );
 }

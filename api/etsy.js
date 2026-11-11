@@ -1118,8 +1118,13 @@ async function etsyHandler(req, res) {
       if (!token) return res.status(401).json({ error: "OAuth token required", fix: "Visit /api/etsy-auth?action=start" });
       const { listing_id } = req.query;
       if (!listing_id) return res.status(400).json({ error: "listing_id required" });
-      const { title, description, tags, state } = req.body || {};
+      const { title, description, tags, state, materials, taxonomy_id, shop_section_id, should_auto_renew } = req.body || {};
       const payload = {};
+      // The fields Raj's drafted fixes change (materials, category, section, auto-renew).
+      if (Array.isArray(materials)) payload.materials = [...new Set(materials.map(m => String(m).trim()).filter(Boolean))].slice(0, 13);
+      if (taxonomy_id) payload.taxonomy_id = +taxonomy_id;
+      if (shop_section_id) payload.shop_section_id = +shop_section_id;
+      if (typeof should_auto_renew === "boolean") payload.should_auto_renew = should_auto_renew;
       if (title !== undefined) payload.title = String(title).slice(0, 140);
       if (description !== undefined) payload.description = String(description);
       if (state !== undefined) payload.state = state;
@@ -1147,6 +1152,10 @@ async function etsyHandler(req, res) {
         // Form-encoded Etsy wants a comma-separated list, not a JSON array —
         // sending `["a","b"]` made this fallback fail as surely as the JSON try.
         if (payload.tags        !== undefined) form.set("tags",        payload.tags.join(","));
+        if (payload.materials   !== undefined) form.set("materials",   payload.materials.join(","));
+        if (payload.taxonomy_id !== undefined) form.set("taxonomy_id", String(payload.taxonomy_id));
+        if (payload.shop_section_id !== undefined) form.set("shop_section_id", String(payload.shop_section_id));
+        if (payload.should_auto_renew !== undefined) form.set("should_auto_renew", String(payload.should_auto_renew));
         const rf = await fetch(url, {
           method: "PATCH",
           headers: { ...authHeaders, "Content-Type": "application/x-www-form-urlencoded" },

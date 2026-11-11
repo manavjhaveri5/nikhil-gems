@@ -17,6 +17,7 @@ import { storeOrderRows } from "../lib/storeOrderRows.js";
 import { withStandLine } from "../lib/standLine.js";
 import { rajSnapshot, rajFallback } from "../lib/raj.js";
 import { rajAudit } from "../lib/raj-audit.js";
+import { draftFixes } from "../lib/raj-fixes.js";
 import { girtonTick } from "../lib/girton.js";
 import { decide as girtonDecide } from "../lib/girton-proposals.js";
 
@@ -353,6 +354,33 @@ async function etsyTaxonomyProperties(taxonomyId, hdrs) {
 
 /* ── Claude AI helper ──────────────────────────────────────────────────────── */
 const SHAPE_WORDS = "Sphere, Heart, Palmstone, Tower, Tumbled, Bracelet, Pendant, Pendulum, Rough, Mineral, Egg, Skull, Pyramid, Chips, Freeform, Wand, Point, Slab, Other";
+/* A prompt in, the model's JSON out: the same providers aiGenerate uses. */
+async function aiJson(prompt, maxTokens = 3000) {
+  let text = "";
+  if (process.env.OPENAI_KEY || process.env.OPENAI_API_KEY) {
+    const r = await aiFetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${process.env.OPENAI_KEY || process.env.OPENAI_API_KEY}` },
+      body: JSON.stringify({ model: process.env.LISTING_AI_MODEL || "gpt-4.1-mini", max_tokens: maxTokens, response_format: { type: "json_object" }, messages: [{ role: "user", content: prompt }] }),
+    }, "raj-fixes");
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(`AI error: ${data?.error?.message || r.status}`);
+    text = data.choices?.[0]?.message?.content || "";
+  } else if (process.env.ANTHROPIC_KEY) {
+    const r = await aiFetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-api-key": process.env.ANTHROPIC_KEY, "anthropic-version": "2023-06-01" },
+      body: JSON.stringify({ model: "claude-haiku-4-5", max_tokens: maxTokens, messages: [{ role: "user", content: prompt }] }),
+    }, "raj-fixes");
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(`AI error: ${data?.error?.message || r.status}`);
+    text = data.content?.[0]?.text || "";
+  } else throw new Error("No AI key is set in Vercel (OPENAI_KEY).");
+  const m = text.match(/\{[\s\S]*\}/);
+  if (!m) throw new Error("The AI's reply couldn't be read — try again.");
+  return JSON.parse(m[0]);
+}
+
 async function aiGenerate(listing) {
   const { title, description, material, shape, origin, size, weight, tags = [], productType } = listing;
   /* A repeatable line (many alike, one picked from stock) sells on the
@@ -2202,6 +2230,14 @@ async function listingHandler(req, res) {
     }
 
     /* ── AI: generate platform-specific content ──────────────────────────── */
+    /* Raj's audit: draft the fix for a check's listings, for Sir to approve.
+       Nothing is changed here; the proposals come back to the Raj page. */
+    if (action === "raj_draft") {
+      const { check, channel, items } = req.body || {};
+      try { return res.json({ ok: true, ...(await draftFixes({ check, channel, items: Array.isArray(items) ? items : [], aiJson })) }); }
+      catch (e) { return res.status(400).json({ error: e.message }); }
+    }
+
     if (action === "ai_generate") {
       if (!listing) return res.status(400).json({ error: "listing required" });
       const ai = await aiGenerate(listing);
