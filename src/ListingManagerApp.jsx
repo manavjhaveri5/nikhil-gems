@@ -1973,6 +1973,27 @@ function ListingForm({ initial, stock = [], listings = [], orders = [], sold = f
 
   const [category,    setCategory]    = useState(inferCategory);
   const [catTouched,  setCatTouched]  = useState(false);   // picked by hand this time: AI fill leaves it
+  /* A stone comes from the same place every time, so its origin is filled
+     from the other listings of that stone (the most common one), whenever the
+     stone is set and the origin is empty. Typed over, it stays as typed. */
+  const originByStone = useMemo(() => {
+    const norm = t => String(t || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+    const tally = new Map();
+    for (const l of [...listings, ...stock]) {
+      const m = norm(l.material || l.stone), o = String(l.origin || "").trim();
+      if (!m || !o || l.id === initial?.id) continue;
+      const t = tally.get(m) || new Map();
+      t.set(o, (t.get(o) || 0) + 1); tally.set(m, t);
+    }
+    const out = new Map();
+    for (const [m, t] of tally) out.set(m, [...t].sort((x, y) => y[1] - x[1])[0][0]);
+    return { get: mat => out.get(norm(mat)) || "" };
+  }, [listings, stock, initial?.id]);
+  useEffect(() => {
+    if (String(form.origin || "").trim() || !form.material) return;
+    const o = originByStone.get(form.material);
+    if (o) setForm(f => (String(f.origin || "").trim() ? f : { ...f, origin: o }));
+  }, [form.material, originByStone]);   // eslint-disable-line react-hooks/exhaustive-deps
   const [tags,        setTags]        = useState(initial?.tags || []);
   const [tagDraft,    setTagDraft]    = useState("");
   const [generating,  setGenerating]  = useState(false);
@@ -10498,6 +10519,10 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
       platforms: { ...(base.platforms || {}), etsy: { ...(base.platforms?.etsy || {}), listing_id: base.platforms?.etsy?.listing_id || +row.id, url: base.platforms?.etsy?.url || row.url, status } },
       // Still on sale: there is nothing to renew yet, so it renews itself when it ends.
       ...(status === "active" && mode !== "edit" ? { etsy_auto_renew: true } : {}),
+      /* A renewal starts from the price it has on Etsy now. The ERP's copy can
+         be stale or wrong (one egg came in at ₹673 against Etsy's ₹6,730), and
+         renewing at it would relist the piece for a tenth. */
+      ...(+row.price > 0 && Math.round(+row.price) !== Math.round(+base.price_etsy || 0) ? { price_etsy: String(Math.round(+row.price)) } : {}),
     };
     setEditing(base); setFormSteps(mode === "edit" ? null : "where"); setShowForm(true);
   };
