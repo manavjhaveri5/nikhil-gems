@@ -194,8 +194,16 @@ export const simpleName = t => String(t || "")
   .replace(/^\s*[\d.,\s–-]+(?:x\s*[\d.]+\s*)?(?:mm|cm|inch(?:es)?|in|g|gm|gms|kg|ct|carats?)\b\.?\s*/i, "")
   .split(/\s+[-–—|]\s+|\s*[|:]\s*|,\s/)[0]
   .replace(/\s*#\d+$/, "").trim();
+/* What the trade price buys, said once: a title that already ends "(1kg)" or
+   "(1 kg)" doesn't get a second one ("Porcelain Jasper Sphere (1kg) (1 kg)"). */
+const TRADE_QTY_RE = /\s*\(\s*(?:1\s*)?(?:per\s*)?(?:kg|kgs|kilo|pc|pcs|piece|pieces|lot)\s*\)/gi;
+export const tidyTradeTitle = t => {
+  const s = String(t || "").trim();
+  const all = s.match(TRADE_QTY_RE) || [];
+  return all.length > 1 ? `${s.replace(TRADE_QTY_RE, "").trim()} ${all[all.length - 1].trim()}` : s;
+};
 export function tradeTitleFor(l, unit) {
   const u = unit || (l?.type === "unique" ? "piece" : "kg");
-  const name = simpleName(l?.shopify_title || l?.title);
+  const name = simpleName(l?.shopify_title || l?.title).replace(TRADE_QTY_RE, "").trim();
   return name ? `${name} (1 ${u === "piece" ? "pc" : u === "lot" ? "lot" : "kg"})` : "";
 }

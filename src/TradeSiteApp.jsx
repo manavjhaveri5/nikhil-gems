@@ -9,7 +9,7 @@ import { supabase } from "./supabase.js";
 import { C, mob, FI } from "./lmTheme.js";
 import { loadK, uid } from "./utils.js";
 import { classify } from "./aiClient.js";
-import { tradeTitleFor } from "./listingChannels.js";
+import { tradeTitleFor, tidyTradeTitle } from "./listingChannels.js";
 import { defaultPieces } from "./listingChannels.js";
 const PhotoEditor = lazy(() => import("./PhotoEditor.jsx"));
 
@@ -1003,7 +1003,7 @@ export async function publishListingToTrade(listing, { syncOnly = false, ask = n
     id,
     // Its own trade name, else what the trade site already calls it, else the
     // plain name with what the price buys: "Cobalto Calcite Sphere (1 kg)".
-    title: String(listing.trade_title || existing?.title || tradeTitleFor(listing, unit) || listing.title || "").trim(),
+    title: tidyTradeTitle(listing.trade_title || existing?.title || tradeTitleFor(listing, unit) || listing.title || ""),
     description: plain(listing.trade_description || listing.shopify_description || listing.description),
     shape: listing.shape || "", material: listing.material || "", product_type: listing.productType || "",
     tags: Array.isArray(listing.tags) ? listing.tags : [],
