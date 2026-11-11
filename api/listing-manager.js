@@ -141,11 +141,14 @@ async function resolveSectionId(listing, hdrs) {
   const wantName = String(listing.etsy_section_name || "").trim();
   if (!wantName) return null;
   try {
-    if (!etsySectionCache.has(etsyShop().key)) {
+    // Re-read every 10 minutes: a section made by hand on Etsy shows up without a cold start.
+    if (!etsySectionCache.has(etsyShop().key) || Date.now() - (etsySectionCache.get(etsyShop().key).at || 0) > 600e3) {
       const { "Content-Type": _drop, ...bare } = hdrs;
       const r = await etsyFetch(`https://openapi.etsy.com/v3/application/shops/${etsyShop().id}/sections`, { headers: bare });
       if (!r.ok) return null;
-      etsySectionCache.set(etsyShop().key, ((await r.json())?.results || []).map(x => ({ id: x.shop_section_id, title: decodeHtmlish(x.title || "") })));
+      const list = ((await r.json())?.results || []).map(x => ({ id: x.shop_section_id, title: decodeHtmlish(x.title || "") }));
+      list.at = Date.now();
+      etsySectionCache.set(etsyShop().key, list);
     }
     const norm = t => t.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
     const sections = etsySectionCache.get(etsyShop().key);
@@ -167,15 +170,22 @@ function eeSectionFor(listing) {
   return "Mineral specimens";
 }
 // The section by that name on the current shop, made there if it isn't yet.
-async function eeSectionId(listing, hdrs) {
-  /* Mini hearts have a section of their own on the shop, made there by hand:
-     used when it exists, never made from here. */
-  if (/\bmini\s*hearts?\b/i.test(`${listing.title || ""} ${listing.etsy_title || ""}`)) {
-    const own = await resolveSectionId({ etsy_section_name: "Mini Hearts" }, hdrs)
-      || await resolveSectionId({ etsy_section_name: "Mini Heart" }, hdrs);
-    if (own) return own;
+/* Sections Sir makes on the shop by hand for one kind of piece. A piece of
+   that kind goes there when the section exists; none is ever made from here. */
+const EE_OWN_SECTIONS = [
+  [/\bmini\s*hearts?\b/i, ["Mini Hearts", "Mini Heart"]],
+  [/\bpalm\s*stones?\b/i, ["Palmstones", "Palm Stones", "Palmstone", "Palm Stone"]],
+];
+async function eeOwnSectionId(listing, hdrs) {
+  const t = `${listing.title || ""} ${listing.etsy_title || ""} ${listing.shape || ""}`;
+  for (const [re, names] of EE_OWN_SECTIONS) {
+    if (!re.test(t)) continue;
+    for (const name of names) { const id = await resolveSectionId({ etsy_section_name: name }, hdrs); if (id) return id; }
   }
-  return ensureSection(eeSectionFor(listing), hdrs);
+  return null;
+}
+async function eeSectionId(listing, hdrs) {
+  return (await eeOwnSectionId(listing, hdrs)) || ensureSection(eeSectionFor(listing), hdrs);
 }
 let lastSectionError = "";
 async function ensureSection(name, hdrs) {
@@ -1211,8 +1221,15 @@ async function updateEtsyListing(listingId, listing, ai, { forcePhotos = false }
   // profile the API happened to inherit: unticked means ready to ship, and a
   // listing saved before the tick existed counts as unticked.
   const readinessId = await pickReadinessState(listing, hdrs);
+  /* A live listing moves section only when told to: the section picked on its
+     EarthEditions tab (made on the shop if new), or one of the shop's own
+     sections for its kind (Mini Hearts, Palmstones). Otherwise it stays put. */
+  const eeName = etsyShop().key !== "atyahara" ? String(listing.etsy_ee_section || "").trim() : "";
+  const sectionId = etsyShop().key === "atyahara" ? null
+    : (eeName && await ensureSection(eeName, hdrs)) || await eeOwnSectionId(listing, hdrs);
   const patchBody = {
     title:       etsyTitle.slice(0, 140),
+    ...(sectionId ? { shop_section_id: sectionId } : {}),
     description: etsyDesc,
     // With variations, price and stock live on each option (the inventory call below).
     ...(etsyVariationAxes(listing).length ? {} : { price: parseFloat((+listing.price_etsy || 0).toFixed(2)), quantity }),
