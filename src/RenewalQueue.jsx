@@ -556,9 +556,9 @@ export default function RenewalQueue({ listings = [], stock = [], getToken, onRe
     }
   }, [ready, missing.length, missingWins.length, briefIds.length, busy, statsErr, ledgerErr, view, shown, data]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const renew = async j => {
+  const renew = async (j, mode) => {
     setOpening(j.row.id);
-    try { await onRenew(j.row); }
+    try { await onRenew(j.row, mode); }
     catch (e) { showToast?.(`⚠ Couldn't open it: ${e.message}`, 8000); }
     if (alive.current) setOpening("");
   };
@@ -653,7 +653,7 @@ export default function RenewalQueue({ listings = [], stock = [], getToken, onRe
           </div>}
 
           <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-            {visible.slice(0, shown).map(j => <Row key={j.row.id} j={j} nowMs={nowMs} fee={idx.fee} usdRate={usdRate} briefs={briefs} simReady={simReady} opening={opening === j.row.id} onRenew={() => renew(j)} onSkip={() => skip(j.row)} />)}
+            {visible.slice(0, shown).map(j => <Row key={j.row.id} j={j} nowMs={nowMs} fee={idx.fee} usdRate={usdRate} briefs={briefs} simReady={simReady} opening={opening === j.row.id} onRenew={() => renew(j)} onEdit={() => renew(j, "edit")} onSkip={() => skip(j.row)} />)}
           </div>
           {visible.length > shown && <button type="button" onClick={() => setShown(n => n + PAGE)}
             style={{ display: "block", margin: "14px auto 0", border: `1px solid ${C.border}`, background: C.surface, color: C.ink, borderRadius: 9, padding: "10px 18px", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
@@ -683,7 +683,7 @@ export default function RenewalQueue({ listings = [], stock = [], getToken, onRe
   );
 }
 
-function Row({ j, nowMs, fee, usdRate, briefs, simReady, opening, onRenew, onSkip }) {
+function Row({ j, nowMs, fee, usdRate, briefs, simReady, opening, onRenew, onEdit, onSkip }) {
   const { row, st, card, erp, e, sim, o, simIn, itemIn, v, why } = j;
   const phone = mob();
   const tone = TONE[v] || TONE[""];
@@ -786,9 +786,11 @@ function Row({ j, nowMs, fee, usdRate, briefs, simReady, opening, onRenew, onSki
           e && e.perTerm != null ? `What each listing or renewal fee (${inr(fee)} — $0.20 — for four months on the shop) has brought back after Etsy's fees: ${inr(e.net)} over ${plural(e.terms, "term")}${since}` : e ? `No listing or renewal fee${since} to measure against` : "", e?.perTerm != null ? (e.perTerm >= 20 * fee ? C.green : e.perTerm <= 0 ? C.red : C.ink) : undefined)}
       </div>
       <div style={{ display: "flex", gap: 8, flexDirection: phone ? "row" : "column", flex: "none", width: phone ? "100%" : 128 }}>
-        <button type="button" onClick={onRenew} disabled={opening}
+        <button type="button" onClick={onRenew} disabled={opening} title="The listing steps: renew on Etsy, and tick EarthEditions, eBay, the store or trade to list it there too"
           style={{ flex: 1, padding: "10px 12px", borderRadius: 9, border: "none", background: C.ink, color: "#FAF0DC", fontWeight: 800, fontSize: 13, cursor: opening ? "wait" : "pointer" }}>
-          {opening ? "Opening…" : expired ? "Renew →" : "Keep it up →"}</button>
+          {opening ? "Opening…" : expired ? "Renew / list →" : "Keep it up →"}</button>
+        <button type="button" onClick={onEdit} disabled={opening} title="Open the piece in Listing Manager to edit it"
+          style={{ flex: 1, padding: "9px 12px", borderRadius: 9, border: `1px solid ${C.border}`, background: C.surface, color: C.ink, fontWeight: 700, fontSize: 12.5, cursor: opening ? "wait" : "pointer" }}>Edit</button>
         <button type="button" onClick={onSkip}
           style={{ flex: 1, padding: "9px 12px", borderRadius: 9, border: `1px solid ${C.border}`, background: C.surface, color: C.inkMid, fontWeight: 700, fontSize: 12.5, cursor: "pointer" }}>Skip</button>
       </div>

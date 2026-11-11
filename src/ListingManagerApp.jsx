@@ -10391,7 +10391,9 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
      otherwise one made from what Etsy holds, carrying the Etsy id, so
      publishing renews that listing instead of making a second. Nothing is
      saved until the steps save it. */
-  const renewFromQueue = async row => {
+  // mode "edit" opens the piece itself; otherwise the listing steps, where it can
+  // also go to EarthEditions, eBay, the store or trade.
+  const renewFromQueue = async (row, mode = "where") => {
     const status = row.state === "expired" ? "expired" : "active";
     let base = listings.find(l => String(l.platforms?.etsy?.listing_id || "") === row.id);
     if (!base) {
@@ -10407,7 +10409,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
       // Still on sale: there is nothing to renew yet, so it renews itself when it ends.
       ...(status === "active" ? { etsy_auto_renew: true } : {}),
     };
-    setEditing(base); setFormSteps("where"); setShowForm(true);
+    setEditing(base); setFormSteps(mode === "edit" ? null : "where"); setShowForm(true);
   };
 
   const removeListingItem = async id => {
