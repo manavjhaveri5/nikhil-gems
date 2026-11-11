@@ -397,6 +397,10 @@ async function aiGenerate(listing) {
      EarthEditions shop, so its buyer is told what they'll actually receive,
      not sold a one-off piece. */
   const repeatable = listing.type === "repeatable" || (+listing.qty || 0) > 1;
+  /* A bulk lot (a kilo of 8-11 stones, the Wholesale Deals section): the
+     buyer gets several pieces, and Sir's terms for it are part of the listing. */
+  const lot = /\bwholesale\b|\bbulk\b|\blots?\b|\b\d+\s*(?:-|–|to)\s*\d+\s*(?:stones|pieces|pcs)\b|\bper\s*kg\b|\bin\s*1\s*kg\b/i
+    .test(`${title} ${description || ""} ${listing.etsy_ee_section || ""}`);
   /* Repeatables use the shop's house format (lib/houseDescription.js, the same
      one the Telegram lister writes): the model writes the one paragraph, and
      the receive line, spec block and photo note are put round it word for word.
@@ -408,7 +412,7 @@ async function aiGenerate(listing) {
   /* A repeatable's title: what buyers type first, singular (they get one), then
      size, look and use. "Lapidary" and the like are trade words nobody searches. */
   const etsyTitleSpec = repeatable
-    ? `60-100 chars, no ALL CAPS. Start with the phrase buyers search, singular: "<Stone> <Shape>" (e.g. "Sunstone Heart"). Then, comma-separated: the size in mm with "Mini" if under 35mm, "Polished Crystal <Shape>"; a short colour/look phrase only if the description or stone makes it certain (e.g. "Green Feather Pattern"); the use buyers search ("Pocket Stone", "Worry Stone", "Palm Stone", "Desk Sphere"); and "from <origin>" if given. Singular even though there are several in stock, unless the title says a set or lot. Never use: Lapidary, Specimen-grade, Heart Shaped (say Heart), Natural as the first word, healing claims.`
+    ? `60-100 chars, no ALL CAPS. Start with the phrase buyers search, singular: "<Stone> <Shape>" (e.g. "Sunstone Heart"). Then, comma-separated: the size in mm with "Mini" if under 35mm, "Polished Crystal <Shape>"; a short colour/look phrase only if the description or stone makes it certain (e.g. "Green Feather Pattern"); the use buyers search ("Pocket Stone", "Worry Stone", "Palm Stone", "Desk Sphere"); and "from <origin>" if given. Singular even though there are several in stock, unless the title says a set or lot.${lot ? ` This is a BULK LOT: say so up front after the stone and shape, with the weight and count from Sir's notes, e.g. "Blue Kyanite Palm Stone 1 kg Lot, 8-11 Stones 45-80mm, Wholesale Polished Crystal from India".` : ""} Never use: Lapidary, Specimen-grade, Heart Shaped (say Heart), Natural as the first word, healing claims.`
     : "max 140 chars, SEO-rich, natural, no ALL CAPS";
   const prompt = `You are an expert e-commerce copywriter for ${repeatable ? "EarthEditions, a crystal shop selling well-priced natural stones made in India" : "a premium crystal/gemstone shop called Atyahara"}.
 Generate platform-optimised listing content for this product. Return ONLY valid JSON.
@@ -432,7 +436,8 @@ Return JSON with these fields:
   "etsy_title": ${JSON.stringify(etsyTitleSpec)},
   "ebay_title": "eBay search title, 60-80 chars, never over 80. eBay matches the words typed, so pack the words a buyer searches, most important first, no filler or commas: stone, shape${repeatable ? " (singular)" : ""}, size in mm, weight if given, Polished/Raw, Crystal, the use (Pocket Worry Stone, Display Sphere), origin. No ALL CAPS, no L@@K/WOW, no healing claims, no 'Lapidary'. E.g. 'Sunstone Heart 25mm Mini Polished Crystal Pocket Worry Stone India'",
   "etsy_description": ${JSON.stringify(etsyDescSpec)},
-  "etsy_tags": ${repeatable ? JSON.stringify(["exactly 13 strings, each under 20 chars, all phrases a shopper types into Etsy search", "stone + shape (e.g. sunstone heart)", "the shape's other names (mini heart, crystal heart, pocket stone, worry stone, palm stone)", "colour or look words only if certain", "gift phrases (crystal gift, gift for her)", "origin + stone (e.g. indian sunstone)", "never trade words nobody searches: lapidary, specimen grade, cabochon rough, wholesale"]) : '["exactly 13 strings", "each under 20 chars", "mix of material", "shape", "healing use", "chakra", "origin", "gift keywords"]'},
+  "terms": ${JSON.stringify(`What Sir's notes tell the buyer beyond the stone itself — what they receive (count, size, weight), made to order and how long it takes, bulk savings and free-shipping offers, ordering more, price notes. Keep his wording and every number, as short paragraphs separated by a blank line; fix only spelling (British). If the notes cover several shapes, keep only the line for this piece's shape${(listing.variations || []).length ? " and its options" : ""}. Never a phone number, WhatsApp, iMessage or email — say "message us" instead. Empty string if the notes say nothing of the sort.`)},
+  "etsy_tags": ${repeatable ? JSON.stringify(["exactly 13 strings, each under 20 chars, all phrases a shopper types into Etsy search", "stone + shape (e.g. sunstone heart)", "the shape's other names (mini heart, crystal heart, pocket stone, worry stone, palm stone)", "colour or look words only if certain", "gift phrases (crystal gift, gift for her)", "origin + stone (e.g. indian sunstone)", lot ? "for this bulk lot: wholesale crystals, bulk crystals, crystal lot and the like" : "never trade words nobody searches: lapidary, specimen grade, cabochon rough, wholesale"]) : '["exactly 13 strings", "each under 20 chars", "mix of material", "shape", "healing use", "chakra", "origin", "gift keywords"]'},
   "shopify_title": "clean concise title, max 70 chars",
   "shopify_description": "HTML body with <p> and <ul> tags, professional, SEO-friendly, 200-300 words",
   "shopify_tags": "20+ comma-separated tags for Shopify SEO",
@@ -487,7 +492,7 @@ Return JSON with these fields:
   {
     const dims = [listing.width, listing.height, listing.depth].filter(Boolean).join(" x ");
     ai.etsy_description = houseDescription({
-      similar: repeatable, brand: repeatable || listing._brand === "earth" ? "earth" : "atyahara", title, body: ai.etsy_description,
+      similar: repeatable, lot, terms: ai.terms || "", brand: repeatable || listing._brand === "earth" ? "earth" : "atyahara", title, body: ai.etsy_description,
       photos: (listing.images || []).length > 0,
       specs: { material: material || ai.material, finish: ai.finish, origin: origin || ai.origin, weight,
         dimensions: dims ? `${dims}${listing.dim_unit ? " " + listing.dim_unit : ""}` : (size || ai.size), pantone: listing.pantone || "" },
