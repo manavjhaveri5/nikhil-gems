@@ -393,7 +393,7 @@ async function aiGenerate(listing) {
      EarthEditions carries no "About Atyāhāra". */
   const etsyDescSpec = repeatable
     ? `the one descriptive paragraph only, about this stone. ${BODY_VOICE.replace(/^Write the paragraph only — one of them, /, "One paragraph, ")} Describe the stone in general, not one specific piece: the buyer gets one like the photos.`
-    : "3-4 paragraphs: 1) poetic product intro, 2) specifications bullet list (use •), 3) about Atyahara brand, 4) care/shipping note";
+    : `the one descriptive paragraph only, about this exact piece. ${BODY_VOICE.replace(/^Write the paragraph only — one of them, /, "One paragraph, ")} No spec list, no brand paragraph, no shipping note: those are added round it.`;
 
   /* A repeatable's title: what buyers type first, singular (they get one), then
      size, look and use. "Lapidary" and the like are trade words nobody searches. */
@@ -431,8 +431,8 @@ Return JSON with these fields:
   "material": "the stone's name, e.g. Ruby in Zoisite — only if the title or description says it, else empty",
   "shape": "one of: ${SHAPE_WORDS} — the one this piece is, else empty",
   "origin": "the country it's from — only if the title or description says it, else empty",
-  "size": "e.g. 165mm or 3 inch — only if stated, else empty"${repeatable ? `,
-  "finish": "e.g. Polished, Natural, Tumbled — what the surface is, from the title, shape or description, else empty"` : ""}
+  "size": "e.g. 165mm or 3 inch — only if stated, else empty",
+  "finish": "e.g. Polished, Natural, Raw, Tumbled — what the surface is, from the title, shape or description (a cluster, geode or specimen is Natural unless it says polished), else empty"
 }`;
 
   /* OpenAI first — it's the key the rest of the ERP runs on; Anthropic only
@@ -468,13 +468,16 @@ Return JSON with these fields:
   const ai = JSON.parse(match[0]);
   // Trade words buyers never type: kept out of the tags whatever the model says.
   if (Array.isArray(ai.etsy_tags)) ai.etsy_tags = ai.etsy_tags.filter(t => !/\blapidary\b/i.test(String(t)));
-  if (repeatable) {
+  /* Every piece goes out in the house format (lib/houseDescription.js, the
+     Telegram lister's): the receive line, the paragraph, the spec block, the
+     photo note, and for Atyahara's one-of-a-kind pieces "About Atyāhāra". */
+  {
     const dims = [listing.width, listing.height, listing.depth].filter(Boolean).join(" x ");
     ai.etsy_description = houseDescription({
-      similar: true, brand: "earth", title, body: ai.etsy_description,
+      similar: repeatable, brand: repeatable ? "earth" : "atyahara", title, body: ai.etsy_description,
       photos: (listing.images || []).length > 0,
       specs: { material: material || ai.material, finish: ai.finish, origin: origin || ai.origin, weight,
-        dimensions: dims ? `${dims}${listing.dim_unit ? " " + listing.dim_unit : ""}` : (size || ai.size) },
+        dimensions: dims ? `${dims}${listing.dim_unit ? " " + listing.dim_unit : ""}` : (size || ai.size), pantone: listing.pantone || "" },
     });
   }
   return ai;

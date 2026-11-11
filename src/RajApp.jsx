@@ -449,7 +449,7 @@ function CheckRow({ c, props, onDrafted, showToast }) {
                 {busy || (todo.length ? `Draft fixes for ${todo.length}` : "All drafted")}</button>
               <span style={{ fontSize: 11.5, color: C.inkFaint }}>
                 {AI_CHECKS.has(c.check) ? `AI writes new ${field === "tags" ? "tags" : "titles"}, about one call per 10 listings. ` : ""}
-                Nothing changes until you approve each one (or Approve all) above.{c.channel === "etsy" ? " Atyahara is on hold, so approved fixes land in the ERP until Etsy reopens it." : ""}</span>
+                Nothing changes until you approve each one (or Approve all) above.</span>
             </> : <>
               <button disabled={!!busy} onClick={followup} style={btn(C.ink, "#fff")}>{busy || "Add to Follow-ups"}</button>
               <span style={{ fontSize: 11.5, color: C.inkFaint }}>This needs hands, not a field change: it goes on your follow-ups with the pieces listed. Each piece below has its edit link.</span>
