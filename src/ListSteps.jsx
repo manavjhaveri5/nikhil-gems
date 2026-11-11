@@ -89,7 +89,7 @@ function PaysInput({ value, onSet, size = 30, width = 150 }) {
 const RATE_MEMO = "ng-rate-memo-v1";
 const memoKey = f => `${String(f.material || "").toLowerCase().trim()}|${String(f.shape || "").toLowerCase().trim()}`;
 const readMemo = () => { try { return JSON.parse(localStorage.getItem(RATE_MEMO) || "{}"); } catch { return {}; } };
-function PriceByWeight({ form, weightKg: givenKg, costPerKg, sale, fx, settings, pick, onFill }) {
+function PriceByWeight({ form, weightKg: givenKg, onWeight, costPerKg, sale, fx, settings, pick, onFill }) {
   const perG = givenKg < 1, unitKg = perG ? .001 : 1, unit = perG ? "g" : "kg";
   /* The weight can be corrected here (a piece weighed again, a typo on the
      card): the prices follow it, and Use these prices saves it to the piece. */
@@ -97,6 +97,7 @@ function PriceByWeight({ form, weightKg: givenKg, costPerKg, sale, fx, settings,
   const units = +wt || 0;
   const weightKg = units * unitKg;
   const wtChanged = givenKg ? Math.abs(weightKg - givenKg) > 1e-6 : weightKg > 0;
+  useEffect(() => { onWeight?.(weightKg || givenKg); }, [weightKg]);   // eslint-disable-line react-hooks/exhaustive-deps
   const memo = readMemo()[memoKey(form)] || null;
   const costUnit = costPerKg ? costPerKg * unitKg : 0;
   const [mode, setMode] = useState(memo?.mode || (costUnit ? "cost" : "rate"));
@@ -167,8 +168,11 @@ function PriceByWeight({ form, weightKg: givenKg, costPerKg, sale, fx, settings,
   );
 }
 
-export default function ListSteps({ form, orders, stock = [], weightKg = 0, comparables = [], rate = 88, start = "where", renderWhere, renderPlatform, onAI, aiBusy, onApply, onPublishOne, onClose, onDone, research = false }) {
+export default function ListSteps({ form, orders, stock = [], weightKg: weightKgIn = 0, comparables = [], rate = 88, start = "where", renderWhere, renderPlatform, onAI, aiBusy, onApply, onPublishOne, onClose, onDone, research = false }) {
   const [step, setStep] = useState(start);
+  // The piece's weight, as corrected on the Price by weight card: the cost,
+  // shipping and rates below follow it before it's saved.
+  const [weightKg, setWeightKg] = useState(weightKgIn);
   // An exception to the stock-card rule: a piece with no stock card (a sample,
   // consignment, a one-off bought in), kept on the listing with its reason.
   const [noStock, setNoStock] = useState(() => !!form.stock_exception);
@@ -235,8 +239,11 @@ export default function ListSteps({ form, orders, stock = [], weightKg = 0, comp
   /* No cost on a stock card (custom work, a piece with no card): it's worked
      out here instead, line by line — materials, making, packaging — and kept
      on the listing. A variant can carry its own cost over the top of it. */
-  const cardCost = +form._stockCost || 0;
   const card = form.linked_stock_id ? stock.find(x => x.id === form.linked_stock_id) : null;
+  const cardUnit = String(card?.unit || "").toLowerCase();
+  const cardCost = card && +card.costPrice && weightKg && weightKg !== weightKgIn && ["kg", "g", "gm"].includes(cardUnit)
+    ? Math.round(+card.costPrice * weightKg * (cardUnit === "kg" ? 1 : 1000))
+    : +form._stockCost || 0;
   const [costLines, setCostLines] = useState(() => {
     const saved = form.price_calc?.cost_lines;
     if (Array.isArray(saved) && saved.length) return saved.map(l => ({ ...l }));
@@ -598,7 +605,7 @@ export default function ListSteps({ form, orders, stock = [], weightKg = 0, comp
             <div style={{ fontFamily: serif, fontSize: 28, color: C.ink }}>Prices</div>
             {!chosen.length && <div style={{ color: C.inkMid, fontSize: 14 }}>Pick where it goes first.</div>}
             {chosen.length > 0 && vi < 0 && (pickEtsy || pick.store) && (
-              <PriceByWeight form={form} weightKg={weightKg} sale={sale} fx={fx} settings={s} pick={pick}
+              <PriceByWeight form={form} weightKg={weightKgIn} onWeight={setWeightKg} sale={sale} fx={fx} settings={s} pick={pick}
                 costPerKg={card && +card.costPrice && String(card.unit || "").toLowerCase() === "kg" ? +card.costPrice : card && +card.costPrice && ["g", "gm", "gram", "grams"].includes(String(card.unit || "").toLowerCase()) ? +card.costPrice * 1000 : 0}
                 onFill={out => setP(v => ({ ...v, ...out }))} />
             )}
