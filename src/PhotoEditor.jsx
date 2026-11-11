@@ -265,7 +265,7 @@ export default function PhotoEditor({ url, original, photos, index, onSave, onSa
      photo to the texture, run the same shader at full resolution, read it back.
      Only the backdrop mask is per-photo — it is measured off the pixels, so each
      photo in the batch gets its own rather than the current one's. */
-  const writeOne = async (bitmap, maskFor, own = true) => {
+  const renderBlob = async (bitmap, maskFor, own = true, quality = 0.92) => {
     setSource(bitmap);
     draw({ full: true, bitmap, mask: maskFor });
     /* The caption goes on a copy of the rendered frame, and the blob is read
@@ -274,9 +274,45 @@ export default function PhotoEditor({ url, original, photos, index, onSave, onSa
     const m = own ? meas : null;
     const src = captionOn(cap) || measureOn(m) ? compositeCaption(canvasRef.current, cap, m) : canvasRef.current;
     const read = c => new Promise((resolve, reject) =>
-      c.toBlob(b => (b ? resolve(b) : reject(new Error("Couldn't read the edited photo back."))), "image/jpeg", 0.92));
+      c.toBlob(b => (b ? resolve(b) : reject(new Error("Couldn't read the edited photo back."))), "image/jpeg", quality));
+    return read(src);
+  };
+  const writeOne = async (bitmap, maskFor, own = true) => {
     const name = `edited-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.jpg`;
-    return uploadToStorage(`listing-photos/${name}`, new File([await read(src)], name, { type: "image/jpeg" }));
+    return uploadToStorage(`listing-photos/${name}`, new File([await renderBlob(bitmap, maskFor, own)], name, { type: "image/jpeg" }));
+  };
+
+  /* Download: the photo as it looks now, at the original's full size (an
+     untouched photo comes down as the file itself, not re-encoded). */
+  const download = async () => {
+    if (!bitmapRef.current) return;
+    setBusy("download"); setErr("");
+    const fileBase = (String(url).split("?")[0].split("/").pop() || "photo").replace(/\.[a-z0-9]+$/i, "");
+    const give = (blob, name) => {
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob); a.download = name;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+    };
+    try {
+      if (!touched) {
+        const r = await fetch(url);
+        if (!r.ok) throw new Error(`Couldn't fetch the photo (${r.status})`);
+        const b = await r.blob();
+        give(b, `${fileBase}.${(b.type.split("/")[1] || "jpg").replace("jpeg", "jpg")}`);
+      } else {
+        if (captionOn(cap) || measureOn(meas)) await loadCaptionFont(cap.font);
+        let full = bitmapRef.current;
+        if (fullRef.current) full = await fullRef.current.catch(() => loadBitmap(url));
+        const ownMask = full === bitmapRef.current ? mask : maskFrom(full);
+        give(await renderBlob(full, ownMask, true, 0.97), `${fileBase}-edited.jpg`);
+      }
+    } catch (e) { setErr(e.message || String(e)); }
+    finally {
+      setSource(bitmapRef.current);
+      draw();   // back to the preview
+      setBusy("");
+    }
   };
 
   const maskFrom = bitmap => {
@@ -443,6 +479,11 @@ export default function PhotoEditor({ url, original, photos, index, onSave, onSa
                   ↺ Original photo
                 </button>
               )}
+              <button type="button" onClick={download} disabled={!ready || !!busy}
+                title="Save this photo to your computer, full size, with the edits as they are now"
+                style={{ ...btn("transparent", C.ink), opacity: !ready || busy ? .45 : 1 }}>
+                {busy === "download" ? "Preparing…" : "⤓ Download"}
+              </button>
               <span style={{ flex: 1 }} />
               {all && (
                 <label title="These were shot in one sitting under one light — the same correction usually fits all of them."

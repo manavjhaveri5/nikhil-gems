@@ -3985,13 +3985,14 @@ function ListingCard({ listing, stock, orders, onEdit, onDelete, onPublish, onSa
                     <span style={{ fontSize: 11, color: C.inkFaint, fontStyle: "italic" }}>Coming soon</span>
                   ) : !hasPrice ? (
                     <span style={{ fontSize: 11, color: C.amber, fontWeight: 600 }}>⚠ Set price first</span>
-                  ) : p.key === "etsy" && !isLive ? (
+                  ) : isEtsyKey(p.key) && !isLive ? (
+                    /* Both Etsy shops: a draft can be viewed, deleted or published. */
                     <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4 }}>
                       <span style={{ fontSize: 10, color: C.inkFaint }}>$0.20 listing fee</span>
                       {isDraft ? (
                         <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
                           {ps.listing_id && (
-                            <a href="https://www.etsy.com/your/listings/draft"
+                            <a href={`https://www.etsy.com/your/shops/me/listing-editor/edit/${ps.listing_id}`}
                               target="_blank" rel="noreferrer"
                               style={{ padding: "6px 10px", background: C.amberBg,
                                 border: `1px solid ${C.amber}60`, borderRadius: 6, fontSize: 11,
