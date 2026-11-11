@@ -2128,7 +2128,15 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
           /* Each option a buyer chooses (Pendant / Pendulum) needs a tag of its
              own. With all 13 used, the AI's tag for a missing option takes the
              place of the last tag that names no option. */
-          const optWords = [...new Set((form.variations || []).flatMap(v => (v.options || []).map(o => String(o.label || "").toLowerCase().trim())).filter(w => w.length > 2))];
+          /* What it is and how it's used, as the title and Sir's notes say it
+             (a pendant, a pendulum, a sphere…), and each option a buyer picks.
+             Each needs a tag of its own. */
+          const said = `${form.title || ""} ${form.description || ""}`.toLowerCase();
+          const USES = ["pendant", "pendulum", "necklace", "bracelet", "ring", "earrings", "anklet", "keychain", "sphere", "heart", "palm stone", "worry stone", "tower", "point", "wand", "egg", "pyramid", "obelisk", "skull", "bowl", "cluster", "geode", "tumble", "massage", "lingam", "mala", "rosary", "cabochon", "slab", "freeform"];
+          const optWords = [...new Set([
+            ...(form.variations || []).flatMap(v => (v.options || []).map(o => String(o.label || "").toLowerCase().trim())),
+            ...USES.filter(u => new RegExp(`\\b${u}s?\\b`).test(said)),
+          ].filter(w => w.length > 2))];
           for (const w of optWords) {
             if (next.some(t => t.includes(w))) continue;
             const own = [`${String(form.material || "").toLowerCase()} ${w}`.trim(), `crystal ${w}`, w].find(x => x.length <= 20);
