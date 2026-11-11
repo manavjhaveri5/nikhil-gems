@@ -965,6 +965,20 @@ async function etsyHandler(req, res) {
       return res.json(d);
     }
 
+    /* Delete a shop section — only an empty one, so no listing is left
+       without its section by mistake. */
+    if (action === "delete_section") {
+      if (req.method !== "POST") return res.status(405).json({ error: "POST required" });
+      if (!token) return res.status(401).json({ error: "OAuth token required", fix: "Visit /api/etsy-auth?action=start" });
+      const secId = +req.body?.shop_section_id;
+      if (!secId) return res.status(400).json({ error: "shop_section_id required" });
+      const cur = await fetch(`https://openapi.etsy.com/v3/application/shops/${sid}/sections/${secId}`, { headers: authHeaders }).then(r => r.json()).catch(() => ({}));
+      if (+cur.active_listing_count > 0) return res.status(409).json({ error: `That section still has ${cur.active_listing_count} listings — move them first.` });
+      const r = await fetch(`https://openapi.etsy.com/v3/application/shops/${sid}/sections/${secId}`, { method: "DELETE", headers: authHeaders });
+      if (!r.ok) { const d = await r.json().catch(() => ({})); return res.status(r.status).json({ error: `Etsy didn't delete the section: ${d.error || r.status}` }); }
+      return res.json({ ok: true, deleted: secId });
+    }
+
     // ── listings: active listings with images ─────────────────────────────────
     if (action === "listings") {
       const state = req.query.state || "active";
