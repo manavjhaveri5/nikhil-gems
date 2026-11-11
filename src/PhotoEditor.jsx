@@ -8,7 +8,7 @@ import { makeStudioShot } from "./studioShot.js";
 import { buildBackgroundMask, maskToRgba } from "./backgroundSweep.js";
 import {
   ADJUSTMENTS, NEUTRAL, MIXER, emptyMixer, mixerTouched, mixerBands, MAX_BANDS,
-  ASPECTS, NO_GEO, PREVIEW_EDGE, clamp, cropGeometry, geoTouched, loadBitmap, etsySized,
+  ASPECTS, NO_GEO, PREVIEW_EDGE, clamp, cropGeometry, geoTouched, loadBitmap, etsySized, relayed,
   createPipeline, setPipelineSource, renderPipeline,
 } from "./glPipeline.js";
 import { lab, Slider } from "./EditorControls.jsx";
@@ -296,8 +296,11 @@ export default function PhotoEditor({ url, original, photos, index, onSave, onSa
     };
     try {
       if (!touched) {
-        const r = await fetch(url);
-        if (!r.ok) throw new Error(`Couldn't fetch the photo (${r.status})`);
+        /* Straight from where it's kept; a host that won't hand the file to
+           the page (Etsy's CDN, some others) goes through our own relay. */
+        const get = async u => { try { const r = await fetch(u, { cache: "force-cache" }); return r.ok ? r : null; } catch { return null; } };
+        const r = await get(url) || (/^https?:/i.test(url) && !url.startsWith(location.origin) ? await get(relayed(url)) : null);
+        if (!r) throw new Error("Couldn't fetch the photo to download it. Try again, or make any small edit and download that.");
         const b = await r.blob();
         give(b, `${fileBase}.${(b.type.split("/")[1] || "jpg").replace("jpeg", "jpg")}`);
       } else {

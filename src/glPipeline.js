@@ -240,7 +240,7 @@ export async function fitToTexture(bitmap) {
 export const etsySized = (url, size) =>
   /etsystatic\.com\/.*\/il_fullxfull\./.test(url || "") ? url.replace("/il_fullxfull.", `/il_${size}.`) : null;
 
-const relayed = url => `/api/listing-manager?action=image&url=${encodeURIComponent(url)}`;
+export const relayed = url => `/api/listing-manager?action=image&url=${encodeURIComponent(url)}`;
 
 export async function loadBitmap(url, { onProgress } = {}) {
   /* The listing already showed this photo, so the browser usually has it:
