@@ -19,6 +19,7 @@ import { rajSnapshot, rajFallback } from "../lib/raj.js";
 import { rajAudit } from "../lib/raj-audit.js";
 import { draftFixes } from "../lib/raj-fixes.js";
 import { EE_SECTIONS, eeSectionFor } from "../lib/eeSections.js";
+import { ETSY_CATEGORIES } from "../lib/listingCategories.js";
 import { girtonTick } from "../lib/girton.js";
 import { decide as girtonDecide } from "../lib/girton-proposals.js";
 
@@ -420,6 +421,8 @@ Return JSON with these fields:
   "shopify_tags": "20+ comma-separated tags for Shopify SEO",
   "seo_title": "max 70 chars for meta title",
   "seo_description": "max 155 chars for meta description",
+  "etsy_category": ${JSON.stringify(`the Etsy category that fits this piece best, as its key — one of: ${ETSY_CATEGORIES.map(c => `${c.value} (${c.label})`).join(", ")}`)},${Array.isArray(listing._ee_sections) && listing._ee_sections.length ? `
+  "ee_section": ${JSON.stringify(`the EarthEditions shop section this piece belongs in, exactly as written — one of: ${listing._ee_sections.slice(0, 40).join(" | ")}. A section named for this kind of piece (e.g. Mini Hearts for a small heart) beats a broad one`)},` : ""}
   "suggested_section": "one of: Spheres, Hearts, Palmstones, Bracelets, Towers & Freeforms, Pendants & Pendulums, Tumbled Stones, Mineral Specimens, Rough Stones, Gemstone Bowls and More, Collector's Corner, Wellness",
   "material": "the stone's name, e.g. Ruby in Zoisite — only if the title or description says it, else empty",
   "shape": "one of: ${SHAPE_WORDS} — the one this piece is, else empty",

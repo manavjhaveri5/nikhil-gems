@@ -1909,7 +1909,7 @@ export function EeSectionPicker({ value, onChange, form }) {
   const auto = list ? eeBestSection(form, names) : "";
   const [autoSet, setAutoSet] = useState("");
   useEffect(() => {
-    if (!cur && auto && !autoSet) { setAutoSet(auto); onChange(auto); }
+    if (!cur && auto && !autoSet) { setAutoSet(auto); onChange(auto, true); }
   }, [cur, auto]);   // eslint-disable-line react-hooks/exhaustive-deps
   const commit = () => { const v = draft.trim(); if (v) onChange(v); setAdding(false); setDraft(""); };
   return <div>
@@ -1928,6 +1928,7 @@ export function EeSectionPicker({ value, onChange, form }) {
     <div style={{ fontSize: 11, color: C.inkFaint, marginTop: 4 }}>
       {err ? `Couldn't load the shop's sections (${err}); a name typed here is still used.` : !list ? "Loading sections…"
         : isNew ? "This section doesn't exist yet: it's created on the EarthEditions shop when you publish."
+        : form._ee_ai && cur.toLowerCase() === String(form._ee_ai).toLowerCase() ? "✨ AI picked this — change it if it's wrong. Only used on the EarthEditions shop."
         : autoSet && cur.toLowerCase() === autoSet.toLowerCase() ? "Picked from what it is — change it if it's wrong. Only used on the EarthEditions shop."
         : sugMissing && !cur ? <>Suggested: <button type="button" onClick={() => onChange(sug)} style={{ fontSize: 11, color: C.gold, background: "none", border: "none", padding: 0, cursor: "pointer", textDecoration: "underline" }}>{sug}</button> (new section)</>
         : "Only used on the EarthEditions shop."}
@@ -1971,6 +1972,7 @@ function ListingForm({ initial, stock = [], listings = [], orders = [], sold = f
   });
 
   const [category,    setCategory]    = useState(inferCategory);
+  const [catTouched,  setCatTouched]  = useState(false);   // picked by hand this time: AI fill leaves it
   const [tags,        setTags]        = useState(initial?.tags || []);
   const [tagDraft,    setTagDraft]    = useState("");
   const [generating,  setGenerating]  = useState(false);
@@ -2091,7 +2093,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
     try {
       const r = await fetch("/api/listing-manager", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "ai_generate", listing: { ...form, tags, ...(earth ? { _brand: "earth" } : {}) } }),
+        body: JSON.stringify({ action: "ai_generate", listing: { ...form, tags, ...(earth ? { _brand: "earth" } : {}), _ee_sections: (eeSectionsCache || []).map(x => x.name) } }),
       });
       const d = await lmJson(r).catch(() => ({}));
       if (!d.ai) throw new Error(d.error || `AI failed (${r.status})`);
@@ -2107,6 +2109,16 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
         if (d.ai.ebay_title && blank("ebay_title")) set("ebay_title", String(d.ai.ebay_title).slice(0, 80));
         if (d.ai.etsy_description && blank("etsy_description")) set("etsy_description", d.ai.etsy_description);
         for (const k of ["material", "shape", "origin", "size"]) if (d.ai[k] && blank(k)) set(k, d.ai[k]);
+        /* The Etsy category and the EarthEditions section, as the AI reads the
+           piece — unless picked by hand (a section the picker chose itself can
+           be replaced). A category's shape fills only an empty shape. */
+        const cat = ETSY_CATEGORIES.find(c => c.value === d.ai.etsy_category);
+        if (cat && !catTouched) {
+          setCategory(cat.value);
+          setForm(f => ({ ...f, etsy_taxonomy_id: cat.taxonomyId, shape: f.shape || cat.shape, productType: f.productType || cat.productType }));
+        }
+        const eeName = (eeSectionsCache || []).find(x => x.name.toLowerCase() === String(d.ai.ee_section || "").trim().toLowerCase())?.name;
+        if (eeName && (!form.etsy_ee_section || form.etsy_ee_section === form._ee_auto)) { set("etsy_ee_section", eeName); set("_ee_auto", null); set("_ee_ai", eeName); }
         if (d.ai.suggested_section && form.etsy_section_id == null) {
           const sec = ETSY_SHOP_SECTIONS.find(x => x.id && x.label.toLowerCase() === String(d.ai.suggested_section).toLowerCase());
           if (sec) set("etsy_section_id", sec.id);
@@ -2596,11 +2608,11 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
               <div style={{ display: "grid", gridTemplateColumns: phone ? "1fr" : "1fr 1fr", gap: 12 }}>
                 <div>
                   <Label>Etsy Category</Label>
-                  <select value={category} onChange={e => applyCategory(e.target.value)} style={FI()}>
+                  <select value={category} onChange={e => { setCatTouched(true); applyCategory(e.target.value); }} style={FI()}>
                     {ETSY_CATEGORIES.map(c => <option key={c.value} value={c.value}>{c.label}</option>)}
                   </select>
                 </div>
-                {ee ? <EeSectionPicker value={form.etsy_ee_section} onChange={v => set("etsy_ee_section", v || null)} form={form} /> : <div>
+                {ee ? <EeSectionPicker value={form.etsy_ee_section} onChange={(v, auto) => { set("etsy_ee_section", v || null); set("_ee_auto", auto ? v : null); }} form={form} /> : <div>
                   <Label>Shop Section</Label>
                   <select value={form.etsy_section_id ?? ""} onChange={e => set("etsy_section_id", e.target.value ? +e.target.value : null)} style={FI()}>
                     {ETSY_SHOP_SECTIONS.map(s => <option key={s.id ?? ""} value={s.id ?? ""}>{s.label}</option>)}
