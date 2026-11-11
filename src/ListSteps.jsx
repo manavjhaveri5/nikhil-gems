@@ -89,7 +89,7 @@ function PaysInput({ value, onSet, size = 30, width = 150 }) {
 const RATE_MEMO = "ng-rate-memo-v1";
 const memoKey = f => `${String(f.material || "").toLowerCase().trim()}|${String(f.shape || "").toLowerCase().trim()}`;
 const readMemo = () => { try { return JSON.parse(localStorage.getItem(RATE_MEMO) || "{}"); } catch { return {}; } };
-function PriceByWeight({ form, weightKg: givenKg, onWeight, costPerKg, sale, fx, settings, pick, onFill }) {
+function PriceByWeight({ form, weightKg: givenKg, onWeight, costPerKg, costPerPiece = 0, sale, fx, settings, pick, onFill }) {
   const perG = givenKg < 1, unitKg = perG ? .001 : 1, unit = perG ? "g" : "kg";
   /* The weight can be corrected here (a piece weighed again, a typo on the
      card): the prices follow it, and Use these prices saves it to the piece. */
@@ -100,13 +100,18 @@ function PriceByWeight({ form, weightKg: givenKg, onWeight, costPerKg, sale, fx,
   useEffect(() => { onWeight?.(weightKg || givenKg); }, [weightKg]);   // eslint-disable-line react-hooks/exhaustive-deps
   const memo = readMemo()[memoKey(form)] || null;
   const costUnit = costPerKg ? costPerKg * unitKg : 0;
-  const [mode, setMode] = useState(memo?.mode || (costUnit ? "cost" : "rate"));
+  // "piece": priced as a piece (a carving, a Ganesha), not by its weight.
+  const [mode, setMode] = useState(memo?.mode || (!givenKg ? "piece" : costUnit ? "cost" : "rate"));
+  const [pcCost, setPcCost] = useState(costPerPiece ? String(Math.round(costPerPiece)) : memo?.pcCost ? String(memo.pcCost) : "");
+  const [pcPrice, setPcPrice] = useState("");
   const [rate, setRate] = useState(memo?.rate ? String(memo.rate) : "");
   const [cost, setCost] = useState(costUnit ? String(+costUnit.toFixed(2)) : memo?.cost ? String(memo.cost) : "");
   const [mult, setMult] = useState(memo?.mult ? String(memo.mult) : "4");
   const [india, setIndia] = useState(memo?.india != null ? String(memo.india) : ""); // % off Etsy for India; blank = the Etsy sale
   const r = mode === "rate" ? +rate || 0 : (+cost || 0) * (+mult || 0);
-  const etsy = Math.round(r * units / 10) * 10;
+  const etsy = mode === "piece"
+    ? (+pcPrice ? Math.round(+pcPrice) : Math.round((+pcCost || 0) * (+mult || 0) / 10) * 10)
+    : Math.round(r * units / 10) * 10;
   const pays = Math.round(etsy * (1 - sale / 100));
   const indiaOff = india === "" ? sale : +india || 0;
   const inrIndia = Math.round(etsy * (1 - indiaOff / 100) / 10) * 10;
@@ -117,9 +122,9 @@ function PriceByWeight({ form, weightKg: givenKg, onWeight, costPerKg, sale, fx,
     const out = {};
     if (pick.etsy || pick.etsy_ee) out.price_etsy = String(etsy);
     if (pick.store) { out.price_store = String(usa); out.price_store_inr = String(inrIndia); }
-    if (wtChanged) out.weight = `${units} ${unit}`;
+    if (wtChanged && units) out.weight = `${units} ${unit}`;
     onFill(out);
-    try { localStorage.setItem(RATE_MEMO, JSON.stringify({ ...readMemo(), [memoKey(form)]: { mode, rate: +rate || undefined, cost: +cost || undefined, mult: +mult || undefined, india: india === "" ? undefined : +india, used: r } })); } catch { /* fine */ }
+    try { localStorage.setItem(RATE_MEMO, JSON.stringify({ ...readMemo(), [memoKey(form)]: { mode, rate: +rate || undefined, cost: +cost || undefined, pcCost: +pcCost || undefined, mult: +mult || undefined, india: india === "" ? undefined : +india, used: mode === "piece" ? memo?.used : r } })); } catch { /* fine */ }
   };
   const inp = { width: 74, border: 0, borderBottom: `1.5px solid ${C.ink}`, outline: "none", background: "transparent", fontFamily: serif, fontSize: 20, color: C.ink, padding: "2px 0" };
   const tab = on => ({ border: "none", cursor: "pointer", fontSize: 12, fontWeight: 800, padding: "5px 11px", borderRadius: 7, background: on ? C.surface : "transparent", color: on ? C.ink : C.inkMid, boxShadow: on ? "0 1px 2px rgba(0,0,0,.08)" : "none", fontFamily: "inherit" });
@@ -128,7 +133,7 @@ function PriceByWeight({ form, weightKg: givenKg, onWeight, costPerKg, sale, fx,
     <Box>
       <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
         <div style={{ flex: 1, minWidth: 180 }}>
-          <div style={{ fontSize: 12, fontWeight: 800, color: C.ink }}>Price by weight</div>
+          <div style={{ fontSize: 12, fontWeight: 800, color: C.ink }}>{mode === "piece" ? "Price by the piece" : "Price by weight"}</div>
           <div style={{ fontSize: 11.5, color: C.inkMid, marginTop: 2 }}>
             <span style={{ display: "inline-flex", alignItems: "baseline", gap: 4 }}>
               {givenKg ? "This piece is" : "Weight"}
@@ -142,10 +147,16 @@ function PriceByWeight({ form, weightKg: givenKg, onWeight, costPerKg, sale, fx,
         <div style={{ display: "inline-flex", gap: 2, padding: 3, background: C.card, borderRadius: 9 }}>
           <button type="button" style={tab(mode === "rate")} onClick={() => setMode("rate")}>My rate</button>
           <button type="button" style={tab(mode === "cost")} onClick={() => setMode("cost")}>Cost × multiplier</button>
+          <button type="button" style={tab(mode === "piece")} onClick={() => setMode("piece")}>By piece</button>
         </div>
       </div>
       <div style={{ display: "flex", gap: 18, alignItems: "flex-end", flexWrap: "wrap", marginTop: 12 }}>
-        {mode === "rate" ? (
+        {mode === "piece" ? <>
+          <div>{label("Cost of the piece")}<div style={{ display: "flex", alignItems: "baseline", gap: 3 }}><span style={{ fontFamily: serif, fontSize: 18, color: C.inkMid }}>₹</span><input inputMode="decimal" value={pcCost} onChange={e => setPcCost(e.target.value.replace(/[^\d.]/g, ""))} placeholder="500" style={inp} /></div>
+            {costPerPiece > 0 && <div style={{ fontSize: 10.5, color: C.inkFaint, marginTop: 2 }}>from the stock card</div>}</div>
+          <div>{label("Multiplier")}<div style={{ display: "flex", alignItems: "baseline", gap: 3 }}><span style={{ fontFamily: serif, fontSize: 18, color: C.inkMid }}>×</span><input inputMode="decimal" value={mult} onChange={e => setMult(e.target.value.replace(/[^\d.]/g, ""))} style={{ ...inp, width: 50 }} /></div></div>
+          <div>{label("or Etsy price")}<div style={{ display: "flex", alignItems: "baseline", gap: 3 }}><span style={{ fontFamily: serif, fontSize: 18, color: C.inkMid }}>₹</span><input inputMode="decimal" value={pcPrice} onChange={e => setPcPrice(e.target.value.replace(/[^\d.]/g, ""))} placeholder={+pcCost && +mult ? String(Math.round(+pcCost * +mult / 10) * 10) : "2000"} style={inp} /></div></div>
+        </> : mode === "rate" ? (
           <div>{label(`Etsy price per ${unit}`)}<div style={{ display: "flex", alignItems: "baseline", gap: 3 }}><span style={{ fontFamily: serif, fontSize: 18, color: C.inkMid }}>₹</span><input inputMode="decimal" value={rate} onChange={e => setRate(e.target.value.replace(/[^\d.]/g, ""))} placeholder="90" style={inp} /></div></div>
         ) : <>
           <div>{label(`Cost per ${unit}`)}<div style={{ display: "flex", alignItems: "baseline", gap: 3 }}><span style={{ fontFamily: serif, fontSize: 18, color: C.inkMid }}>₹</span><input inputMode="decimal" value={cost} onChange={e => setCost(e.target.value.replace(/[^\d.]/g, ""))} placeholder="20" style={inp} /></div>
@@ -155,12 +166,13 @@ function PriceByWeight({ form, weightKg: givenKg, onWeight, costPerKg, sale, fx,
         </>}
         {pick.store && <div>{label("India, % off Etsy")}<div style={{ display: "flex", alignItems: "baseline", gap: 3 }}><input inputMode="decimal" value={india} onChange={e => setIndia(e.target.value.replace(/[^\d.]/g, ""))} placeholder={String(Math.round(sale))} style={{ ...inp, width: 44 }} /><span style={{ fontFamily: serif, fontSize: 18, color: C.inkMid }}>%</span></div></div>}
       </div>
-      {etsy > 0 && weightKg > 0 && (
+      {etsy > 0 && (weightKg > 0 || mode === "piece") && (
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginTop: 14 }}>
           {(pick.etsy || pick.etsy_ee) && <span style={{ background: C.card, borderRadius: 8, padding: "6px 10px", fontSize: 12.5 }}>Etsy <b>{inr(etsy)}</b>{sale ? <span style={{ color: C.inkMid }}> · buyer pays {inr(pays)}</span> : ""}</span>}
           {pick.store && <span style={{ background: C.card, borderRadius: 8, padding: "6px 10px", fontSize: 12.5 }}>USA <b>{usd(usa)}</b></span>}
           {pick.store && <span style={{ background: C.card, borderRadius: 8, padding: "6px 10px", fontSize: 12.5 }}>India <b>{inr(inrIndia)}</b></span>}
           {mode === "cost" && +cost > 0 && <span style={{ fontSize: 11.5, color: C.inkMid }}>cost {inr(+cost * units)}</span>}
+          {mode === "piece" && +pcCost > 0 && <span style={{ fontSize: 11.5, color: C.inkMid }}>cost {inr(+pcCost)} · {(etsy / +pcCost).toFixed(1)}×</span>}
           <button type="button" onClick={fill} style={{ marginLeft: "auto", background: C.ink, color: C.surface, border: "none", borderRadius: 9, padding: "8px 14px", fontWeight: 800, fontSize: 12.5, cursor: "pointer", fontFamily: "inherit" }}>Use these prices</button>
         </div>
       )}
@@ -606,6 +618,7 @@ export default function ListSteps({ form, orders, stock = [], weightKg: weightKg
             {!chosen.length && <div style={{ color: C.inkMid, fontSize: 14 }}>Pick where it goes first.</div>}
             {chosen.length > 0 && vi < 0 && (pickEtsy || pick.store) && (
               <PriceByWeight form={form} weightKg={weightKgIn} onWeight={setWeightKg} sale={sale} fx={fx} settings={s} pick={pick}
+                costPerPiece={card && +card.costPrice && ["pcs", "pc", "piece", "pieces", "nos", "no"].includes(String(card.unit || "pcs").toLowerCase()) ? +card.costPrice : +form._stockCost || 0}
                 costPerKg={card && +card.costPrice && String(card.unit || "").toLowerCase() === "kg" ? +card.costPrice : card && +card.costPrice && ["g", "gm", "gram", "grams"].includes(String(card.unit || "").toLowerCase()) ? +card.costPrice * 1000 : 0}
                 onFill={out => setP(v => ({ ...v, ...out }))} />
             )}
