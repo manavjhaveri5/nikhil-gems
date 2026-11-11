@@ -1122,6 +1122,8 @@ function ImagePicker({ material, shape, selectedUrls, onChange, video, onVideoCh
   const [libStone,     setLibStone]     = useState(material || "");
   const [libShape,     setLibShape]     = useState(shape || "");
   const [libText,      setLibText]      = useState("");
+  const [libAllStones, setLibAllStones] = useState(false);
+  const [libMax,       setLibMax]       = useState(60);
   const fileRef = useRef(null);
   const videoRef = useRef(null);
   const takeRef = useRef(null);
@@ -1234,13 +1236,29 @@ function ImagePicker({ material, shape, selectedUrls, onChange, video, onVideoCh
 
   // Filter library — requires at least one filter active
   const hasFilter = libStone || libShape || libText.trim();
-  const libImages = !hasFilter ? [] : allLibImages.filter(img => {
+  /* The library's own stones and shapes, most photos first — read off what's
+     saved, so a stone missing from the material list still shows. */
+  const libCounts = (key, within = allLibImages) => {
+    const m = new Map();
+    for (const img of within) {
+      const v = String(img[key] || "").trim();
+      if (!v) continue;
+      const k = v.toLowerCase();
+      const cur = m.get(k) || { label: v, n: 0 };
+      cur.n++; m.set(k, cur);
+    }
+    return [...m.values()].sort((a, b) => b.n - a.n || a.label.localeCompare(b.label));
+  };
+  const libStones = libCounts("name");
+  const libShapes = libCounts("category", libStone ? allLibImages.filter(i => i.name?.toLowerCase() === libStone.toLowerCase()) : allLibImages);
+  const libImagesAll = !hasFilter ? [] : allLibImages.filter(img => {
     if (libStone && img.name?.toLowerCase() !== libStone.toLowerCase()) return false;
     if (libShape && img.category?.toLowerCase() !== libShape.toLowerCase()) return false;
     if (libText.trim() && !(img.name?.toLowerCase().includes(libText.toLowerCase()) ||
                              img.category?.toLowerCase().includes(libText.toLowerCase()))) return false;
     return true;
-  }).slice(0, 60);
+  });
+  const libImages = libImagesAll.slice(0, libMax);
 
   const toggle = url => onChange(
     selectedUrls.includes(url) ? selectedUrls.filter(u => u !== url) : [...selectedUrls, url]
@@ -1629,35 +1647,63 @@ function ImagePicker({ material, shape, selectedUrls, onChange, video, onVideoCh
             </span>
           </div>
 
-          {/* Stone + Shape dropdowns — same fields used when saving */}
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 8 }}>
-            <select value={libStone} onChange={e => setLibStone(e.target.value)} style={selSx}>
-              <option value="">All stones</option>
-              {MATERIALS.map(m => {
-                const cnt = allLibImages.filter(i => i.name?.toLowerCase() === m.toLowerCase()).length;
-                return cnt > 0 ? <option key={m} value={m}>{m} ({cnt})</option> : null;
-              })}
-            </select>
-            <select value={libShape} onChange={e => setLibShape(e.target.value)} style={selSx}>
-              <option value="">All shapes</option>
-              {SHAPES.map(s => {
-                const cnt = allLibImages.filter(i => i.category?.toLowerCase() === s.toLowerCase()).length;
-                return cnt > 0 ? <option key={s} value={s}>{s} ({cnt})</option> : null;
-              })}
-            </select>
-          </div>
-
-          {/* Optional free-text refinement */}
-          <input value={libText} onChange={e => setLibText(e.target.value)}
-            placeholder="Refine further… (optional)"
-            style={{ ...selSx, width: "100%", boxSizing: "border-box", marginBottom: 8 }} />
+          {/* Search, then tap a stone and a shape: the library's own names,
+              most photos first. This piece's stone leads when it has photos. */}
+          {(() => {
+            const q = libText.trim().toLowerCase();
+            const mine = String(material || "").toLowerCase();
+            const stones = [...libStones.filter(x => x.label.toLowerCase() === mine), ...libStones.filter(x => x.label.toLowerCase() !== mine)]
+              .filter(x => !q || x.label.toLowerCase().includes(q));
+            const shown = q || libAllStones ? stones : stones.slice(0, 12);
+            const chip = (on, label, n, onClick, key, mark) => (
+              <button key={key} type="button" onClick={onClick}
+                style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "6px 10px", borderRadius: 999, cursor: "pointer",
+                  border: `1px solid ${on ? C.ink : C.border}`, background: on ? C.ink : C.card, color: on ? "#fff" : C.ink,
+                  fontSize: 12.5, fontWeight: on ? 700 : 500, whiteSpace: "nowrap" }}>
+                {mark && <span style={{ fontSize: 10, color: on ? "#fff" : C.gold }}>●</span>}
+                {label}<span style={{ fontSize: 11, opacity: .6 }}>{n}</span>
+              </button>
+            );
+            const libStoneKnown = !libStone || libStones.some(x => x.label.toLowerCase() === libStone.toLowerCase());
+            return <>
+              <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
+                <input value={libText} onChange={e => setLibText(e.target.value)}
+                  placeholder={`Search ${libStones.length} stones…`}
+                  style={{ ...selSx, flex: 1, minWidth: 0, boxSizing: "border-box" }} />
+                {hasFilter && <button type="button" onClick={() => { setLibStone(""); setLibShape(""); setLibText(""); setLibMax(60); }}
+                  style={{ border: `1px solid ${C.border}`, background: C.card, color: C.inkMid, borderRadius: 8, padding: "0 12px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Clear</button>}
+              </div>
+              <div style={{ fontSize: 10.5, fontWeight: 700, color: C.inkFaint, letterSpacing: .4, marginBottom: 5 }}>STONE</div>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 8 }}>
+                {!libStoneKnown && chip(true, libStone, 0, () => setLibStone(""), "_cur")}
+                {shown.map(x => chip(libStone.toLowerCase() === x.label.toLowerCase(), x.label, x.n,
+                  () => { setLibStone(libStone.toLowerCase() === x.label.toLowerCase() ? "" : x.label); setLibShape(""); setLibMax(60); },
+                  x.label, x.label.toLowerCase() === mine))}
+                {!q && stones.length > 12 && (
+                  <button type="button" onClick={() => setLibAllStones(v => !v)}
+                    style={{ border: "none", background: "transparent", color: C.blue, fontSize: 12.5, fontWeight: 700, cursor: "pointer", padding: "6px 4px" }}>
+                    {libAllStones ? "Fewer" : `All ${stones.length} stones`}</button>
+                )}
+                {q && !stones.length && <span style={{ fontSize: 11.5, color: C.inkFaint, padding: "6px 0" }}>No stone called that in the library</span>}
+              </div>
+              {libShapes.length > 0 && <>
+                <div style={{ fontSize: 10.5, fontWeight: 700, color: C.inkFaint, letterSpacing: .4, marginBottom: 5 }}>SHAPE</div>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 10 }}>
+                  {libShapes.map(x => chip(libShape.toLowerCase() === x.label.toLowerCase(), x.label, x.n,
+                    () => { setLibShape(libShape.toLowerCase() === x.label.toLowerCase() ? "" : x.label); setLibMax(60); }, x.label))}
+                </div>
+              </>}
+              {!libStoneKnown && <div style={{ fontSize: 11, color: C.amber, marginBottom: 8 }}>No photos saved for {libStone} yet — pick another stone above.</div>}
+            </>;
+          })()}
 
           {!hasFilter && (
-            <div style={{ fontSize: 11, color: C.inkFaint }}>Select a stone or shape to browse your library</div>
+            <div style={{ fontSize: 11, color: C.inkFaint }}>Tap a stone or a shape to see its photos</div>
           )}
           {hasFilter && libImages.length === 0 && (
-            <div style={{ fontSize: 11, color: C.inkFaint }}>No images found — try different filters</div>
+            <div style={{ fontSize: 11, color: C.inkFaint }}>No photos for that — tap another stone or shape</div>
           )}
+          {libImages.length > 0 && <div style={{ fontSize: 11, color: C.inkMid, marginBottom: 6 }}>{libImagesAll.length} photo{libImagesAll.length === 1 ? "" : "s"} · tap to add</div>}
           {libImages.length > 0 && (
             <>
               <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
@@ -1667,7 +1713,8 @@ function ImagePicker({ material, shape, selectedUrls, onChange, video, onVideoCh
                   const pickVideo = isVid && onVideoChange;
                   return (
                     <div key={img.id} onClick={() => pickVideo ? onVideoChange(sel ? "" : img.imageUrl) : (!isVid && toggle(img.imageUrl))}
-                      style={{ width: 62, height: 62, borderRadius: 7, overflow: "hidden", cursor: (pickVideo || !isVid) ? "pointer" : "default", flexShrink: 0,
+                      title={[img.name, img.category].filter(Boolean).join(" · ")}
+                      style={{ width: 84, height: 84, borderRadius: 7, overflow: "hidden", cursor: (pickVideo || !isVid) ? "pointer" : "default", flexShrink: 0,
                         border: `2.5px solid ${sel ? (isVid ? C.gold : C.green) : C.border}`, position: "relative", transition: "border-color .15s", background: isVid ? "#000" : undefined }}>
                       {isVid
                         ? <video src={img.imageUrl} muted playsInline preload="metadata" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
@@ -1682,8 +1729,10 @@ function ImagePicker({ material, shape, selectedUrls, onChange, video, onVideoCh
                   );
                 })}
               </div>
-              {libImages.length === 60 && (
-                <div style={{ fontSize: 11, color: C.inkFaint, marginTop: 6 }}>Showing 60 — refine filters to narrow results</div>
+              {libImagesAll.length > libImages.length && (
+                <button type="button" onClick={() => setLibMax(n => n + 60)}
+                  style={{ marginTop: 8, border: `1px solid ${C.border}`, background: C.card, color: C.ink, borderRadius: 8, padding: "7px 12px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
+                  Show more ({libImagesAll.length - libImages.length} left)</button>
               )}
             </>
           )}
