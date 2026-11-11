@@ -180,7 +180,8 @@ function PriceByWeight({ form, weightKg: givenKg, onWeight, costPerKg, costPerPi
   );
 }
 
-export default function ListSteps({ form, orders, stock = [], weightKg: weightKgIn = 0, comparables = [], rate = 88, start = "where", renderWhere, renderPlatform, onAI, aiBusy, onApply, onPublishOne, onClose, onDone, research = false }) {
+export default function ListSteps({ form, orders, stock = [], weightKg: weightKgIn = 0, comparables = [], rate = 88, start = "where", renderWhere, renderPlatform, onAI, aiBusy, onApply, onPublishOne, onRemove, onClose, onDone, research = false }) {
+  const [removing, setRemoving] = useState("");
   const [step, setStep] = useState(start);
   // The piece's weight, as corrected on the Price by weight card: the cost,
   // shipping and rates below follow it before it's saved.
@@ -553,15 +554,31 @@ export default function ListSteps({ form, orders, stock = [], weightKg: weightKg
               const ln = linkOf(form, c.key);
               const on = !!pick[c.key];
               return (
-                <button key={c.key} type="button" onClick={() => setPick(x => ({ ...x, [c.key]: !x[c.key] }))}
+                <div key={c.key} role="button" tabIndex={0} onClick={() => setPick(x => ({ ...x, [c.key]: !x[c.key] }))}
+                  onKeyDown={e => { if (e.key === " " || e.key === "Enter") { e.preventDefault(); setPick(x => ({ ...x, [c.key]: !x[c.key] })); } }}
                   style={{ display: "flex", alignItems: "center", gap: 14, textAlign: "left", background: C.surface, border: `1.5px solid ${on ? C.ink : C.border}`, borderRadius: 12, padding: "14px 16px", cursor: "pointer", WebkitTapHighlightColor: "transparent" }}>
                   <span style={{ width: 22, height: 22, borderRadius: 6, border: `1.5px solid ${on ? C.ink : C.borderHi}`, background: on ? C.ink : "transparent", color: "#fff", fontSize: 14, display: "flex", alignItems: "center", justifyContent: "center", flex: "none" }}>{on ? "✓" : ""}</span>
                   <span style={{ flex: 1 }}>
                     <span style={{ display: "block", fontSize: 16, fontWeight: 700, color: C.ink }}>{c.label}</span>
                     <span style={{ display: "block", fontSize: 12, color: C.inkMid }}>{PLACE[c.key]}</span>
                   </span>
-                  {ln.linked && <span style={{ fontSize: 11, fontWeight: 800, color: ln.status === "active" ? C.green : ln.status === "expired" ? C.red : C.amber }}>{ln.status === "active" ? "Live" : ln.status === "expired" ? "Expired" : "Draft"}</span>}
-                </button>
+                  {ln.linked && <span style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 6, flex: "none" }}>
+                    <span style={{ fontSize: 11, fontWeight: 800, color: ln.status === "active" ? C.green : ln.status === "expired" ? C.red : C.amber }}>{ln.status === "active" ? "Live" : ln.status === "expired" ? "Expired" : "Draft"}</span>
+                    <span style={{ display: "flex", gap: 6 }} onClick={e => e.stopPropagation()}>
+                      {(ln.live || ln.admin) && <a href={ln.live || ln.admin} target="_blank" rel="noreferrer"
+                        style={{ fontSize: 12, fontWeight: 700, color: C.ink, textDecoration: "none", border: `1px solid ${C.border}`, borderRadius: 7, padding: "4px 9px", background: "#fff" }}>View ↗</a>}
+                      {onRemove && !ln.ref && <button type="button" disabled={!!removing}
+                        onClick={async () => {
+                          if (!confirm(`Remove "${form.title || "this piece"}" from ${c.label}?`)) return;
+                          setRemoving(c.key);
+                          try { await onRemove(c.key); setPick(x => ({ ...x, [c.key]: false })); } catch (e) { alert(e.message); }
+                          setRemoving("");
+                        }}
+                        style={{ fontSize: 12, fontWeight: 700, color: C.red, border: `1px solid ${C.border}`, borderRadius: 7, padding: "4px 9px", background: "#fff", cursor: removing ? "wait" : "pointer" }}>
+                        {removing === c.key ? "Removing…" : "Remove"}</button>}
+                    </span>
+                  </span>}
+                </div>
               );
             })}
           </>}

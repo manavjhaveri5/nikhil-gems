@@ -1877,7 +1877,7 @@ export function EeSectionPicker({ value, onChange, form }) {
   </div>;
 }
 
-function ListingForm({ initial, stock = [], listings = [], orders = [], sold = false, onSave, onPublishOne, onClose, who, admin = false, startTab = "overview", startSteps = null }) {
+function ListingForm({ initial, stock = [], listings = [], orders = [], sold = false, onSave, onPublishOne, onUnpublish, onClose, who, admin = false, startTab = "overview", startSteps = null }) {
   const editing = !!initial?.id;
   const [dlProg, setDlProg] = useState("");   // "3/11" while media is being saved
 
@@ -3453,6 +3453,11 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
       </div>
       {steps && (
         <ListSteps research={admin} form={{ ...form, tags, _stockCost: stockCost, _lotCost: lotCost, _costPerKg: costPerKg, _tradeUnit: tradeRowOf(tradeFactsMap, form)?.unit || "", _loc: loc }} orders={orders} stock={stock} weightKg={pieceKg} comparables={comparables} rate={liveUsdRate} start={steps} renderWhere={pieceCard} renderPlatform={platformStep} onAI={generateAI} aiBusy={generating} onPublishOne={onPublishOne ? publishOneFromSteps : null}
+          onRemove={onUnpublish ? async pkey => {
+            await onUnpublish(form, pkey);
+            // Our two sites hide it (a draft); the marketplaces end it.
+            setForm(f => ({ ...f, platforms: { ...f.platforms, [pkey]: pkey === "store" || pkey === "trade" ? { ...f.platforms?.[pkey], status: "draft" } : { status: "deleted" } } }));
+          } : null}
           onClose={() => setSteps(null)}
           onDone={() => { setSteps(null); onClose(); }}
           onApply={(patch, to, opts) => { setForm(f => ({ ...f, ...patch })); setPublishTo(p => ({ ...p, ...to })); setSteps(null); handleSave(patch, { ...publishTo, ...to }, opts); }} />
@@ -11490,6 +11495,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
           admin={currentUser?.role === "admin"}
           startSteps={formSteps}
           onSave={handleSave}
+          onUnpublish={handleUnpublish}
           onPublishOne={async (listing, pkey, opts = {}) => {
             /* Runs here, not in the steps box, so closing the box leaves it
                going; the toast says how it ended either way. One publish per
