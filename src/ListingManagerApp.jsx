@@ -10407,7 +10407,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
       ...base,
       platforms: { ...(base.platforms || {}), etsy: { ...(base.platforms?.etsy || {}), listing_id: base.platforms?.etsy?.listing_id || +row.id, url: base.platforms?.etsy?.url || row.url, status } },
       // Still on sale: there is nothing to renew yet, so it renews itself when it ends.
-      ...(status === "active" ? { etsy_auto_renew: true } : {}),
+      ...(status === "active" && mode !== "edit" ? { etsy_auto_renew: true } : {}),
     };
     setEditing(base); setFormSteps(mode === "edit" ? null : "where"); setShowForm(true);
   };
