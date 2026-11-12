@@ -325,7 +325,7 @@ function erpPatch(p) {
   return {};   // materials: the ERP keeps one material, read off the stone
 }
 
-function Proposal({ p, onDecide, applyRef, compact = false }) {
+function Proposal({ p, onDecide, applyRef, compact = false, resend = false }) {
   const [busy, setBusy] = useState(false);
   const list = Array.isArray(p.proposed);
   const cur = list ? (p.current || []) : [p.current];
@@ -361,7 +361,7 @@ function Proposal({ p, onDecide, applyRef, compact = false }) {
     } catch (e) { await onDecide(p, "failed", e.message); }
     setBusy(false);
   };
-  if (applyRef) applyRef.current[p.id] = apply;
+  if (applyRef && !resend) applyRef.current[p.id] = apply;
   const changes = (
       <div style={{ marginTop: compact ? 4 : 8 }}>
         {list ? <>
@@ -371,6 +371,12 @@ function Proposal({ p, onDecide, applyRef, compact = false }) {
       </div>);
   /* In the problem's own list: the fix sits under its piece, with the three
      answers Sir gives one piece at a time. */
+  /* Approved while the Etsy shop was on hold: the ERP has the fix, Etsy doesn't. */
+  if (resend) return (
+    <div style={{ display: "flex", gap: 6, alignItems: "center", marginTop: 4, flexWrap: "wrap" }}>
+      <span style={{ fontSize: 11.5, color: C.amber }}>Fixed in the ERP only; Etsy still has the old {p.field}</span>
+      <button disabled={busy} onClick={apply} style={{ ...btn(C.ink, "#fff"), padding: "3px 9px", fontSize: 11.5 }}>{busy ? "Sending…" : "Send to Etsy"}</button>
+    </div>);
   if (compact) return (
     <div style={{ marginTop: 4 }}>
       {changes}
@@ -489,7 +495,8 @@ function CheckRow({ c, props, onDrafted, onDecide, onSkip, applyRef, showToast }
                   const small = { ...btn(), padding: "3px 9px", fontSize: 11.5 };
                   const one = () => draft([i]);
                   if (p?.status === "pending") return <Proposal p={p} onDecide={onDecide} applyRef={applyRef} compact />;
-                  if (p?.status === "applied" || p?.status === "applied_erp") return <div style={{ fontSize: 11.5, color: C.green, marginTop: 3 }}>✓ Fixed{p.status === "applied_erp" ? " in the ERP listing" : ""}</div>;
+                  if (p?.status === "applied_erp") return <Proposal p={p} onDecide={onDecide} resend />;
+                  if (p?.status === "applied") return <div style={{ fontSize: 11.5, color: C.green, marginTop: 3 }}>✓ Fixed</div>;
                   const said = p?.status === "rejected" ? "Denied" : p?.status === "skipped" ? "Skipped" : p?.status === "failed" ? `Not applied: ${p.error || "error"}` : "";
                   return <div style={{ display: "flex", gap: 6, alignItems: "center", marginTop: 4, flexWrap: "wrap" }}>
                     {said && <span style={{ fontSize: 11.5, color: p.status === "failed" ? C.red : C.inkFaint }}>{said}</span>}
