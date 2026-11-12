@@ -2113,10 +2113,21 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
        for a piece not on the Atyahara shop: no "About Atyāhāra" in it. */
     const earth = ["etsy_ee", "ebay", "store"].includes(target) && !form.platforms?.etsy?.listing_id;
     try {
-      const r = await fetch("/api/listing-manager", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "ai_generate", listing: { ...form, tags, ...(earth ? { _brand: "earth" } : {}), _ee_sections: (eeSectionsCache || []).map(x => x.name) } }),
-      });
+      /* On a phone the request can die with no answer at all ("Load failed"):
+         signal drops, or the screen locks mid-fill. Filling only suggests text,
+         so asking again is safe — once, after a short pause. An answer from the
+         server (even an error) is never retried. */
+      const body = JSON.stringify({ action: "ai_generate", listing: { ...form, tags, ...(earth ? { _brand: "earth" } : {}), _ee_sections: (eeSectionsCache || []).map(x => x.name) } });
+      let r;
+      for (let attempt = 1; ; attempt++) {
+        try {
+          r = await fetch("/api/listing-manager", { method: "POST", headers: { "Content-Type": "application/json" }, body });
+          break;
+        } catch (netErr) {
+          if (attempt >= 2) throw new Error("the connection dropped twice. Check the signal and tap Fill again");
+          await new Promise(ok => setTimeout(ok, 2000));
+        }
+      }
       const d = await lmJson(r).catch(() => ({}));
       if (!d.ai) throw new Error(d.error || `AI failed (${r.status})`);
       if (d.ai) {
