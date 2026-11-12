@@ -8,6 +8,7 @@ import { loadKFresh, saveK, upsertItemK } from "./utils.js";
 import { statementsKey, statementId, keepExistingStatement } from "./monthClose.js";
 import { uploadToStorage } from "./storageUtils.js";
 import { classifyCardEmis } from "./cardEmi.js";
+import { bookOdTransfers } from "./odTransfers.js";
 
 const MON = ["jan","feb","mar","apr","may","jun","jul","aug","sep","oct","nov","dec"];
 const uid = () => Math.random().toString(36).slice(2, 11);
@@ -104,6 +105,12 @@ export async function applyStatementImport({ company, accounts, txns, add = [], 
       emiMsg = ` · ${expenses.length} EMI line${expenses.length === 1 ? "" : "s"} booked`;
     }
   }
+  // Money to or from the overdraft is a transfer with the OD account, so its balance moves.
+  let odMsg = "";
+  if (add.length) {
+    const od = bookOdTransfers(nextTxns, accounts, new Set(add.map(t => t.id)));
+    if (od.count) { nextTxns = od.txns; odMsg = ` · ${od.count} OD transfer${od.count === 1 ? "" : "s"} booked`; }
+  }
   if (add.length || removeIds.length || (fileUrl && Object.keys(rowRefs).length)) await saveK(`${company}-fin-txns-v1`, nextTxns);
 
   let nextAccounts = accounts, obMsg = "";
@@ -125,7 +132,7 @@ export async function applyStatementImport({ company, accounts, txns, add = [], 
   }
 
   const message = [add.length ? `${add.length} added` : "", removeIds.length ? `${removeIds.length} removed` : ""].filter(Boolean).join(" · ")
-    + (add.length || removeIds.length ? " — ledger matches bank" : "Statement saved") + obMsg + stMsg + docMsg + emiMsg;
+    + (add.length || removeIds.length ? " — ledger matches bank" : "Statement saved") + obMsg + stMsg + docMsg + emiMsg + odMsg;
   // statements: the full saved list when month-ends were kept (null otherwise).
   return { txns: nextTxns, accounts: nextAccounts, statements: Array.isArray(statements) && statements.length ? statements : null, message };
 }

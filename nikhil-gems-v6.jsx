@@ -1,6 +1,7 @@
 import ConversionBreakdown from "./src/ConversionBreakdown.jsx";
 import React, { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo } from "react";
 import { supabase } from "./src/supabase.js";
+import { odFor, odTransferPatch } from "./src/odTransfers.js";
 import { upload as blobUpload } from "@vercel/blob/client";
 import { uploadToStorage as supabaseUpload } from "./src/storageUtils.js";
 import confetti from "canvas-confetti";
@@ -5041,6 +5042,8 @@ function AccountingFinanceLedger({showToast,onViewBill,isAdmin=false,onOpenModul
             // Learner: for an unclassified payment, suggest the cleaned payee/notes the user
             // settled on for similar bank lines before. One patchTxn keeps it race-free.
             const smart=isUnclassified(selected)?learnedFor(selected):null;
+            // Money to or from the overdraft: a transfer with the OD account, not a payment.
+            const odHit=!transfer&&!selected.classifiedAs?odFor(selected,accounts):null;
             const smartFills=smart?[
               smart.payee&&smart.payee!==(selected.payee||"")?["Payee",smart.payee,"payee"]:null,
               smart.notes&&!(selected.notes||"").trim()?["Notes",smart.notes,"notes"]:null,
@@ -5083,7 +5086,17 @@ function AccountingFinanceLedger({showToast,onViewBill,isAdmin=false,onOpenModul
                     </div>
                   );
                 })()}
-                {autoFilled[selected.id]?(
+                {odHit&&(
+                  <div style={{display:"flex",gap:10,alignItems:"flex-start",padding:"9px 12px",background:C.blueBg||"#EAF1FB",border:`1px solid ${C.blue||"#2F6FB2"}55`,borderRadius:9,fontSize:12,color:C.ink}}>
+                    <span style={{fontSize:14,lineHeight:1.3}}>🏦</span>
+                    <div style={{flex:1,minWidth:0}}>
+                      <div style={{fontWeight:800,marginBottom:2}}>{selected.type==="debit"?"Transfer to the OD (repayment)":"Transfer from the OD (drawdown)"}</div>
+                      <div style={{color:C.inkMid}}>{selected.type==="debit"?`${accountName(selected)} → ${odHit.name}`:`${odHit.name} → ${accountName(selected)}`} · the OD balance {selected.type==="debit"?"goes down":"goes up"}</div>
+                    </div>
+                    <button onClick={()=>{patchTxn(selected.id,odTransferPatch(selected,odHit,accounts));showToast?.("Booked as a transfer with the OD");}} style={{flexShrink:0,background:C.blue||"#2F6FB2",color:"#fff",border:"none",borderRadius:7,padding:"6px 12px",fontSize:12,fontWeight:750,cursor:"pointer"}}>Apply</button>
+                  </div>
+                )}
+                {!odHit&&(autoFilled[selected.id]?(
                   <div style={{display:"flex",gap:10,alignItems:"center",padding:"9px 12px",background:C.greenBg,border:`1px solid ${C.green}55`,borderRadius:9,fontSize:12,color:C.ink}}>
                     <span style={{fontSize:14}}>✨</span>
                     <div style={{flex:1,minWidth:0}}>Auto-filled the payee &amp; notes from your history.</div>
@@ -5098,7 +5111,7 @@ function AccountingFinanceLedger({showToast,onViewBill,isAdmin=false,onOpenModul
                     </div>
                     <button onClick={applySmart} style={{flexShrink:0,background:C.green,color:"#fff",border:"none",borderRadius:7,padding:"6px 12px",fontSize:12,fontWeight:750,cursor:"pointer"}}>Apply</button>
                   </div>
-                )}
+                ))}
                 <div style={{display:"grid",gridTemplateColumns:mob?"1fr":"1fr 1fr",gap:8}}>
                   <Field label="Date"><input type="date" value={selected.date||""} onChange={e=>patchTxn(selected.id,{date:e.target.value})} style={inputS}/></Field>
                   {!transfer&&<Field label="Account">
