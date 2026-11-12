@@ -1774,8 +1774,20 @@ function parseListingCaption(caption = "") {
   const sku    = take(/\bsku\s*[:#]?\s*([a-z0-9][a-z0-9/_-]*)/i);
   const origin = take(/\b(?:from|origin)\s*[:]?\s*([a-z][a-z ]{2,30}?)(?=$|[,.;|]|\s*\d)/i);
   const weight = take(/\b([\d.]+)\s*(kgs?|kilograms?|gms?|grams?|g)\b/i);
+  /* "260 mm x 170mm x 130 mm": all the sides, read here rather than left to
+     the AI, which once dropped the spaced "260 mm" and called a 260mm piece
+     170mm on the title, the description and the shop. The longest side is the
+     size buyers look for. */
+  const DIM_RE = /\b(\d+(?:\.\d+)?)\s*(mm|cm)?\s*[x×*]\s*(\d+(?:\.\d+)?)\s*(mm|cm)?(?:\s*[x×*]\s*(\d+(?:\.\d+)?)\s*(mm|cm)?)?(?![\w.])/i;
+  const dimPeek = text.match(DIM_RE);
+  // Only in mm or cm: "2 x 3 inch" and "x 12 pcs" are read as before.
+  const dimM = dimPeek && (dimPeek[6] || dimPeek[4] || dimPeek[2]) ? take(DIM_RE) : null;
+  const dimUnit = dimM ? (dimM[6] || dimM[4] || dimM[2]).toLowerCase() : "";
+  const sides = dimM ? [dimM[1], dimM[3], dimM[5]].filter(Boolean) : [];
+  const dimensions = sides.length ? `${sides.join(" x ")}${dimUnit}` : "";
   // Bare "in" only counts glued to the number — "60 in stock" is not a size.
-  const size   = take(/\b(\d+(?:\.\d+)?(?:\s*[-–]\s*\d+(?:\.\d+)?)?)\s*(mm|cm|inch(?:es)?|")/i)
+  const size   = sides.length ? [null, String(Math.max(...sides.map(Number))), dimUnit]
+              : take(/\b(\d+(?:\.\d+)?(?:\s*[-–]\s*\d+(?:\.\d+)?)?)\s*(mm|cm|inch(?:es)?|")/i)
               || take(/\b(\d+(?:\.\d+)?)(in)\b/i);
   const qty    = take(/\b(?:qty\s*[:=]?\s*|x\s*)(\d{1,4})\b(?!\s*(?:mm|cm|g|kg|inch))/i)
               || take(/\b(\d{1,4})\s*(?:pcs?|pieces?|nos?\.?|units?)\b/i);
@@ -1807,6 +1819,7 @@ function parseListingCaption(caption = "") {
     origin: origin ? origin[1].trim() : "",
     weight: weight ? `${weight[1]} ${weight[2].toLowerCase().replace(/s$/, "")}` : "",
     size: size ? formatSize(size[1], size[2]) : "",
+    dimensions,
   };
 }
 
@@ -1896,7 +1909,7 @@ angle. No hashtags, no duplicates of one another.
 
 ${photos.length ? `The ${photos.length} photo(s) below are the product.` : "There are no photos — work from the note alone."}
 Seller's note (facts, not the title): ${caption ? `"${caption}"` : "(none)"}
-Known already: ${JSON.stringify({ size: hints.size || "", weight: hints.weight || "", origin: hints.origin || "", qty: hints.qty || "" })}
+Known already: ${JSON.stringify({ size: hints.size || "", dimensions: hints.dimensions || "", weight: hints.weight || "", origin: hints.origin || "", qty: hints.qty || "" })}
 
 WHAT THE PRODUCT IS comes from the seller's note, never from the photos. If the
 note names a product that isn't a stone — "custom acrylic display stand",
@@ -2095,7 +2108,10 @@ function buildListingDraft({ parsed, ai, images = [], video = "", source = "tele
      buyer searching Etsy is not typing that. The AI writes the title in the
      shop's own style and the line stays on the record as what was said; if the
      AI is unreachable the line is the name, which is better than nothing. */
-  const title = (ai?.title || "").trim() || parsed.text || "Untitled listing";
+  /* A size the title leads with must be the piece's size: with "260 x 170 x
+     130 mm" in the note the AI once led with 170mm. */
+  const title = ((ai?.title || "").trim() || parsed.text || "Untitled listing")
+    .replace(/^\d+(?:\.\d+)?\s*(?:mm|cm)\b/i, m => (parsed.size && parsed.dimensions ? parsed.size : m));
 
   const priceUsd = parsed.priceUsd ?? (parsed.priceInr ? Math.round((parsed.priceInr / LISTING_USD_INR) * 100) / 100 : null);
   const priceInr = parsed.priceInr ?? (parsed.priceUsd ? Math.round(parsed.priceUsd * LISTING_USD_INR) : null);
@@ -2107,7 +2123,7 @@ function buildListingDraft({ parsed, ai, images = [], video = "", source = "tele
      is the shop's, word for word. */
   const size = parsed.size || ai?.size || "";
   const weight = parsed.weight || ai?.weight || "";
-  const dims = (ai?.dimensions || "").trim();
+  const dims = parsed.dimensions || (ai?.dimensions || "").trim();
   const body = (ai?.body || ai?.description || "").trim();
   const description = houseDescription({
     similar: parsed.qty > 1, body, title, photos: images.length > 0,
