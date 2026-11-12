@@ -11078,6 +11078,18 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
           // ebay.js turns these into item specifics (mineral, origin, weight, size).
           specifics:    { material: listing.material, origin: listing.origin, shape: listing.shape, weight: listing.weight,
                           width: listing.width, height: listing.height, depth: listing.depth, dim_unit: listing.dim_unit, size: listing.size },
+          /* The options a buyer picks (Pendant / Pendulum) go up as eBay
+             variations. An option priced apart on Etsy keeps the same ratio
+             to the eBay price; its own stock, if set, is its quantity. */
+          variations: (listing.variations || []).filter(v => v?.name && (v.options || []).some(o => String(o.label || "").trim())).map(v => ({
+            name: v.name,
+            options: (v.options || []).filter(o => String(o.label || "").trim()).map(o => ({
+              label: o.label,
+              price: v.perVariantPricing && +o.price_etsy > 0 && +listing.price_etsy > 0 && +listing.price_ebay > 0
+                ? Math.round(+listing.price_ebay * (+o.price_etsy / +listing.price_etsy) * 100) / 100 : "",
+              qty: v.perVariantPricing ? o.qty : "",
+            })),
+          })),
           ...(existingItemId ? { itemId: existingItemId } : {}),
         }),
       });

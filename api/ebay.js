@@ -501,8 +501,11 @@ export async function publishEbayListing(body = {}) {
     conditionId = "1000", shippingCost = 0, shippingService = "standard", expeditedCost = null, itemId: existingId,
     categoryId = ebayCategoryFor(title), // 4218, the old default, is now Figurines
     video, videoId: knownVideoId = null, sku, syncOnly = false, allowCreate = !syncOnly,
-    specifics: specSrc = {},
+    specifics: specSrc = {}, variations = [],
   } = body;
+  const vars = ebayVariations(variations, { price, quantity, sku });
+  // A variation's name can't also be an item specific.
+  const noVarNames = list => vars ? list.filter(([n]) => !vars.names.includes(String(n).toLowerCase())) : list;
   const ebayName = ebayTitle(ebaySafe(title) || title);
   const specs = ebaySpecifics(specSrc, String(categoryId));
   const itemSku = String(sku || "").trim();
@@ -514,6 +517,7 @@ export async function publishEbayListing(body = {}) {
   const ownDesc = String(description || "").trim();
   if (!syncOnly && (!ownDesc || ownDesc.toLowerCase() === String(title).trim().toLowerCase()))
     return { ok: false, status: 400, error: "This piece has no description yet. Write one, or press AI fill, then publish on eBay again." };
+  if (vars && vars.list.some(v => !(v.price > 0))) return { ok: false, status: 400, error: "An option has no eBay price. Set the eBay price first." };
   if (!(+price > 0)) return { ok: false, status: 400, error: `The eBay price is $${price || 0}. Set a price above $0 first.` };
   // eBay amounts are dollars; a rupee figure here once asked eBay for $800 shipping.
   if (+expeditedCost > 80) return { ok: false, status: 400, error: `eBay expedited shipping is set to $${expeditedCost}. eBay amounts are in dollars: was that ₹${expeditedCost}?` };
@@ -553,15 +557,17 @@ export async function publishEbayListing(body = {}) {
       `<Title>${esc(ebayName)}</Title>`,
       ...(itemSku ? [`<SKU>${esc(itemSku.slice(0, 50))}</SKU>`] : []),
       `<Description><![CDATA[${plainToHtml(safeDesc)}]]></Description>`,
-      `<StartPrice>${Number(price).toFixed(2)}</StartPrice>`,
-      `<Quantity>${Math.max(1, parseInt(quantity, 10))}</Quantity>`,
+      ...(vars ? [vars.xml] : [
+        `<StartPrice>${Number(price).toFixed(2)}</StartPrice>`,
+        `<Quantity>${Math.max(1, parseInt(quantity, 10))}</Quantity>`,
+      ]),
       ...(picXml ? [`<PictureDetails>${picXml}</PictureDetails>`] : []),
       ...(videoXml ? [videoXml] : []),
       `<PrimaryCategory><CategoryID>${esc(String(categoryId))}</CategoryID></PrimaryCategory>`,
       `<ConditionID>${esc(String(conditionId))}</ConditionID>`,
-      specificsXml(await mergedSpecifics(existingId, specs)),
+      specificsXml(noVarNames(await mergedSpecifics(existingId, specs))),
       ebayShippingXml(shippingCost, shippingService, expeditedCost, (await ebayShippingDiscounts()).xml),
-      ebayBestOfferXml(price),
+      vars ? "<BestOfferDetails><BestOfferEnabled>false</BestOfferEnabled></BestOfferDetails>" : ebayBestOfferXml(price),
     ];
     const { ok, xml } = await trading("ReviseItem", `<Item>${fields.join("")}</Item>`);
     if (!ok) {
@@ -588,19 +594,19 @@ export async function publishEbayListing(body = {}) {
     ${itemSku ? `<SKU>${esc(itemSku.slice(0, 50))}</SKU>` : ""}
     <Description><![CDATA[${plainToHtml(safeDesc)}]]></Description>
     <PrimaryCategory><CategoryID>${esc(String(categoryId))}</CategoryID></PrimaryCategory>
-    <StartPrice>${Number(price).toFixed(2)}</StartPrice>
+    ${vars ? "" : `<StartPrice>${Number(price).toFixed(2)}</StartPrice>`}
     <ConditionID>${esc(String(conditionId))}</ConditionID>
     <Country>IN</Country>
     <Location>India</Location>
     <Currency>USD</Currency>
-    ${specificsXml(specs)}
+    ${specificsXml(noVarNames(specs))}
     <ListingDuration>GTC</ListingDuration>
     <ListingType>FixedPriceItem</ListingType>
-    <Quantity>${Math.max(1, parseInt(quantity, 10))}</Quantity>
+    ${vars ? vars.xml : `<Quantity>${Math.max(1, parseInt(quantity, 10))}</Quantity>`}
     ${picXml ? `<PictureDetails>${picXml}</PictureDetails>` : ""}
     ${videoXml}
     ${ebayShippingXml(shippingCost, shippingService, expeditedCost, (await ebayShippingDiscounts()).xml)}
-    ${ebayBestOfferXml(price)}
+    ${vars ? "" : ebayBestOfferXml(price)}
     <Site>US</Site>
   `;
   const { ok, xml } = await trading("AddItem", `<Item>${itemXml}</Item>`);
@@ -1043,6 +1049,37 @@ export const ebayShippingXml = (cost = 0, service = "standard", expeditedCost = 
 
 /* Best Offer on, with eBay answering the clear cases: an offer of 90% of the
    price or more is accepted, one under 75% declined; the rest wait for a reply. */
+/* Options a buyer picks (Style: Pendant / Pendulum), as eBay variations:
+   one per combination, each with its own price and stock. variations is
+   [{ name, options: [{ label, price, qty }] }] with prices in dollars. A
+   listing with variations carries no item price or quantity of its own, and
+   eBay allows no Best Offer on it. */
+export function ebayVariations(variations, { price, quantity = 1, sku = "" } = {}) {
+  const clip = (v, n) => String(v ?? "").replace(/\s+/g, " ").trim().slice(0, n);
+  const axes = (Array.isArray(variations) ? variations : [])
+    .map(v => ({ name: clip(v?.name, 40), options: (v?.options || []).filter(o => clip(o?.label, 50)) }))
+    .filter(v => v.name && v.options.length).slice(0, 5);
+  if (!axes.length) return null;
+  let combos = [[]];
+  for (const a of axes) combos = combos.flatMap(c => a.options.map(o => [...c, o]));
+  if (combos.length > 250) return null;
+  const skus = new Set();
+  const list = combos.map(combo => {
+    // A price or stock set on an option counts only on a single-axis listing.
+    const one = axes.length === 1 ? combo[0] : {};
+    const p = +one.price > 0 ? +one.price : +price || 0;
+    const q = one.qty !== "" && one.qty != null && +one.qty >= 0 ? Math.floor(+one.qty) : Math.max(0, parseInt(quantity, 10) || 0);
+    let vsku = sku ? clip(`${sku}-${combo.map(o => clip(o.label, 50).toUpperCase().replace(/[^A-Z0-9]+/g, "")).join("-")}`, 80) : "";
+    if (vsku && skus.has(vsku)) vsku = "";
+    if (vsku) skus.add(vsku);
+    return { price: p, qty: q, sku: vsku, specs: combo.map((o, k) => [axes[k].name, clip(o.label, 50)]) };
+  });
+  const nvl = (n, vals) => `<NameValueList><Name>${esc(n)}</Name>${vals.map(v => `<Value>${esc(v)}</Value>`).join("")}</NameValueList>`;
+  const xml = `<Variations><VariationSpecificsSet>${axes.map(a => nvl(a.name, [...new Set(a.options.map(o => clip(o.label, 50)))])).join("")}</VariationSpecificsSet>${list.map(v =>
+    `<Variation>${v.sku ? `<SKU>${esc(v.sku)}</SKU>` : ""}<StartPrice>${v.price.toFixed(2)}</StartPrice><Quantity>${v.qty}</Quantity><VariationSpecifics>${v.specs.map(([n, val]) => nvl(n, [val])).join("")}</VariationSpecifics></Variation>`).join("")}</Variations>`;
+  return { xml, names: axes.map(a => a.name.toLowerCase()), list, minPrice: Math.min(...list.map(v => v.price)) };
+}
+
 export function ebayBestOfferXml(price) {
   const p = +price || 0;
   const at = f => (Math.floor(p * f * 100) / 100).toFixed(2);
