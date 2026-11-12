@@ -325,7 +325,7 @@ function erpPatch(p) {
   return {};   // materials: the ERP keeps one material, read off the stone
 }
 
-function Proposal({ p, onDecide, applyRef }) {
+function Proposal({ p, onDecide, applyRef, compact = false }) {
   const [busy, setBusy] = useState(false);
   const list = Array.isArray(p.proposed);
   const cur = list ? (p.current || []) : [p.current];
@@ -362,6 +362,24 @@ function Proposal({ p, onDecide, applyRef }) {
     setBusy(false);
   };
   if (applyRef) applyRef.current[p.id] = apply;
+  const changes = (
+      <div style={{ marginTop: compact ? 4 : 8 }}>
+        {list ? <>
+          {cur.filter(t => !next.includes(t)).map(t => chip(t, "drop"))}
+          {next.map(t => chip(t, cur.includes(t) ? "keep" : "add"))}
+        </> : <div style={{ fontSize: 12.5 }}><div style={{ color: C.red, textDecoration: "line-through" }}>{String(p.current)}</div><div style={{ color: C.green }}>{p.proposed_label || String(p.proposed)}</div></div>}
+      </div>);
+  /* In the problem's own list: the fix sits under its piece, with the three
+     answers Sir gives one piece at a time. */
+  if (compact) return (
+    <div style={{ marginTop: 4 }}>
+      {changes}
+      <div style={{ display: "flex", gap: 6, marginTop: 4, flexWrap: "wrap" }}>
+        <button disabled={busy} onClick={apply} style={btn(C.ink, "#fff")}>{busy ? "Applying…" : "Approve"}</button>
+        <button disabled={busy} onClick={() => onDecide(p, "rejected")} style={btn()}>Deny</button>
+        <button disabled={busy} onClick={() => onDecide(p, "skipped")} style={btn()}>Skip</button>
+      </div>
+    </div>);
   return (
     <div style={{ ...card, padding: 14, marginBottom: 10 }}>
       <div style={{ display: "flex", gap: 10, alignItems: "flex-start", flexWrap: "wrap" }}>
@@ -389,15 +407,21 @@ const editUrl = (c, i) => /^etsy/.test(c.channel) && /^\d+$/.test(String(i.id)) 
   : c.channel === "ebay" && /^\d+$/.test(String(i.id)) ? `https://www.ebay.com/sl/list?mode=ReviseItem&itemId=${i.id}`
   : i.url || "";
 
-function CheckRow({ c, props, onDrafted, showToast }) {
+function CheckRow({ c, props, onDrafted, onDecide, onSkip, applyRef, showToast }) {
   const [open, setOpen] = useState(false);
   const [all, setAll] = useState(false);
   const [busy, setBusy] = useState("");
   const field = DRAFTABLE[c.check];
-  const known = new Set((props || []).filter(p => p.check === c.check && p.channel === c.channel && (p.status === "pending" || p.status === "applied" || p.status === "applied_erp")).map(p => String(p.listing_id)));
-  const todo = (c.items || []).filter(i => !known.has(String(i.id)));
+  /* The latest answer for each piece: a fix waiting, applied, denied or skipped.
+     Denied and skipped pieces stay out of "Draft fixes for all"; each can be
+     drafted again on its own. */
+  const latest = new Map();
+  for (const p of (props || []).filter(p => p.check === c.check && p.channel === c.channel))
+    if (!latest.has(String(p.listing_id)) || String(p.created_at || p.decided_at || "") >= String(latest.get(String(p.listing_id)).created_at || latest.get(String(p.listing_id)).decided_at || "")) latest.set(String(p.listing_id), p);
+  const todo = (c.items || []).filter(i => !latest.has(String(i.id)) || latest.get(String(i.id)).status === "failed");
   // Draft: ten at a time for the AI checks, the rest in one go; each lands as a proposal to approve.
-  const draft = async () => {
+  const draft = async (list = todo) => {
+    const todo = list;
     const size = AI_CHECKS.has(c.check) ? 10 : 500;
     let made = 0, skipped = 0;
     try {
@@ -411,7 +435,7 @@ function CheckRow({ c, props, onDrafted, showToast }) {
         await onDrafted(d.proposals || []);
         made += (d.proposals || []).length; skipped += (d.skipped || []).length;
       }
-      showToast(`${made} fix${made === 1 ? "" : "es"} drafted above, waiting for your approval${skipped ? ` · ${skipped} left as they are` : ""}`);
+      showToast(made ? `${made} fix${made === 1 ? "" : "es"} drafted, each under its piece below${skipped ? ` · ${skipped} left as they are` : ""}` : "The AI found nothing to change there");
     } catch (e) { showToast(`⚠ ${e.message}${made ? ` (${made} drafted before it stopped)` : ""}`); }
     setBusy("");
   };
@@ -445,11 +469,11 @@ function CheckRow({ c, props, onDrafted, showToast }) {
           <div style={{ fontSize: 12.5, color: C.inkMid, marginBottom: 8 }}><b>Why it matters:</b> {c.why} <b>Fix:</b> {c.fix}</div>
           <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 10 }}>
             {field ? <>
-              <button disabled={!!busy || !todo.length} onClick={draft} style={btn(C.ink, "#fff")}>
+              <button disabled={!!busy || !todo.length} onClick={() => draft()} style={btn(C.ink, "#fff")}>
                 {busy || (todo.length ? `Draft fixes for ${todo.length}` : "All drafted")}</button>
               <span style={{ fontSize: 11.5, color: C.inkFaint }}>
                 {AI_CHECKS.has(c.check) ? `AI writes new ${field === "tags" ? "tags" : "titles"}, about one call per 10 listings. ` : ""}
-                Nothing changes until you approve each one (or Approve all) above.</span>
+                Each fix appears under its piece: Approve, Deny or Skip. Nothing changes until you approve.</span>
             </> : <>
               <button disabled={!!busy} onClick={followup} style={btn(C.ink, "#fff")}>{busy || "Add to Follow-ups"}</button>
               <span style={{ fontSize: 11.5, color: C.inkFaint }}>This needs hands, not a field change: it goes on your follow-ups with the pieces listed. Each piece below has its edit link.</span>
@@ -460,6 +484,19 @@ function CheckRow({ c, props, onDrafted, showToast }) {
               <div style={{ flex: 1, minWidth: 0 }}>
                 {i.url ? <a href={i.url} target="_blank" rel="noreferrer" style={{ color: C.ink }}>{i.title || i.id}</a> : <span>{i.title || i.id}</span>}
                 {i.detail && <div style={{ fontSize: 11.5, color: C.inkMid }}>{i.detail}</div>}
+                {field && (() => {
+                  const p = latest.get(String(i.id));
+                  const small = { ...btn(), padding: "3px 9px", fontSize: 11.5 };
+                  const one = () => draft([i]);
+                  if (p?.status === "pending") return <Proposal p={p} onDecide={onDecide} applyRef={applyRef} compact />;
+                  if (p?.status === "applied" || p?.status === "applied_erp") return <div style={{ fontSize: 11.5, color: C.green, marginTop: 3 }}>✓ Fixed{p.status === "applied_erp" ? " in the ERP listing" : ""}</div>;
+                  const said = p?.status === "rejected" ? "Denied" : p?.status === "skipped" ? "Skipped" : p?.status === "failed" ? `Not applied: ${p.error || "error"}` : "";
+                  return <div style={{ display: "flex", gap: 6, alignItems: "center", marginTop: 4, flexWrap: "wrap" }}>
+                    {said && <span style={{ fontSize: 11.5, color: p.status === "failed" ? C.red : C.inkFaint }}>{said}</span>}
+                    <button disabled={!!busy} onClick={one} style={small}>{p ? "Draft again" : "Draft fix"}</button>
+                    {!p && <button disabled={!!busy} onClick={() => onSkip(c, i)} style={small}>Skip</button>}
+                  </div>;
+                })()}
               </div>
               {!field && editUrl(c, i) && <a href={editUrl(c, i)} target="_blank" rel="noreferrer" style={{ fontSize: 11, color: C.blue, flexShrink: 0 }}>Edit ↗</a>}
               <span style={{ fontSize: 10.5, color: C.inkFaint, flexShrink: 0 }}>since {i.since}</span>
@@ -485,7 +522,16 @@ function AuditTab({ showToast }) {
     const { error: e } = await supabase.rpc("app_rows_upsert", { p_key: RAJ_KEYS.proposals, p_item: item, p_prepend: false });
     if (e) return showToast("⚠ " + e.message);
     setProps(ps => ps.map(x => x.id === p.id ? item : x));
-    showToast(status === "applied" ? "Applied in the ERP and on Etsy" : status === "applied_erp" ? `Fixed in the ERP listing (${error})` : status === "failed" ? `⚠ Not applied: ${error}` : "Rejected");
+    showToast(status === "applied" ? "Applied in the ERP and on Etsy" : status === "applied_erp" ? `Fixed in the ERP listing (${error})` : status === "failed" ? `⚠ Not applied: ${error}` : status === "skipped" ? "Skipped: left as it is" : "Denied: nothing changed");
+  };
+  // Skip a piece before anything was drafted for it: no AI call, and it stays out of "Draft fixes for all".
+  const skip = async (c, i) => {
+    const now = new Date().toISOString();
+    const item = { id: `skip-${c.check}-${c.channel}-${i.id}`, check: c.check, channel: c.channel, listing_id: String(i.id), title: i.title || "", status: "skipped", created_at: now, decided_at: now };
+    const { error: e } = await supabase.rpc("app_rows_upsert", { p_key: RAJ_KEYS.proposals, p_item: item, p_prepend: false });
+    if (e) return showToast("⚠ " + e.message);
+    setProps(ps => [...ps.filter(x => x.id !== item.id), item]);
+    showToast("Skipped: left as it is");
   };
   const drafted = async list => {
     const now = new Date().toISOString();
@@ -512,6 +558,9 @@ function AuditTab({ showToast }) {
   const checks = rows.filter(r => r.id !== "summary" && r.kind === kind && r.count > 0)
     .sort((a, b) => (b.check === "etsy_shop_on_hold") - (a.check === "etsy_shop_on_hold") || order[a.severity] - order[b.severity] || b.count - a.count);
   const pending = props.filter(p => p.status === "pending");
+  // Fixes whose piece is listed under a problem below are answered there; the rest stay here.
+  const listed = new Set(rows.filter(r => r.id !== "summary").flatMap(r => (r.items || []).map(i => `${r.check}|${r.channel}|${i.id}`)));
+  const loose = pending.filter(p => !listed.has(`${p.check}|${p.channel}|${p.listing_id}`));
   return (
     <div>
       <div style={{ display: "grid", gridTemplateColumns: mob() ? "1fr 1fr" : "repeat(5,1fr)", gap: 10, marginBottom: 14 }}>
@@ -527,14 +576,15 @@ function AuditTab({ showToast }) {
           <div style={{ ...lab, margin: 0, flex: 1 }}>Fixes Raj drafted · {pending.length} waiting for you</div>
           <button disabled={!!allBusy} onClick={() => confirm(`Apply all ${pending.length} drafted fixes?`) && approveAll(pending)} style={btn(C.ink, "#fff")}>{allBusy || `Approve all ${pending.length}`}</button>
         </div>
-        {pending.map(p => <Proposal key={p.id} p={p} onDecide={decide} applyRef={applyRef} />)}
+        {loose.map(p => <Proposal key={p.id} p={p} onDecide={decide} applyRef={applyRef} />)}
+        {loose.length < pending.length && <div style={{ fontSize: 11.5, color: C.inkFaint, marginBottom: 8 }}>{pending.length - loose.length} more {pending.length - loose.length === 1 ? "sits" : "sit"} under {pending.length - loose.length === 1 ? "its piece" : "their pieces"} in the problems below.</div>}
       </>}
       <div style={{ display: "flex", gap: 8, margin: "14px 0 10px" }}>
         {[["problem", "Problems"], ["opportunity", "Sales leads"]].map(([k, l]) => (
           <button key={k} onClick={() => setKind(k)} style={btn(kind === k ? C.ink : C.surface, kind === k ? "#fff" : C.ink)}>{l}</button>
         ))}
       </div>
-      {checks.map(c => <CheckRow key={c.id} c={c} props={props} onDrafted={drafted} showToast={showToast} />)}
+      {checks.map(c => <CheckRow key={c.id} c={c} props={props} onDrafted={drafted} onDecide={decide} onSkip={skip} applyRef={applyRef} showToast={showToast} />)}
     </div>
   );
 }
