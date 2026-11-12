@@ -572,8 +572,15 @@ export async function publishEbayListing(body = {}) {
     // Variations only go through the fixed-price calls; ReviseItem refuses them.
     const { ok, xml } = await trading(vars ? "ReviseFixedPriceItem" : "ReviseItem", `<Item>${fields.join("")}</Item>`);
     if (!ok) {
-      // Item gone on eBay — fall through to create a fresh one below
       const errCode = xmlTag("ErrorCode", xml);
+      /* eBay won't add options to a listing that went up without them. Keep
+         it updating as a single item, and say so: the options need a new
+         listing (end this one, publish again). */
+      if (vars && errCode === "21916635") {
+        const out = await publishEbayListing({ ...body, variations: [] });
+        return { ...out, variationsWarning: "eBay can't add options to a listing that went up without them. End it on eBay and publish again to list it with options." };
+      }
+      // Item gone on eBay — fall through to create a fresh one below
       if (errCode !== "17" && errCode !== "291") {
         return { ok: false, status: 500, error: ebayErrors(xml) || "ReviseItem failed" };
       }

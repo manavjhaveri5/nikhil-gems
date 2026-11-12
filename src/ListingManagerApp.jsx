@@ -11096,6 +11096,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
       const d = await r.json();
       if (!d.ok) throw new Error(d.error || "eBay publish failed");
       if (d.videoWarning) showToast(`⚠ eBay video: ${d.videoWarning}`);
+      if (d.variationsWarning && !syncOnly) showToast(`⚠ eBay options: ${d.variationsWarning}`);
       result = { item_id: d.itemId, url: d.url || `https://www.ebay.com/itm/${d.itemId}`,
         ...(d.video_id ? { video_id: d.video_id, video_src: d.video_src, video_live: !!d.video_live } : {}) };
     } else {
