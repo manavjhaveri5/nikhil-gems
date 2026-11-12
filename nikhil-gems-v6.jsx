@@ -1067,6 +1067,16 @@ const USER_HIDE_OPTIONS=[
   {id:"boi",label:"BOI Remittance in Bills"},
   {id:"billTotals",label:"Totals strip in Bills (value, paid, outstanding)"},
 ];
+/* Which side of the journal a staff login with the Ledger sees: debits
+   (money out), credits (money in), or both (user.ledgerSides, set on the
+   Users screen). null means both — admin, or nothing set. One side only
+   also keeps transfers, month close and the Accounting dashboard away. */
+const LEDGER_SIDES=[["debit","Debits (money out)"],["credit","Credits (money in)"]];
+const ledgerSidesOf=user=>{
+  if(!user||user.role==="admin"||!Array.isArray(user.ledgerSides))return null;
+  const s=user.ledgerSides.filter(x=>x==="debit"||x==="credit");
+  return s.length===1?s:null;
+};
 const userHides=(user,id)=>!!user&&user.role!=="admin"&&Array.isArray(user.hide)&&user.hide.includes(id);
 function Welcome({onEnter,onSignOut,allowedMods,todoKey="ng-todos-v1",isAdmin=true,allUsers=[],currentUser=null,onGoToActivity}){
   /* Which groups are open. Remembered, because a sidebar that folds itself shut
@@ -1350,7 +1360,7 @@ function Welcome({onEnter,onSignOut,allowedMods,todoKey="ng-todos-v1",isAdmin=tr
           })()}
           {/* Accounts first: what was paid out, payments still to classify (one tap from
               here), and the month-close checks. For whoever can open the Ledger. */}
-          {(isAdmin||visibleMods.some(m=>m.id==="ledger"))&&<HomeAccounts isUnclassified={accountingIsUnclassified} onEnter={onEnter}/>}
+          {(isAdmin||(visibleMods.some(m=>m.id==="ledger")&&!ledgerSidesOf(currentUser)))&&<HomeAccounts isUnclassified={accountingIsUnclassified} onEnter={onEnter}/>}
           {/* Mobile: icon grid for all modules — 4-col with colored tiles */}
           {mob&&(
             <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:8,marginBottom:16,opacity:vis?1:0,animation:vis?"fadeIn .3s ease both":"none"}}>
@@ -4136,18 +4146,18 @@ async function extractPdfText(url){
    "Finance has its own module", but Finance's ledger is a bank and cash list,
    not this one, so the component has sat in the bundle rendered by nothing ever
    since. This gives it the host it lost. */
-function LedgerApp({onHome,isAdmin=false,onViewBill,onOpenModule}){
+function LedgerApp({onHome,isAdmin=false,onViewBill,onOpenModule,sides=null}){
   const [toast,setToast]=useState("");
   const showToast=m=>{setToast(m);setTimeout(()=>setToast(""),3000);};
   return(
     <Shell title="Ledger" crumb="Accounting" onHome={onHome}>
-      <AccountingFinanceLedger showToast={showToast} isAdmin={isAdmin} onViewBill={onViewBill} onOpenModule={onOpenModule}/>
+      <AccountingFinanceLedger showToast={showToast} isAdmin={isAdmin} onViewBill={onViewBill} onOpenModule={onOpenModule} sides={sides}/>
       <Toast msg={toast}/>
     </Shell>
   );
 }
 
-function AccountingFinanceLedger({showToast,onViewBill,isAdmin=false,onOpenModule}){
+function AccountingFinanceLedger({showToast,onViewBill,isAdmin=false,onOpenModule,sides=null}){
   const [company,setCompany]=useState(()=>localStorage.getItem("ng-accounting-ledger-company")||"ng");
   const [accounts,setAccounts]=useState([]);
   const [txns,setTxns]=useState([]);
@@ -4183,7 +4193,7 @@ function AccountingFinanceLedger({showToast,onViewBill,isAdmin=false,onOpenModul
   const [learnMem,setLearnMem]=useState([]); // self-learning classification dataset (per company)
   const [embMap,setEmbMap]=useState({});     // {recordId -> embedding vector} for semantic retrieval
   const [autoFilled,setAutoFilled]=useState({}); // txnId -> {payee,notes} pre-auto-fill, for Undo
-  const blankManual=()=>({date:today(),type:"debit",accountId:"",accountToId:"",amount:"",receivedAmount:"",rate:"",currency:"INR",payee:"",notes:""});
+  const blankManual=()=>({date:today(),type:sides?sides[0]:"debit",accountId:"",accountToId:"",amount:"",receivedAmount:"",rate:"",currency:"INR",payee:"",notes:""});
   const [manualOpen,setManualOpen]=useState(false);
   const [manual,setManual]=useState(blankManual);
   const [closeOpen,setCloseOpen]=useState(false); // Month close panel in place of the ledger list
@@ -4213,7 +4223,7 @@ function AccountingFinanceLedger({showToast,onViewBill,isAdmin=false,onOpenModul
         if(hint.month)setMonth(hint.month);
         if(hint.id){const tx=arr.find(x=>x.id===hint.id);setTab(tx&&accountingIsUnclassified(tx)?"unclassified":"all");setSelectedId(hint.id);}
         else if(hint.unclassified)setTab("unclassified");
-        if(hint.close){setCloseSection(hint.section||"payments");setCloseOpen(true);}
+        if(hint.close&&!sides){setCloseSection(hint.section||"payments");setCloseOpen(true);}
       }
       setLoaded(true);
     }).catch(e=>{setLoaded(true);showToast?.("Ledger load failed: "+e.message);});
@@ -4350,7 +4360,7 @@ function AccountingFinanceLedger({showToast,onViewBill,isAdmin=false,onOpenModul
   const isCashLike=a=>a.type==="cash"||["inr cash","usd cash","eur cash","jpy cash"].includes(String(a.name||"").trim().toLowerCase());
   const isInrCash=a=>String(a.name||"").trim().toLowerCase()==="inr cash"||(a.type==="cash"&&(a.currency||"").toUpperCase()==="INR");
   const hiddenCashAccountIds=new Set(accounts.filter(a=>isCashLike(a)&&!isInrCash(a)).map(a=>a.id));
-  const isHiddenCashTxn=t=>hiddenCashAccountIds.has(t.accountFrom)||hiddenCashAccountIds.has(t.accountTo);
+  const isHiddenCashTxn=t=>hiddenCashAccountIds.has(t.accountFrom)||hiddenCashAccountIds.has(t.accountTo)||(!!sides&&!sides.includes(t.type));
   const visibleAccounts=accounts.filter(a=>!hiddenCashAccountIds.has(a.id));
   const isFutureTxn=t=>(t.date||"")>today();
   const visibleTxns=txns.filter(t=>!isHiddenCashTxn(t));
@@ -4664,6 +4674,7 @@ function AccountingFinanceLedger({showToast,onViewBill,isAdmin=false,onOpenModul
   // moving the account to the correct side and clearing any now-wrong classification.
   const flipTxnType=async newType=>{
     if(!selected||selected.type==="conversion"||selected.type===newType)return;
+    if(sides&&!sides.includes(newType)){showToast?.("Only an admin can move an entry to the other side.");return;}
     const acct=selected.type==="credit"?selected.accountTo:selected.accountFrom;
     const patch=newType==="credit"
       ?{type:"credit",accountTo:acct||"",accountFrom:undefined}
@@ -4809,7 +4820,7 @@ function AccountingFinanceLedger({showToast,onViewBill,isAdmin=false,onOpenModul
   },[loaded,month,tab,accountFilter.join(","),search,txns.length]);
   const monthVisibleTxns=visibleTxns.filter(t=>(t.date||"").startsWith(month));
   const unclassifiedCount=monthVisibleTxns.filter(isUnclassified).length;
-  const ledgerFilters=[["all",`All ${monthVisibleTxns.length}`],["unclassified",`Unclassified ${unclassifiedCount}`],["debit","Payments Out"],["credit","Money In"]];
+  const ledgerFilters=[["all",`All ${monthVisibleTxns.length}`],["unclassified",`Unclassified ${unclassifiedCount}`],["debit","Payments Out"],["credit","Money In"]].filter(([id])=>!sides||id==="all"||id==="unclassified"||sides.includes(id));
   const activeFilterLabel=ledgerFilters.find(([id])=>id===tab)?.[1]||"All";
   const totalIn=filtered.filter(t=>t.type==="credit").reduce((s,t)=>s+(+t.amount||0),0);
   const totalOut=filtered.filter(t=>t.type==="debit").reduce((s,t)=>s+(+t.amount||0),0);
@@ -4887,7 +4898,7 @@ function AccountingFinanceLedger({showToast,onViewBill,isAdmin=false,onOpenModul
               <button onClick={()=>setManualOpen(false)} style={{width:32,height:32,border:`1px solid ${C.border}`,borderRadius:8,background:C.card,cursor:"pointer",fontSize:18,lineHeight:1,color:C.inkMid}}>x</button>
             </div>
             <div style={{display:"grid",gridTemplateColumns:mob?"1fr":"1fr 1fr 1fr",gap:8,marginBottom:16}}>
-              {[["credit","Credit (Money In)",C.green,C.greenBg],["debit","Debit (Money Out)",C.red,C.redBg],["conversion","Conversion / Transfer",C.blue,C.blueBg]].map(([id,label,color,bg])=>(
+              {[["credit","Credit (Money In)",C.green,C.greenBg],["debit","Debit (Money Out)",C.red,C.redBg],["conversion","Conversion / Transfer",C.blue,C.blueBg]].filter(([id])=>!sides||sides.includes(id)).map(([id,label,color,bg])=>(
                 <button key={id} onClick={()=>setManual(m=>({...m,type:id}))} style={{border:`1px solid ${manual.type===id?C.ink:C.border}`,background:manual.type===id?C.ink:C.surface,color:manual.type===id?"#fff":C.ink,borderRadius:8,padding:"12px 10px",fontSize:12,fontWeight:900,cursor:"pointer",textAlign:"center"}}>
                   <span style={{display:"inline-block",width:10,height:10,borderRadius:999,background:manual.type===id?color:bg,border:`1px solid ${color}`,marginRight:7,verticalAlign:-1}}/>
                   {label}
@@ -4937,7 +4948,7 @@ function AccountingFinanceLedger({showToast,onViewBill,isAdmin=false,onOpenModul
         </div>
       )}
 
-      {closeOpen&&<MonthClose key={`${company}:${closeSection}`} initialSection={closeSection} company={company} month={month} accounts={accounts} txns={txns} isUnclassified={isUnclassified}
+      {closeOpen&&!sides&&<MonthClose key={`${company}:${closeSection}`} initialSection={closeSection} company={company} month={month} accounts={accounts} txns={txns} isUnclassified={isUnclassified}
         onClose={()=>setCloseOpen(false)}
         onOpenRecon={onOpenModule?view=>{
           // Export Recon opens on this company and on the view that fixes the item.
@@ -4945,7 +4956,7 @@ function AccountingFinanceLedger({showToast,onViewBill,isAdmin=false,onOpenModul
           onOpenModule("recon");
         }:undefined}
         onOpenTxn={t=>{
-          if(isHiddenCashTxn(t)){showToast?.("That entry is on a foreign-cash account — classify it in Finance → Ledger.");return;}
+          if(isHiddenCashTxn(t)){showToast?.(sides&&!sides.includes(t.type)?"That entry isn't on your side of the ledger.":"That entry is on a foreign-cash account — classify it in Finance → Ledger.");return;}
           setSearch("");setAccountFilter([]);setMonth(monthOf(t.date)||month);
           setTab(isUnclassified(t)?"unclassified":"all");setSelectedId(t.id);setCloseOpen(false);
         }}/>}
@@ -25974,7 +25985,9 @@ function UsersApp({onHome}){
         if(!r.ok)throw new Error(d.error||"Failed to update password");
       }catch(e){setSaving(false);return alert("Error changing password: "+e.message);}
     }
-    const entry={id:form.id||uid(),name:form.name.trim(),email:form.email.trim().toLowerCase(),role:"staff",allowedModules:form.allowedModules,hide:form.hide||[],language:form.language||"",supabaseId,createdAt:form.createdAt||new Date().toISOString()};
+    const ledgerSides=Array.isArray(form.ledgerSides)?form.ledgerSides:["debit","credit"];
+    if(form.allowedModules.includes("ledger")&&!ledgerSides.length){setSaving(false);return alert("Tick Debits, Credits or both for the Ledger — or untick Ledger.");}
+    const entry={id:form.id||uid(),name:form.name.trim(),email:form.email.trim().toLowerCase(),role:"staff",allowedModules:form.allowedModules,hide:form.hide||[],ledgerSides,language:form.language||"",supabaseId,createdAt:form.createdAt||new Date().toISOString()};
     const next=form.id?users.map(u=>u.id===form.id?entry:u):[...users,entry];
     await saveUsers(next);
     setSaving(false);setForm(null);showToast(form.id?"User updated":"User created");
@@ -26104,6 +26117,18 @@ function UsersApp({onHome}){
                     </label>
                   ))}
                 </div>
+                {form.allowedModules.includes("ledger")&&(()=>{const sides=Array.isArray(form.ledgerSides)?form.ledgerSides:["debit","credit"];return(
+                  <div style={{marginTop:8,padding:"8px 10px",border:`1px solid ${C.border}`,borderRadius:6}}>
+                    <div style={{fontSize:10,fontWeight:700,color:C.inkMid,marginBottom:6}}>Ledger shows</div>
+                    <div style={{display:"flex",gap:14,flexWrap:"wrap"}}>
+                      {LEDGER_SIDES.map(([id,label])=>{const on=sides.includes(id);return(
+                        <label key={id} style={{display:"flex",alignItems:"center",gap:6,fontSize:12,cursor:"pointer",fontWeight:on?600:400}}>
+                          <input type="checkbox" checked={on} onChange={()=>setForm(f=>({...f,ledgerSides:on?sides.filter(x=>x!==id):[...sides,id]}))} style={{accentColor:C.gold,width:14,height:14}}/>
+                          {label}
+                        </label>);})}
+                    </div>
+                    {sides.length===1&&<div style={{marginTop:6,fontSize:10,color:C.inkFaint}}>One side only: the Ledger opens without transfers, month close or the Accounting dashboard.</div>}
+                  </div>);})()}
                 <div style={{marginTop:6,fontSize:10,color:C.inkFaint}}>Finance and Users are always admin-only.</div>
               </div>
               <div>
@@ -26150,6 +26175,7 @@ function UsersApp({onHome}){
               <div style={{fontSize:11,color:C.inkFaint}}>{u.email}</div>
               <div style={{marginTop:5,display:"flex",flexWrap:"wrap",gap:4}}>
                 {u.allowedModules?.map(m=>{const mod=ALL_STAFF_MODS.find(x=>x.id===m);return mod?<span key={m} style={{fontSize:9,background:C.card,border:`1px solid ${C.border}`,borderRadius:3,padding:"1px 6px",color:C.inkMid,fontWeight:600}}>{mod.label}</span>:null;})}
+                {(u.allowedModules||[]).includes("ledger")&&ledgerSidesOf(u)&&<span style={{fontSize:9,background:C.amberBg,border:`1px solid ${C.goldBright}`,borderRadius:3,padding:"1px 6px",color:C.amber,fontWeight:600}}>Ledger: {ledgerSidesOf(u)[0]==="debit"?"debits only":"credits only"}</span>}
                 {(u.hide||[]).map(h=>{const o=USER_HIDE_OPTIONS.find(x=>x.id===h);return o?<span key={h} style={{fontSize:9,background:"#FDECEC",border:`1px solid ${C.red}40`,borderRadius:3,padding:"1px 6px",color:C.red,fontWeight:600}}>Hidden: {o.label}</span>:null;})}
               </div>
             </div>
@@ -26578,7 +26604,7 @@ export default function Root({onSignOut}){
       const g=GROUPS.find(x=>x.id===String(mod).slice(6));
       const mine=allowedMods.filter(m=>m.group===g?.id&&m.ready);
       // Accounting is its own app — a dashboard and the work — for whoever keeps the books.
-      const books=g?.id==="accounting"&&(isAdmin||allowedMods.some(m=>m.id==="ledger"));
+      const books=g?.id==="accounting"&&(isAdmin||(allowedMods.some(m=>m.id==="ledger")&&!ledgerSidesOf(currentUser)));
       content=g&&mine.length
         ? books
           ? <Shell title="Accounting" crumb={g.desc} onHome={goHome}><React.Suspense fallback={<div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"50vh",color:C.inkFaint,fontSize:13}}>Loading…</div>}><AccountingApp mods={mine} onEnter={go} isUnclassified={accountingIsUnclassified} canBank={isAdmin||allowedMods.some(m=>m.id==="finance")}/></React.Suspense></Shell>
@@ -26628,7 +26654,7 @@ export default function Root({onSignOut}){
        bank and cash list, not this, so the component has sat in the bundle
        rendered by nothing ever since. Here it has its own module, gated like
        the other books. */
-    else if(mod==="ledger"&&(isAdmin||allowedMods.some(m=>m.id==="ledger")))content=<LedgerApp onHome={goHome} isAdmin={isAdmin} onOpenModule={go} onViewBill={billId=>{setStartBillId(billId);setMod("purchases");setScreen("app");}}/>;
+    else if(mod==="ledger"&&(isAdmin||allowedMods.some(m=>m.id==="ledger")))content=<LedgerApp onHome={goHome} isAdmin={isAdmin} sides={isAdmin?null:ledgerSidesOf(currentUser)} onOpenModule={go} onViewBill={billId=>{setStartBillId(billId);setMod("purchases");setScreen("app");}}/>;
     else if(mod==="journal")content=<StockJournalApp onHome={goHome} isAdmin={isAdmin} onViewBill={billId=>{setStartBillId(billId);setMod("purchases");setScreen("app");}}/>;
   }
   if(!content)content=<Welcome onEnter={go} onSignOut={onSignOut} allowedMods={allowedMods} todoKey={todoKey} isAdmin={isAdmin} allUsers={allUsers} currentUser={currentUser} onGoToActivity={handleGoToActivity}/>;
