@@ -569,7 +569,8 @@ export async function publishEbayListing(body = {}) {
       ebayShippingXml(shippingCost, shippingService, expeditedCost, (await ebayShippingDiscounts()).xml),
       vars ? "<BestOfferDetails><BestOfferEnabled>false</BestOfferEnabled></BestOfferDetails>" : ebayBestOfferXml(price),
     ];
-    const { ok, xml } = await trading("ReviseItem", `<Item>${fields.join("")}</Item>`);
+    // Variations only go through the fixed-price calls; ReviseItem refuses them.
+    const { ok, xml } = await trading(vars ? "ReviseFixedPriceItem" : "ReviseItem", `<Item>${fields.join("")}</Item>`);
     if (!ok) {
       // Item gone on eBay — fall through to create a fresh one below
       const errCode = xmlTag("ErrorCode", xml);
@@ -609,7 +610,7 @@ export async function publishEbayListing(body = {}) {
     ${vars ? "" : ebayBestOfferXml(price)}
     <Site>US</Site>
   `;
-  const { ok, xml } = await trading("AddItem", `<Item>${itemXml}</Item>`);
+  const { ok, xml } = await trading(vars ? "AddFixedPriceItem" : "AddItem", `<Item>${itemXml}</Item>`);
   if (!ok) {
     return { ok: false, status: 500, error: ebayErrors(xml) || "AddItem failed" };
   }
