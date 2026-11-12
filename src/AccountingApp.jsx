@@ -307,6 +307,26 @@ export default function AccountingApp({ mods = [], onEnter, isUnclassified, canB
                   onClick={() => setView("bank")} />;
               })}
             </div>
+            {(() => {
+              /* The ODs are separate accounts at the bank, but interest runs on
+                 all of them: what matters is how much is drawn in all. */
+              const ods = statementAccounts(accounts).filter(a => a.type === "od");
+              if (!ods.length) return null;
+              const each = ods.map(a => ({ a, drawn: accountBalanceAt(a, txns, today()) }));
+              const total = each.reduce((s, x) => s + x.drawn, 0);
+              const limit = ods.reduce((s, a) => s + (+a.odLimit || 0), 0);
+              return (
+                <div style={{ marginTop: 10, padding: "10px 12px", border: `1px solid ${C.border}`, borderRadius: 10, display: "flex", gap: 16, alignItems: "center", flexWrap: "wrap" }}>
+                  <div>
+                    <div style={{ fontSize: 10.5, fontWeight: 800, color: C.inkFaint, textTransform: "uppercase", letterSpacing: .6 }}>Drawn from all ODs</div>
+                    <div style={{ fontFamily: serif, fontSize: 24, color: C.ink }}>{money(total, "INR")}{limit > 0 && <span style={{ fontSize: 13, color: C.inkMid }}> of {money(limit, "INR")} limit</span>}</div>
+                  </div>
+                  <div style={{ display: "flex", gap: 12, flexWrap: "wrap", fontSize: 12, color: C.inkMid }}>
+                    {each.map(({ a, drawn }) => <span key={a.id}>{a.name}: <b style={{ color: C.ink }}>{money(drawn, "INR")}</b></span>)}
+                  </div>
+                </div>
+              );
+            })()}
           </Card>
 
           <Card title={`${monthLabel(month)} in numbers`}>

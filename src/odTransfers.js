@@ -19,21 +19,32 @@ export const odAccountsOf = (accounts = []) =>
 
 /* The OD account a ledger line moves money with, or null. Only lines on the
    OD's own current account count, and only plain debits and credits (a line
-   already booked as a transfer is left alone). */
+   already booked as a transfer is left alone).
+   There can be several ODs on one current account (two BOI ODs and Sejal's,
+   all drawn into 0451). Each line goes to the one it names: by its account
+   number first, then by the name the bank prints for it (od.odMatch, e.g.
+   "SEJAL" for "SEJAL JHAVERI OD AC"). A line that says OD but names none of
+   them is only booked when there is a single OD to book it to. */
 export function odFor(t, accounts = []) {
   if (!t || (t.type !== "debit" && t.type !== "credit")) return null;
   const acct = t.type === "debit" ? t.accountFrom : t.accountTo;
   const text = textOf(t);
-  if (COST.test(text)) return null;
-  for (const od of odAccountsOf(accounts)) {
-    if (od.odLinkedAccountId !== acct) continue;
+  if (COST.test(text) || !/\bOD\b/i.test(text)) return null;
+  const ods = odAccountsOf(accounts).filter(od => od.odLinkedAccountId === acct);
+  if (!ods.length) return null;
+  const digits = text.replace(/\D/g, " ").split(/\s+/).filter(d => d.length >= 6);
+  const byNumber = ods.find(od => {
     const no = String(od.odAccountNo || "").replace(/\D/g, "");
-    const byNumber = no.length >= 6 && text.replace(/\D/g, " ").split(/\s+/).some(d => d.length >= 6 && (d.endsWith(no.slice(-6)) || no.endsWith(d.slice(-6))));
-    // "OD AC", "OD A/C", "OD ACCOUNT", "OD SEJAL JHAVERI", "from OD", "to OD".
-    const byWords = /\bOD\s*(?:A\/?C|ACC(?:OU)?N?T?)\b/i.test(text) || /\bOD\s+[A-Z][A-Z]+\s+[A-Z]/.test(text) || /\b(?:from|to|into)\s+(?:the\s+)?OD\b/i.test(text);
-    if (byNumber || byWords) return od;
-  }
-  return null;
+    return no.length >= 6 && digits.some(d => d.endsWith(no.slice(-6)) || no.endsWith(d.slice(-6)));
+  });
+  if (byNumber) return byNumber;
+  const byName = ods.find(od => {
+    try { return od.odMatch && new RegExp(od.odMatch, "i").test(text); } catch { return false; }
+  });
+  if (byName) return byName;
+  // "OD AC", "OD A/C", "OD ACCOUNT", "OD SEJAL JHAVERI", "from OD", "to OD".
+  const byWords = /\bOD\s*(?:A\/?C|ACC(?:OU)?N?T?)\b/i.test(text) || /\bOD\s+[A-Z][A-Z]+\s+[A-Z]/.test(text) || /\b(?:from|to|into)\s+(?:the\s+)?OD\b/i.test(text);
+  return byWords && ods.length === 1 ? ods[0] : null;
 }
 
 // What the line becomes: a transfer with the OD, kept with the bank's own wording.
