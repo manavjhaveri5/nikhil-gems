@@ -57,9 +57,9 @@ export default function SocialInsights({ st, showToast, onAccounts }) {
   const Stat = ({ k, v, sub }) => <div style={{ ...card, padding: "12px 14px" }}><div style={{ fontSize: 10.5, fontWeight: 800, color: C.inkFaint, textTransform: "uppercase", letterSpacing: .6 }}>{k}</div><div style={{ fontSize: 24, fontWeight: 700, marginTop: 3 }}>{v}</div>{sub && <div style={{ fontSize: 11.5, color: C.inkFaint }}>{sub}</div>}</div>;
 
   return (
-    <div style={{ display: "grid", gap: 12 }}>
+    <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr)", gap: 12 }}>
       <div style={{ ...card, display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
-        {u.avatar_url && <img src={u.avatar_url} alt="" style={{ width: 48, height: 48, borderRadius: "50%" }} />}
+        {u.avatar_url && <img src={u.avatar_url} alt="" referrerPolicy="no-referrer" style={{ width: 48, height: 48, borderRadius: "50%" }} />}
         <div style={{ flex: 1, minWidth: 160 }}>
           <b style={{ fontSize: 16 }}>🎵 {u.display_name || tt.name || "TikTok"}</b> {u.username && <span style={{ color: C.inkFaint, fontSize: 13 }}>@{u.username}</span>} {u.is_verified && "✔"}
           {u.bio_description && <div style={{ fontSize: 12.5, color: C.inkMid, marginTop: 2 }}>{u.bio_description}</div>}
@@ -78,7 +78,7 @@ export default function SocialInsights({ st, showToast, onAccounts }) {
       {err && <div style={{ ...card, color: C.red, fontSize: 13 }}>⚠ {err}</div>}
       {d?.errors?.length > 0 && <div style={{ ...card, color: C.red, fontSize: 12.5 }}>TikTok said: {d.errors.join(" · ")}</div>}
 
-      {d && <div style={{ display: "grid", gridTemplateColumns: mob() ? "1fr 1fr" : "repeat(4, 1fr)", gap: 10 }}>
+      {d && <div style={{ display: "grid", gridTemplateColumns: mob() ? "repeat(2, minmax(0, 1fr))" : "repeat(4, minmax(0, 1fr))", gap: 10 }}>
         <Stat k="Followers" v={n(u.follower_count)} sub={u.following_count != null ? `following ${n(u.following_count)}` : ""} />
         <Stat k="Total likes" v={n(u.likes_count)} />
         <Stat k="Videos" v={n(u.video_count)} />
@@ -93,7 +93,7 @@ export default function SocialInsights({ st, showToast, onAccounts }) {
         {!videos.length && <div style={{ fontSize: 13, color: C.inkFaint }}>No videos yet{missing.length ? " (or the video.list permission isn't granted yet)" : ""}.</div>}
         {videos.map(v => (
           <div key={v.id} style={{ display: "flex", gap: 12, alignItems: "center", borderTop: `1px solid ${C.border}`, padding: "9px 0" }}>
-            {v.cover_image_url ? <img src={v.cover_image_url} alt="" loading="lazy" style={{ width: 54, height: 72, objectFit: "cover", borderRadius: 6, flex: "none", background: C.card }} /> : <div style={{ width: 54, height: 72, borderRadius: 6, background: C.card, flex: "none" }} />}
+            {v.cover_image_url ? <img src={v.cover_image_url} alt="" referrerPolicy="no-referrer" loading="lazy" style={{ width: 54, height: 72, objectFit: "cover", borderRadius: 6, flex: "none", background: C.card }} /> : <div style={{ width: 54, height: 72, borderRadius: 6, background: C.card, flex: "none" }} />}
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontSize: 13, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{v.title || v.video_description || "(no caption)"}</div>
               <div style={{ fontSize: 11.5, color: C.inkFaint, marginTop: 2 }}>{v.create_time ? new Date(v.create_time * 1000).toLocaleDateString() : ""}{v.duration ? ` · ${v.duration}s` : ""}</div>
