@@ -74,8 +74,9 @@ async function addLog(entry) {
 const site = req => `https://${req.headers["x-forwarded-host"] || req.headers.host}`;
 // TikTok refuses a redirect URI with a query string, so it comes back on a
 // plain path that vercel.json (and deploy.py's routes) rewrite to this one.
-// TikTok and Pinterest refuse redirect URLs with ?params, so they get clean paths (rewrites in vercel.json).
-const redirectUri = (req, p) => p === "tiktok" || p === "pinterest" ? `${site(req)}/api/${p}-callback` : `${site(req)}/api/social?action=callback&p=${p}`;
+// TikTok, Pinterest and Instagram want redirect URLs without ?params, so they get clean paths (rewrites in vercel.json).
+const CLEAN_CALLBACK = new Set(["tiktok", "pinterest", "instagram"]);
+const redirectUri = (req, p) => CLEAN_CALLBACK.has(p) ? `${site(req)}/api/${p}-callback` : `${site(req)}/api/social?action=callback&p=${p}`;
 
 /* ── the platforms ───────────────────────────────────────────────────────── */
 // login: how to send someone to the platform's login. token: code → tokens.

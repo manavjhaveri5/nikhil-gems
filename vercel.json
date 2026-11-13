@@ -35,6 +35,10 @@
       "destination": "/api/social?action=callback&p=pinterest"
     },
     {
+      "source": "/api/instagram-callback",
+      "destination": "/api/social?action=callback&p=instagram"
+    },
+    {
       "source": "/api/openai",
       "destination": "/api/claude?_ai=openai"
     },
