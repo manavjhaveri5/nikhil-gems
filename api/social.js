@@ -310,8 +310,11 @@ async function postThreads({ text, images = [], video }) {
 }
 
 // TikTok: a video, into the app's inbox as a draft or posted straight away.
-async function postTikTok({ text, video, mode = "draft" }) {
+async function postTikTok({ text, video, mode = "draft", tt = {} }) {
   if (!video) fail(400, "TikTok needs a video");
+  // A direct post goes only with the settings the person chose in Compose
+  // (TikTok's sharing guidelines: no privacy level picked for them).
+  if (mode === "post" && !tt.privacy_level) fail(400, "Choose who can see the TikTok video first");
   const t = await token("tiktok");
   const call = async (path, body) => {
     const r = await fetch(`https://open.tiktokapis.com${path}`, { method: "POST", headers: { Authorization: `Bearer ${t.access_token}`, "Content-Type": "application/json; charset=UTF-8" }, body: JSON.stringify(body || {}) });
@@ -326,20 +329,25 @@ async function postTikTok({ text, video, mode = "draft" }) {
   let init, privacy = "";
   if (mode === "post") {
     const info = await call("/v2/post/publish/creator_info/query/");
-    const opts = info.privacy_level_options || ["SELF_ONLY"];
-    privacy = ["PUBLIC_TO_EVERYONE", "MUTUAL_FOLLOW_FRIENDS", "FOLLOWER_OF_CREATOR", "SELF_ONLY"].find(p => opts.includes(p)) || opts[0];
-    const go = level => call("/v2/post/publish/video/init/", { post_info: { title: String(text || "").slice(0, 2200), privacy_level: level }, source_info });
-    // An app TikTok hasn't audited yet may only post privately, even though
-    // creator_info lists public as an option: fall back to private then.
+    const opts = info.privacy_level_options || [];
+    if (!opts.includes(tt.privacy_level)) fail(400, "That audience isn't available for this TikTok account any more — choose again");
+    if (tt.brand_content_toggle && tt.privacy_level === "SELF_ONLY") fail(400, "Branded content can't be private on TikTok");
+    privacy = tt.privacy_level;
+    const post_info = { title: String(text || "").slice(0, 2200), privacy_level: privacy,
+      disable_comment: !!tt.disable_comment || !!info.comment_disabled, disable_duet: !!tt.disable_duet || !!info.duet_disabled, disable_stitch: !!tt.disable_stitch || !!info.stitch_disabled,
+      brand_content_toggle: !!tt.brand_content_toggle, brand_organic_toggle: !!tt.brand_organic_toggle };
+    const go = level => call("/v2/post/publish/video/init/", { post_info: { ...post_info, privacy_level: level }, source_info });
+    // An app TikTok hasn't audited yet may only post privately: fall back to
+    // private then, and say so in the result.
     try { init = await go(privacy); }
-    catch (e) { if (privacy === "SELF_ONLY" || !/unaudited|private/i.test(e.message)) throw e; privacy = "SELF_ONLY"; init = await go(privacy); }
+    catch (e) { if (privacy === "SELF_ONLY" || tt.brand_content_toggle || !/unaudited|private/i.test(e.message)) throw e; privacy = "SELF_ONLY"; init = await go(privacy); }
   } else init = await call("/v2/post/publish/inbox/video/init/", { source_info });
   for (let i = 0; i < count; i++) {
     const start = i * chunk, end = i === count - 1 ? size : start + chunk;
     const r = await fetch(init.upload_url, { method: "PUT", headers: { "Content-Type": "video/mp4", "Content-Length": String(end - start), "Content-Range": `bytes ${start}-${end - 1}/${size}` }, body: buf.subarray(start, end) });
     if (!r.ok && r.status !== 206) fail(502, `TikTok upload failed (${r.status})`);
   }
-  return { url: "", note: mode === "post" ? (privacy === "SELF_ONLY" ? "posted privately — TikTok hasn't reviewed the app yet" : "posted") : "in your TikTok inbox — finish and post it in the app", publish_id: init.publish_id };
+  return { url: "", note: mode === "post" ? (privacy !== tt.privacy_level ? "posted privately — TikTok hasn't reviewed the app yet" : "sent — TikTok takes a few minutes to process it") : "in your TikTok inbox — finish and post it in the app", publish_id: init.publish_id };
 }
 
 // YouTube: a vertical video under 3 minutes is a Short; #Shorts in the title helps it along.

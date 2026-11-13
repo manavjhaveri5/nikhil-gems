@@ -21,6 +21,7 @@ import { C, FI, mob } from "./lmTheme.js";
 import { loadK } from "./utils.js";
 import { fetchWithRetry } from "./aiClient.js";
 import { draftAnswer } from "./redditAnswer.js";
+import TikTokPostSettings from "./SocialTikTokPost.jsx";
 import { VOICE } from "./StoreSocial.jsx";
 import { INSTAGRAM_VOICE, instagramShape, HASHTAG_ENDING } from "../lib/instagramVoice.js";
 const SocialStories = lazy(() => import("./SocialStories.jsx"));
@@ -52,7 +53,7 @@ const SETUP = {
 };
 const LIMITS = {
   instagram: "", threads: "",
-  tiktok: "Until TikTok reviews the app, \"Post now\" posts privately — drafts work fully (you post from the TikTok app).",
+  tiktok: "Until TikTok reviews the app, \"Post now\" posts privately — drafts work fully (you post from the TikTok app). Autopilot and Cross-post only ever send TikTok drafts.",
   youtube: "Until Google verifies the app, uploads stay private — publish them from YouTube Studio.",
   pinterest: "Trial access posts only to a test board; Standard access (a short form) puts pins live.",
   x: "Free plan: about 500 posts a month.",
@@ -92,6 +93,7 @@ function Compose({ st, showToast }) {
   const [board, setBoard] = useState("");
   const [boards, setBoards] = useState([]);
   const [tiktokMode, setTiktokMode] = useState("draft");
+  const [tt, setTt] = useState({ ready: false, settings: {} });   // TikTok direct-post settings (SocialTikTokPost.jsx)
   const [when, setWhen] = useState("");   // a time to post later, from Autopilot's queue
   useEffect(() => { loadK("ng-listings-v1").then(ls => setListings((Array.isArray(ls) ? ls : []).filter(l => (l.images || []).some(u => typeof u === "string")))).catch(() => setListings([])); }, []);
   useEffect(() => { if (st?.pinterest?.connected) api("pinterest_boards").then(d => { setBoards(d.boards); setBoard(b => b || d.boards[0]?.id || ""); }).catch(() => {}); }, [st?.pinterest?.connected]);
@@ -134,7 +136,10 @@ ${instagramShape(HASHTAG_ENDING)}`, 1800, INSTAGRAM_VOICE, "journal"));
     text: txt[k] || "", title: k === "youtube" ? txt.youtube_title : k === "pinterest" ? txt.pinterest_title : pick.title,
     images: imgs, video: ["tiktok", "youtube"].includes(k) || (["instagram", "threads"].includes(k) && video) ? video : "",
     link, board, mode: k === "tiktok" ? tiktokMode : "", source: `listing:${pick.id}`,
+    ...(k === "tiktok" && tiktokMode === "post" ? { tt: tt.settings } : {}),
   });
+  // A TikTok direct post can't go until its settings are chosen.
+  const ttBlocked = !!on.tiktok && !!st?.tiktok?.connected && tiktokMode === "post" && !!video && !tt.ready;
   const schedule = async () => {
     const list = PLATFORMS.filter(p => on[p.k] && st?.[p.k]?.connected);
     if (!list.length || !when) return;
@@ -222,6 +227,7 @@ ${instagramShape(HASHTAG_ENDING)}`, 1800, INSTAGRAM_VOICE, "journal"));
                 )}
                 {txt[p.k] && <button onClick={() => navigator.clipboard.writeText(txt[p.k]).then(() => showToast("Copied"))} style={{ ...btn(), padding: "4px 10px", fontSize: 12 }}>Copy</button>}
               </div>
+              {p.k === "tiktok" && s.connected && tiktokMode === "post" && on.tiktok && !needsVideo && <TikTokPostSettings video={video} onChange={setTt} />}
               {(p.k === "youtube" || p.k === "pinterest") && (txt[`${p.k}_title`] != null) && (
                 <input value={txt[`${p.k}_title`] || ""} onChange={e => setTxt(t => ({ ...t, [`${p.k}_title`]: e.target.value }))} placeholder="Title" style={FI({ marginBottom: 6, fontWeight: 600 })} />
               )}
@@ -232,13 +238,14 @@ ${instagramShape(HASHTAG_ENDING)}`, 1800, INSTAGRAM_VOICE, "journal"));
             </div>
           );
         })}
-        <button disabled={!!busy || !Object.keys(txt).length || !PLATFORMS.some(p => on[p.k])} onClick={publish}
+        {ttBlocked && <div style={{ fontSize: 12.5, color: C.amber, marginTop: 8 }}>Choose who can see the TikTok video (and finish its settings) first.</div>}
+        <button disabled={!!busy || ttBlocked || !Object.keys(txt).length || !PLATFORMS.some(p => on[p.k])} onClick={publish}
           style={{ ...btn(C.ink, "#FAF0DC"), width: "100%", padding: "12px", fontSize: 15, marginTop: 8, opacity: busy || !Object.keys(txt).length ? .5 : 1 }}>
           {busy === "publish" ? "Publishing…" : `Publish now to ${PLATFORMS.filter(p => on[p.k] && st?.[p.k]?.connected).length || "…"} platform${PLATFORMS.filter(p => on[p.k]).length === 1 ? "" : "s"}`}</button>
         <div style={{ display: "flex", gap: 8, marginTop: 8, alignItems: "center" }}>
           <span style={{ fontSize: 12.5, color: C.inkMid }}>or later:</span>
           <input type="datetime-local" value={when} onChange={e => setWhen(e.target.value)} style={FI({ flex: 1, padding: "7px 10px" })} />
-          <button disabled={!!busy || !when || !Object.keys(txt).length} onClick={schedule} style={{ ...btn(), opacity: !when || !Object.keys(txt).length ? .5 : 1 }}>{busy === "schedule" ? "…" : "Schedule"}</button>
+          <button disabled={!!busy || ttBlocked || !when || !Object.keys(txt).length} onClick={schedule} style={{ ...btn(), opacity: !when || !Object.keys(txt).length ? .5 : 1 }}>{busy === "schedule" ? "…" : "Schedule"}</button>
         </div>
       </div>
     </div>
