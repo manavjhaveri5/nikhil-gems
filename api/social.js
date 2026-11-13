@@ -319,7 +319,7 @@ async function postTikTok({ text, video, mode = "draft", tt = {} }) {
   const call = async (path, body) => {
     const r = await fetch(`https://open.tiktokapis.com${path}`, { method: "POST", headers: { Authorization: `Bearer ${t.access_token}`, "Content-Type": "application/json; charset=UTF-8" }, body: JSON.stringify(body || {}) });
     const d = await json(r);
-    if (!r.ok || (d.error?.code && d.error.code !== "ok")) fail(502, `TikTok: ${d.error?.message || d.error?.code || r.status}`);
+    if (!r.ok || (d.error?.code && d.error.code !== "ok")) fail(502, `TikTok: ${d.error?.message || r.status}${d.error?.code ? ` (${d.error.code})` : ""}`);
     return d.data || {};
   };
   const { buf } = await download(video);
