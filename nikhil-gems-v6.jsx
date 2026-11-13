@@ -13273,6 +13273,10 @@ Extract all line items. Currency from invoice (USD/JPY/EUR/INR). If buyer=consig
     else if(invSortBy==="buyer"){const bA=buyers.find(x=>x.id===a.buyerId)?.name||a.buyerName||a.buyer||"";const bB=buyers.find(x=>x.id===b.buyerId)?.name||b.buyerName||b.buyer||"";cmp=bA.localeCompare(bB);}
     return invSortDir==="asc"?cmp:-cmp;
   });
+  // A tick only counts while its invoice is on screen: changing a filter (Commercial, a month, a buyer…)
+  // unticks the invoices it hides, so Print/Download/CSV never include rows you can't see.
+  const visibleInvKey=filteredInvoices.map(i=>i.id).join(",");
+  useEffect(()=>{const vis=new Set(filteredInvoices.map(i=>i.id));setSelectedInvIds(s=>{const n=new Set([...s].filter(id=>vis.has(id)));return n.size===s.size?s:n;});},[visibleInvKey]);
 
   const handleUpload=async(file)=>{
     setExtracting(true);
