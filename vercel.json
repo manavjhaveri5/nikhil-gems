@@ -27,6 +27,10 @@
   },
   "rewrites": [
     {
+      "source": "/api/tiktok-callback",
+      "destination": "/api/social?action=callback&p=tiktok"
+    },
+    {
       "source": "/api/openai",
       "destination": "/api/claude?_ai=openai"
     },

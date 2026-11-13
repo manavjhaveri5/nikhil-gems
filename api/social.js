@@ -72,7 +72,9 @@ async function addLog(entry) {
 }
 
 const site = req => `https://${req.headers["x-forwarded-host"] || req.headers.host}`;
-const redirectUri = (req, p) => `${site(req)}/api/social?action=callback&p=${p}`;
+// TikTok refuses a redirect URI with a query string, so it comes back on a
+// plain path that vercel.json (and deploy.py's routes) rewrite to this one.
+const redirectUri = (req, p) => p === "tiktok" ? `${site(req)}/api/tiktok-callback` : `${site(req)}/api/social?action=callback&p=${p}`;
 
 /* ── the platforms ───────────────────────────────────────────────────────── */
 // login: how to send someone to the platform's login. token: code → tokens.
@@ -710,8 +712,9 @@ async function runAutopilot() {
 export default async function handler(req, res) {
   const u = new URL(req.url, "http://x");
   const body = typeof req.body === "string" ? (() => { try { return JSON.parse(req.body); } catch { return {}; } })() : req.body || {};
-  const action = u.searchParams.get("action") || body.action;
-  const p = u.searchParams.get("p") || body.p;
+  // req.query also carries what a rewrite added (/api/tiktok-callback → action, p).
+  const action = u.searchParams.get("action") || req.query?.action || body.action;
+  const p = u.searchParams.get("p") || req.query?.p || body.p;
   try {
     /* Back from a platform's login: no ERP session on this request, so the
        one-time state is what proves it's ours. */
