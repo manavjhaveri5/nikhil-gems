@@ -830,6 +830,14 @@ export default async function handler(req, res) {
 
     if (action === "log") return res.json({ log: await readLog() });
 
+    // Which YouTube channel the connected Google account posts to (none = the account has no channel).
+    if (action === "youtube_channel") {
+      const t = await token("youtube");
+      const d = await json(await fetch("https://www.googleapis.com/youtube/v3/channels?part=snippet,statistics&mine=true", { headers: { Authorization: `Bearer ${t.access_token}` } }));
+      const c = d.items?.[0];
+      if (c && !t.name) await setSecret("tok_youtube", { ...t, name: c.snippet?.title || "" });
+      return res.json({ channel: c ? { id: c.id, title: c.snippet?.title, url: c.snippet?.customUrl ? `https://youtube.com/${c.snippet.customUrl}` : `https://youtube.com/channel/${c.id}`, subscribers: c.statistics?.subscriberCount, videos: c.statistics?.videoCount } : null, error: d.error?.message || "" });
+    }
     if (action === "tiktok_stats") return res.json(await tiktokStats(u.searchParams.get("cursor") || body.cursor));
     if (action === "tiktok_publish_status") return res.json(await tiktokPublishStatus(String(body.publish_id || u.searchParams.get("id") || "")));
     if (action === "tiktok_creator") {
