@@ -1302,7 +1302,11 @@ function ImagePicker({ material, shape, selectedUrls, onChange, video, onVideoCh
       const url = await uploadToStorage(`listing-videos/${uid()}.${ext}`, file);
       onVideoChange(url);
       if (rest.length) setEditVideo({ urls: [url, ...rest] });
-    } catch (e) { setVidErr(e.message || String(e)); }
+    } catch (e) {
+      // A deploy since this tab opened removes the old video-tool file; say so plainly (no auto-reload: it would lose unsaved edits).
+      const stale = /Failed to fetch dynamically imported module|Importing a module script failed|dynamically imported/i.test(String(e?.message || e));
+      setVidErr(stale ? "The ERP was updated while this was open. Save your changes, then press Update now (or reload) and add the video again." : (e.message || String(e)));
+    }
     setVidUploading(false); setVidStep("");
   };
 
