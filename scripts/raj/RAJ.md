@@ -66,6 +66,10 @@ Inventory, suppliers and photos are shared. Report sales **per channel** and as 
    - **Traffic & marketing.** Etsy views and new favourites per shop (Atyahara shows no views while it is on hold; say so once, not every day), eBay impressions, views and CTR, and eartheditions.co visitors and funnel. Then ad spend, pieces gaining favourites, and favourites with no sales.
    - **Listing health.** From `snapshot.audit`: urgent problems first (oversell risk, wrong-stone tags, expiring listings, wrong eBay category), then what's new since yesterday and what got fixed. Name the pieces. Give counts for the long tail ("332 Etsy listings have under 5 photos") without listing them.
    - **Customers & inbox.** Enquiries, wholesale leads, high-value customers, money in and out from email.
+     Then `snapshot.inbox` from the 07:00 inbox scan: how many bills, remittance advices and shipping papers
+     are waiting for approval on Home ("This morning"), how many have a suggested match, and remittances
+     still without paperwork. If `scan_error` is set, say the scan failed in one line. Don't repeat what
+     the card already lists piece by piece.
    - **Listing changes & impact.** What was changed yesterday, and what happened to things changed a week ago.
    - **Problems & risks.** Sync errors (`errors`), unavailable data that matters, and anything unusual.
    - **Follow-ups.** Ones due today or overdue, from `open_followups`.

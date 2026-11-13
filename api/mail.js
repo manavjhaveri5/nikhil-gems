@@ -1,4 +1,5 @@
-import { requireUser, adminClient } from "../lib/auth.js";
+import { requireUser, adminClient, cronKeyOk } from "../lib/auth.js";
+import { runInboxScan, SCAN_KEY } from "../lib/inbox-scan.js";
 import { tradeApproved, checkoutFollowup, orderShipped } from "../lib/mailTemplates.js";
 
 const STORE = "https://eartheditions.co";
@@ -10,6 +11,8 @@ const STORE = "https://eartheditions.co";
    caller falls back (the Omnisend automation, or a draft in the mail app). */
 export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ error: "POST only" });
+  // The 07:00 IST inbox scan comes from pg_cron with Raj's key; Sir can also run it from Home.
+  if (req.body?.action === "gmail_scan" && await cronKeyOk(req, "raj")) return gmail(req, res);
   if (!(await requireUser(req, res))) return;
   if (String(req.body?.action || "").startsWith("gmail_")) return gmail(req, res);
   if (req.body?.template === "order_shipped") return shipStoreOrder(req, res);
@@ -72,10 +75,15 @@ export default async function handler(req, res) {
    The shared secret stays here on the server. Read-only: search and fetch. */
 async function gmail(req, res) {
   const url = process.env.GMAIL_BRIDGE_URL, secret = process.env.GMAIL_BRIDGE_SECRET;
-  if (!url || !secret) return res.status(503).json({ error: "Gmail isn't connected yet (GMAIL_BRIDGE_URL / GMAIL_BRIDGE_SECRET)", notConfigured: true });
   const b = req.body;
+  if (!url || !secret) {
+    const error = "Gmail isn't connected yet (GMAIL_BRIDGE_URL / GMAIL_BRIDGE_SECRET)";
+    // So Home can say why there's no morning scan rather than showing nothing.
+    if (b.action === "gmail_scan") await adminClient().rpc("app_rows_upsert", { p_key: SCAN_KEY, p_item: { id: "last", at: new Date().toISOString(), ok: false, notConfigured: true, error }, p_prepend: false });
+    return res.status(503).json({ error, notConfigured: true });
+  }
   const call = async body => {
-    const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...body, secret }), redirect: "follow" });
+    const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...body, secret }), redirect: "follow", signal: AbortSignal.timeout(60_000) });
     const d = await r.json().catch(() => null);
     if (!r.ok || !d) throw new Error(`Gmail bridge ${r.status}`);
     if (d.error) throw new Error(d.error);
@@ -96,6 +104,10 @@ async function gmail(req, res) {
       const { error } = await db.upload(path, Buffer.from(a.b64, "base64"), { contentType: a.type || "application/octet-stream", upsert: true });
       if (error) throw new Error(error.message);
       return res.json({ url: db.getPublicUrl(path).data.publicUrl, name: a.name, type: a.type || "", size: a.size || 0 });
+    }
+    if (b.action === "gmail_scan") {
+      // Purchase bills with our GSTIN, remittance advices and shipping papers → Home's "This morning" card.
+      return res.json(await runInboxScan({ bridge: call, days: +b.days || 3, trigger: b.trigger === "manual" ? "manual" : "cron" }));
     }
     return res.status(400).json({ error: "Unknown Gmail action" });
   } catch (e) {

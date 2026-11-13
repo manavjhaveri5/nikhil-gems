@@ -44,6 +44,7 @@ const GirtonApp         = React.lazy(() => import("./src/GirtonApp.jsx"));
 const SoniyaApp         = React.lazy(() => import("./src/SoniyaApp.jsx"));
 const AlexApp           = React.lazy(() => import("./src/AlexApp.jsx"));
 const RajCard           = React.lazy(() => import("./src/RajCard.jsx"));
+const InboxCard         = React.lazy(() => import("./src/InboxCard.jsx"));
 const SocialApp         = React.lazy(() => import("./src/SocialApp.jsx"));
 const LabelsApp         = React.lazy(() => import("./src/LabelsApp.jsx"));
 const ShowLabelImport=React.lazy(()=>import("./src/LabelsApp.jsx").then(m=>({default:m.ShowLabelImport})));
@@ -1382,6 +1383,8 @@ function Welcome({onEnter,onSignOut,allowedMods,todoKey="ng-todos-v1",isAdmin=tr
 
           {/* Etsy: the month against the $10k goal, what's left to ship and file, ad spend.
               Everyone who works the shop sees it — Manav, and staff with Etsy or Orders. */}
+          {/* This morning: bills, remittance advices and shipping papers the 07:00 Gmail scan found, to approve. Admin only. */}
+          {isAdmin&&<React.Suspense fallback={null}><InboxCard/></React.Suspense>}
           {/* Raj: today's briefing headline and the follow-ups due. Admin only. */}
           {isAdmin&&<React.Suspense fallback={null}><RajCard onEnter={onEnter}/></React.Suspense>}
 
