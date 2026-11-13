@@ -1675,7 +1675,8 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
 // The first photo (lowest message_id) leads: it waits for its siblings to file
 // themselves, then writes the single listing they all belong to.
 const ALBUM_SETTLE_MS = 5000;
-const ALBUM_LEADER_GRACE_MS = 2500;
+const ALBUM_RESOLVE_MS = 45000;
+const ALBUM_FOLLOWER_WAIT_MS = 120000;
 const ALBUM_TTL_MS = 2 * 60 * 60 * 1000;
 
 // INR per USD for the second price when a caption only gives one currency. The
@@ -2309,7 +2310,15 @@ async function handleMediaListing({ chatId, message, caption, file, ctx }) {
      that would fail the same way. Anything else gets one quiet retry. */
   /* iPhone originals sent as a File can be HEIC, which browsers, Etsy and eBay
      can't show. Say so rather than save a photo nothing can display. */
+  /* A file that can't be pulled still answers for its place in the album, so
+     the leader stops waiting on it — and keeps its caption, which is often the
+     only one (the video goes first in an album and carries the line). */
+  const markFailed = () => groupId ? upsertItemK(ctx.albums, {
+    id: rowId, groupId, messageId, chatId: String(chatId),
+    caption: caption || "", kind: file.kind, ts: Date.now(), failed: true,
+  }, { prepend: false }).catch(() => {}) : null;
   if (file.kind === "photo" && /hei[cf]/i.test(`${file.mime} ${file.name}`)) {
+    await markFailed();
     await send(chatId, `⚠️ That photo is HEIC, which Etsy, eBay and browsers can't show. On the iPhone set Settings → Camera → Formats → Most Compatible, then send it as a File again.${groupId ? " The rest of the album is still saved." : ""}`, ctx.token);
     return;
   }
@@ -2319,6 +2328,7 @@ async function handleMediaListing({ chatId, message, caption, file, ctx }) {
     : await uploadTelegramMedia(file, `listing-${file.uniqueId}`, ctx)
       || await sleep(1500).then(() => uploadTelegramMedia(file, `listing-${file.uniqueId}`, ctx));
   if (!uploaded) {
+    await markFailed();
     const what = file.kind === "video" ? "video" : "photo";
     const rest = groupId ? " The rest of the album is still saved." : "";
     await send(chatId, tooBig
@@ -2339,23 +2349,37 @@ async function handleMediaListing({ chatId, message, caption, file, ctx }) {
     url: media.url, name: media.name, kind: media.kind, compressed: media.compressed, caption: caption || "", ts: Date.now(),
   }, { prepend: false });
 
-  // Let the rest of the album land, then the lowest message_id writes the listing.
+  /* Let the rest of the album land, then wait until every claimed file has
+     either uploaded or failed. Only then is "lowest message_id with a file"
+     the same answer for every sibling — picking a leader while a slow upload
+     was still in flight is how one album became two listings (2 + 4 photos). */
   await sleep(ALBUM_SETTLE_MS);
-  const rows = await albumRows(groupId, ctx);
+  let rows = await albumRows(groupId, ctx);
+  const resolveBy = Date.now() + ALBUM_RESOLVE_MS;
+  while (!rows.some(r => r.done) && rows.some(r => !r.done && !r.url && !r.failed) && Date.now() < resolveBy) {
+    await sleep(1000);
+    rows = await albumRows(groupId, ctx);
+  }
   const done = rows.find(r => r.done);
   if (done) { await appendLateMedia(done.listing_id, media, ctx); return; }
 
   const items = rows.filter(r => !r.done && r.url).sort((a, b) => a.messageId - b.messageId);
   if (String(items[0]?.messageId) !== String(messageId)) {
-    // A sibling is writing this listing — wait for it, then add this file if it missed us.
-    await sleep(ALBUM_LEADER_GRACE_MS);
-    const marker = (await albumRows(groupId, ctx)).find(r => r.done);
+    // A sibling is writing this listing (AI copy takes a while) — wait for its
+    // marker, then add this file if the leader's snapshot missed it.
+    const waitBy = Date.now() + ALBUM_FOLLOWER_WAIT_MS;
+    let marker = null;
+    while (!marker && Date.now() < waitBy) {
+      await sleep(2000);
+      marker = (await albumRows(groupId, ctx)).find(r => r.done);
+    }
     if (marker) await appendLateMedia(marker.listing_id, media, ctx);
     return;
   }
 
   tg("sendChatAction", { chat_id: chatId, action: "typing" }, ctx.token).catch(() => {});
-  const albumCaption = items.map(p => p.caption).find(c => c && c.trim()) || caption;
+  // The caption can sit on a file that failed (an oversized video), so look at every row.
+  const albumCaption = [...items, ...rows.filter(r => !r.url)].map(p => p.caption).find(c => c && c.trim()) || caption;
   const listing = await finishMediaListing({
     chatId, caption: albumCaption, ctx,
     media: items.map(p => ({ url: p.url, name: p.name, kind: p.kind || "photo", compressed: !!p.compressed })),
