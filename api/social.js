@@ -328,7 +328,11 @@ async function postTikTok({ text, video, mode = "draft" }) {
     const info = await call("/v2/post/publish/creator_info/query/");
     const opts = info.privacy_level_options || ["SELF_ONLY"];
     privacy = ["PUBLIC_TO_EVERYONE", "MUTUAL_FOLLOW_FRIENDS", "FOLLOWER_OF_CREATOR", "SELF_ONLY"].find(p => opts.includes(p)) || opts[0];
-    init = await call("/v2/post/publish/video/init/", { post_info: { title: String(text || "").slice(0, 2200), privacy_level: privacy }, source_info });
+    const go = level => call("/v2/post/publish/video/init/", { post_info: { title: String(text || "").slice(0, 2200), privacy_level: level }, source_info });
+    // An app TikTok hasn't audited yet may only post privately, even though
+    // creator_info lists public as an option: fall back to private then.
+    try { init = await go(privacy); }
+    catch (e) { if (privacy === "SELF_ONLY" || !/unaudited|private/i.test(e.message)) throw e; privacy = "SELF_ONLY"; init = await go(privacy); }
   } else init = await call("/v2/post/publish/inbox/video/init/", { source_info });
   for (let i = 0; i < count; i++) {
     const start = i * chunk, end = i === count - 1 ? size : start + chunk;
