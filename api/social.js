@@ -154,7 +154,7 @@ const P = {
   },
   pinterest: {
     keys: ["PINTEREST_APP_ID", "PINTEREST_APP_SECRET"],
-    login: (req, state) => `https://www.pinterest.com/oauth/?client_id=${env("PINTEREST_APP_ID")}&redirect_uri=${encodeURIComponent(redirectUri(req, "pinterest"))}&response_type=code&scope=${encodeURIComponent("boards:read,pins:read,pins:write,user_accounts:read")}&state=${state}`,
+    login: (req, state) => `https://www.pinterest.com/oauth/?client_id=${env("PINTEREST_APP_ID")}&redirect_uri=${encodeURIComponent(redirectUri(req, "pinterest"))}&response_type=code&scope=${encodeURIComponent("boards:read,boards:write,pins:read,pins:write,user_accounts:read")}&state=${state}`,
     async token(req, code) {
       const d = await json(await fetch("https://api.pinterest.com/v5/oauth/token", { method: "POST", headers: { Authorization: basic(env("PINTEREST_APP_ID"), env("PINTEREST_APP_SECRET")), "Content-Type": "application/x-www-form-urlencoded" },
         body: form({ grant_type: "authorization_code", code, redirect_uri: redirectUri(req, "pinterest") }) }));
