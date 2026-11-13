@@ -1,6 +1,7 @@
-// Supplier bills: every vendor/supplier bill in Purchases with the bill scan attached to it,
-// as a list, cards or a thumbnail grid, and a zip download of whatever is ticked.
-// Only bills — payment screenshots and expense photos are left out (Sir, 13 Nov 2026).
+// Bill files: supplier bills from Purchases plus expense invoices (SAR, courier, freight,
+// tickets…) attached to Finance entries — with the files themselves, as a list, cards or
+// a thumbnail grid, and a zip download. Payment screenshots, Telegram photos and Gmail
+// alert links are left out unless "Include photos" is on (Sir, 13 Nov 2026).
 // Read-only — nothing here changes a record.
 import { useState, useEffect, useMemo } from "react";
 import { loadK, fmtDate, mob } from "./utils.js";
@@ -13,9 +14,9 @@ const money = (v, cur) => {
   return s + n.toLocaleString(cur && cur !== "INR" ? "en-US" : "en-IN", { maximumFractionDigits: 2 });
 };
 const TYPE_META = {
-  Bill:    { label: "Vendor bill", color: C.red,    bg: C.redBg },
+  Bill:    { label: "Supplier bill", color: C.red,    bg: C.redBg },
   Payment: { label: "Payment",     color: C.green,  bg: C.greenBg },
-  Expense: { label: "Expense",     color: C.purple, bg: C.purpleBg },
+  Expense: { label: "Expense invoice",     color: C.purple, bg: C.purpleBg },
 };
 const VIEW_KEY = "ng-bills-files-view";
 
@@ -34,6 +35,8 @@ const extOf = f => {
 };
 const isLink = f => f.type === "email" || (f.ext || "") === "email" || /^https:\/\/mail\.google\.com\//.test(f.url || "");
 const isImage = f => !isLink(f) && ["jpg", "png", "webp", "gif", "heic"].includes(extOf(f));
+// An invoice is a PDF, or a file whose name says so. Photos and screenshots are not.
+const isInvoiceFile = f => !isLink(f) && (extOf(f) === "pdf" || /inv|bill|tax|gst|receipt|challan/i.test(f.name || ""));
 const dlCount = r => r.files.filter(f => !isLink(f)).length;
 
 // One file list per record, whichever of the old/new shapes it uses.
@@ -53,8 +56,10 @@ const filesOf = (...srcs) => {
 
 const safe = s => String(s || "").replace(/[\\/:*?"<>|#%&{}$!'@+`=]/g, "-").replace(/\s+/g, " ").trim().slice(0, 50);
 
-function buildRows(purchases) {
+function buildRows(purchases, expenses, txns, withPhotos) {
   const rows = [];
+  const txnById = new Map((txns || []).map(t => [t.id, t]));
+  const keep = list => list.filter(f => !isLink(f) && (withPhotos || isInvoiceFile(f)));
   for (const p of purchases || []) {
     if (p.type !== "bill") continue;
     const files = filesOf(
@@ -63,6 +68,18 @@ function buildRows(purchases) {
     );
     const due = (+p.totalAmount || 0) - (+p.paidAmount || 0);
     rows.push({ id: "b-" + p.id, type: "Bill", date: p.billDate || p.date || (p.createdAt || "").slice(0, 10), party: p.supplier || "", ref: p.billNumber || "", what: (p.items || []).map(i => i.desc || i.purchaseDesc).filter(Boolean).slice(0, 2).join(", "), amount: +p.totalAmount || 0, currency: p.currency || "INR", status: due > 0.5 ? "Unpaid " + money(due, p.currency) : "Paid", files });
+  }
+  const booked = new Set();
+  for (const e of expenses || []) {
+    const t = e.ledgerTxnId ? txnById.get(e.ledgerTxnId) : null;
+    if (t) booked.add(t.id);
+    const files = keep(filesOf(e.receipt ? { url: e.receipt, name: e.receiptName } : null, e.attachments, t?.attachments, t?.attachmentUrl ? { url: t.attachmentUrl, name: t.attachmentName } : null));
+    if (files.length) rows.push({ id: "e-" + e.id, type: "Expense", date: e.date || "", party: e.party || t?.payee || "", ref: e.cat || "", what: e.notes || e.description || "", amount: +e.amount || 0, currency: e.currency || "INR", status: "Paid", files });
+  }
+  for (const t of txns || []) {
+    if (booked.has(t.id) || t.type !== "debit" || ["vendor_bill", "vendor_po", "cc_payment", "customer_receipt"].includes(t.classifiedAs)) continue;
+    const files = keep(filesOf(t.attachments, t.attachmentUrl ? { url: t.attachmentUrl, name: t.attachmentName } : null));
+    if (files.length) rows.push({ id: "t-" + t.id, type: "Expense", date: t.date || "", party: t.payee || t.rawPayee || "", ref: t.category || "", what: t.notes || "", amount: +t.amount || 0, currency: t.currency || "INR", status: t.classifiedAs ? "Paid" : "Not booked yet", files });
   }
   return rows;
 }
@@ -76,7 +93,7 @@ async function zipAndDownload(rows, zipName, onProgress) {
   const links = [];
   for (const r of rows) r.files.forEach((f, i) => {
     if (isLink(f)) { links.push([r.date, TYPE_META[r.type].label, r.party, r.ref, f.url]); return; }
-    const folder = r.type === "Bill" ? "Vendor bills" : r.type === "Payment" ? "Payments" : "Expenses";
+    const folder = r.type === "Bill" ? "Supplier bills" : r.type === "Payment" ? "Payments" : "Expense invoices";
     let base = [r.date || "no-date", safe(r.party) || "unknown", safe(r.ref)].filter(Boolean).join("_") + (r.files.length > 1 ? `_${i + 1}` : "");
     let name = `${folder}/${base}.${extOf(f)}`, n = 2;
     while (used.has(name)) name = `${folder}/${base}_${n++}.${extOf(f)}`;
@@ -128,10 +145,19 @@ export default function BillsReceipts({ company, purchases, onOpenBill }) {
   const [msg, setMsg] = useState("");
   const [preview, setPreview] = useState(null);
 
-  useEffect(() => { setSel(new Set()); }, [company]);
+  const [expenses, setExpenses] = useState(null);
+  const [txns, setTxns] = useState(null);
+  const [withPhotos, setWithPhotos] = useState(false);
+  useEffect(() => {
+    setExpenses(null); setTxns(null); setSel(new Set());
+    const co = company === "at" ? "at" : "ng";
+    Promise.all([loadK(`${co}-expenses-v1`), loadK(`${co}-fin-txns-v1`)])
+      .then(([e, t]) => { setExpenses(Array.isArray(e) ? e : []); setTxns(Array.isArray(t) ? t : []); })
+      .catch(() => { setExpenses([]); setTxns([]); });
+  }, [company]);
   useEffect(() => { try { localStorage.setItem(VIEW_KEY, view); } catch {} }, [view]);
 
-  const all = useMemo(() => buildRows(purchases), [purchases]);
+  const all = useMemo(() => expenses && txns ? buildRows(purchases, expenses, txns, withPhotos) : [], [purchases, expenses, txns, withPhotos]);
   const rows = useMemo(() => {
     const s = q.trim().toLowerCase();
     return all.filter(r =>
@@ -167,6 +193,8 @@ export default function BillsReceipts({ company, purchases, onOpenBill }) {
     setBusy(null);
   };
 
+  if (!expenses || !txns) return <p style={{ color: C.inkFaint, textAlign: "center", paddingTop: 40, fontSize: 13 }}>Loading bills…</p>;
+
   const seg = (opts, val, set) => (
     <div style={{ display: "flex", gap: 1, background: C.card, borderRadius: 6, padding: 3, border: `1px solid ${C.border}`, flexWrap: "wrap" }}>
       {opts.map(([id, label]) => (
@@ -189,7 +217,7 @@ export default function BillsReceipts({ company, purchases, onOpenBill }) {
   return (
     <div>
       <div style={{ display: "grid", gridTemplateColumns: mob ? "repeat(2,1fr)" : "repeat(4,1fr)", gap: 10, marginBottom: 14 }}>
-        {[[counts.Bill, "Supplier bills"], [counts.Bill - counts.missing, "With the bill attached"], [counts.missing, "Bill not attached yet"], [counts.files, "Files"]].map(([v, l]) => (
+        {[[counts.Bill, "Supplier bills"], [counts.missing, "Supplier bills without a scan"], [counts.Expense, "Expense invoices"], [counts.files, "Files"]].map(([v, l]) => (
           <div key={l} style={{ ...card, borderRadius: 9, padding: "10px 14px" }}>
             <div style={{ fontSize: 9, fontWeight: 700, color: C.inkFaint, textTransform: "uppercase", letterSpacing: .5 }}>{l}</div>
             <div style={{ fontSize: 20, fontWeight: 600, color: C.ink, marginTop: 2 }}>{v}</div>
@@ -198,14 +226,16 @@ export default function BillsReceipts({ company, purchases, onOpenBill }) {
       </div>
 
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 10 }}>
+        {seg([["all", "All"], ["Bill", "Supplier bills"], ["Expense", "Expense invoices"]], type, setType)}
         {seg([["all", "Any"], ["has", "With file"], ["missing", "Missing file"]], fileF, setFileF)}
+        <label title="Also show payment screenshots and photos sent from Telegram" style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 12, color: C.inkMid, cursor: "pointer" }}><input type="checkbox" checked={withPhotos} onChange={e => setWithPhotos(e.target.checked)} style={{ accentColor: C.gold }} />Include photos</label>
         <div style={{ marginLeft: mob ? 0 : "auto" }}>{seg([["list", "☰ List"], ["cards", "▤ Cards"], ["grid", "▦ Grid"]], view, setView)}</div>
       </div>
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 12 }}>
         <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search supplier, bill no., item…" style={{ ...FI, flex: "1 1 200px", minWidth: 0, fontSize: 12, padding: "7px 10px" }} />
         <label style={{ fontSize: 11, color: C.inkMid, display: "flex", alignItems: "center", gap: 4 }}>From <input type="month" value={from} onChange={e => setFrom(e.target.value)} style={{ ...FI, width: "auto", fontSize: 12, padding: "5px 8px" }} /></label>
         <label style={{ fontSize: 11, color: C.inkMid, display: "flex", alignItems: "center", gap: 4 }}>To <input type="month" value={to} onChange={e => setTo(e.target.value)} style={{ ...FI, width: "auto", fontSize: 12, padding: "5px 8px" }} /></label>
-        {(from || to || q || fileF !== "all") && <button className="bs" style={{ fontSize: 11 }} onClick={() => { setFrom(""); setTo(""); setQ(""); setFileF("all"); }}>Clear</button>}
+        {(from || to || q || type !== "all" || fileF !== "all") && <button className="bs" style={{ fontSize: 11 }} onClick={() => { setFrom(""); setTo(""); setQ(""); setType("all"); setFileF("all"); }}>Clear</button>}
       </div>
 
       <div style={{ ...card, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", padding: "8px 12px", marginBottom: 12, position: "sticky", top: 0, zIndex: 2 }}>
@@ -225,7 +255,7 @@ export default function BillsReceipts({ company, purchases, onOpenBill }) {
       {rows.length > 0 && view === "list" && (mob ? null : (
         <div style={{ ...card, borderRadius: 9, overflow: "hidden" }}>
           <div style={{ display: "grid", gridTemplateColumns: "28px 92px 84px 1.4fr 1fr 110px 120px 80px", gap: 8, padding: "8px 12px", background: C.card, borderBottom: `1px solid ${C.border}` }}>
-            {["", "Type", "Date", "Supplier", "Bill no.", "Amount", "Status", "Files"].map(h => <div key={h} style={{ fontSize: 9, fontWeight: 700, color: C.inkFaint, textTransform: "uppercase", letterSpacing: .4 }}>{h}</div>)}
+            {["", "Type", "Date", "Supplier", "Bill no. / category", "Amount", "Status", "Files"].map(h => <div key={h} style={{ fontSize: 9, fontWeight: 700, color: C.inkFaint, textTransform: "uppercase", letterSpacing: .4 }}>{h}</div>)}
           </div>
           {rows.map(r => (
             <div key={r.id} onClick={() => openRow(r)} style={{ display: "grid", gridTemplateColumns: "28px 92px 84px 1.4fr 1fr 110px 120px 80px", gap: 8, padding: "8px 12px", borderBottom: `1px solid ${C.border}`, alignItems: "center", cursor: "pointer", fontSize: 12, background: sel.has(r.id) ? C.card : "transparent" }}>
