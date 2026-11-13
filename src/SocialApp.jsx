@@ -11,6 +11,7 @@
    Community — Reddit threads this week about stones we stock, with a reply
      drafted to post by hand, and drafts for Reddit and Mindat. Never posted
      from here: both ban automated posting.
+   Insights — TikTok followers, likes and each video's views (SocialInsights.jsx).
    Accounts — connecting each platform, with its setup steps.
    Log — what went where.
 
@@ -25,6 +26,7 @@ import { INSTAGRAM_VOICE, instagramShape, HASHTAG_ENDING } from "../lib/instagra
 const SocialStories = lazy(() => import("./SocialStories.jsx"));
 const Captions = lazy(() => import("./StoreSocial.jsx"));
 const SocialCalendar = lazy(() => import("./SocialCalendar.jsx"));
+const SocialInsights = lazy(() => import("./SocialInsights.jsx"));
 
 const SITE = "https://eartheditions.co";
 const card = { background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: "14px 16px" };
@@ -43,7 +45,7 @@ export const PLATFORMS = [
 const SETUP = {
   instagram: ["developers.facebook.com → Create app → Business → add Instagram → \"API setup with Instagram login\". Your Instagram must be a Business or Creator account; add it as a tester.", "IG_APP_ID", "IG_APP_SECRET"],
   threads: ["developers.facebook.com → Create app → use case \"Access the Threads API\". Add your Threads account as a tester.", "THREADS_APP_ID", "THREADS_APP_SECRET"],
-  tiktok: ["developers.tiktok.com → Manage apps → Connect an app → add Login Kit and Content Posting API (Direct Post on). Add your account as a target user.", "TIKTOK_CLIENT_KEY", "TIKTOK_CLIENT_SECRET"],
+  tiktok: ["developers.tiktok.com → Manage apps → Connect an app → add Login Kit, Display API (user.info.profile, user.info.stats, video.list) and Content Posting API (Direct Post on). Add your account as a target user.", "TIKTOK_CLIENT_KEY", "TIKTOK_CLIENT_SECRET"],
   youtube: ["console.cloud.google.com → new project → enable \"YouTube Data API v3\" → OAuth consent screen (External, add yourself as test user) → Credentials → OAuth client ID (Web).", "GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET"],
   pinterest: ["developers.pinterest.com → My apps → Connect app. New apps get Trial access; ask for Standard access so pins go live.", "PINTEREST_APP_ID", "PINTEREST_APP_SECRET"],
   x: ["developer.x.com → Free plan → your app → User authentication settings: OAuth 2.0, Web App, read and write.", "X_CLIENT_ID", "X_CLIENT_SECRET"],
@@ -693,7 +695,7 @@ export default function SocialApp({ onHome }) {
   const reload = useCallback(() => api("status").then(setSt).catch(e => showToast(`⚠ ${e.message}`)), [showToast]);
   useEffect(() => { reload(); }, [reload]);
   const connected = st ? PLATFORMS.filter(p => st[p.k]?.connected).length : 0;
-  const TABS = [["calendar", "📅", "Calendar"], ["compose", "✍️", "Compose"], ["stories", "📸", "Stories"], ["captions", "💬", "Captions"], ["crosspost", "🔁", "Cross-post"], ["autopilot", "🤖", "Autopilot"], ["journal", "📝", "Journal"], ["community", "👥", "Community"], ["accounts", "🔗", `Accounts${st ? ` · ${connected}/${PLATFORMS.length}` : ""}`], ["log", "🗒", "Log"]];
+  const TABS = [["calendar", "📅", "Calendar"], ["compose", "✍️", "Compose"], ["stories", "📸", "Stories"], ["captions", "💬", "Captions"], ["crosspost", "🔁", "Cross-post"], ["autopilot", "🤖", "Autopilot"], ["insights", "📊", "Insights"], ["journal", "📝", "Journal"], ["community", "👥", "Community"], ["accounts", "🔗", `Accounts${st ? ` · ${connected}/${PLATFORMS.length}` : ""}`], ["log", "🗒", "Log"]];
   return (
     <div style={{ minHeight: "100vh", background: C.bg, color: C.ink, fontFamily: "Inter, system-ui, sans-serif" }}>
       {toast && <div style={{ position: "fixed", bottom: 22, left: 16, right: 16, margin: "0 auto", maxWidth: 520, zIndex: 1300, background: C.ink, color: "#fff", padding: "11px 16px", borderRadius: 10, fontSize: 13, textAlign: "center" }}>{toast}</div>}
@@ -723,6 +725,7 @@ export default function SocialApp({ onHome }) {
         {tab === "journal" && <Journal st={st} showToast={showToast} />}
         {tab === "community" && <Community st={st} showToast={showToast} />}
         {tab === "accounts" && <Accounts st={st} reload={reload} showToast={showToast} />}
+        {tab === "insights" && <Suspense fallback={<div style={{ color: C.inkFaint, fontSize: 13 }}>Loading…</div>}><SocialInsights st={st} showToast={showToast} onAccounts={() => setTab("accounts")} /></Suspense>}
         {tab === "log" && <Log />}
       </div>
     </div>

@@ -116,7 +116,7 @@ const P = {
   },
   tiktok: {
     keys: ["TIKTOK_CLIENT_KEY", "TIKTOK_CLIENT_SECRET"],
-    login: (req, state) => `https://www.tiktok.com/v2/auth/authorize/?client_key=${env("TIKTOK_CLIENT_KEY")}&scope=${encodeURIComponent("user.info.basic,video.upload,video.publish")}&response_type=code&redirect_uri=${encodeURIComponent(redirectUri(req, "tiktok"))}&state=${state}`,
+    login: (req, state) => `https://www.tiktok.com/v2/auth/authorize/?client_key=${env("TIKTOK_CLIENT_KEY")}&scope=${encodeURIComponent(TT_SCOPES)}&response_type=code&redirect_uri=${encodeURIComponent(redirectUri(req, "tiktok"))}&state=${state}`,
     async token(req, code) {
       const d = await json(await fetch("https://open.tiktokapis.com/v2/oauth/token/", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" },
         body: form({ client_key: env("TIKTOK_CLIENT_KEY"), client_secret: env("TIKTOK_CLIENT_SECRET"), code, grant_type: "authorization_code", redirect_uri: redirectUri(req, "tiktok") }) }));
@@ -212,6 +212,33 @@ const P = {
     },
   },
 };
+// What the ERP asks TikTok for: posting, plus the profile, follower counts and
+// video list the Insights tab shows. Each must be switched on in the developer app.
+const TT_SCOPES = "user.info.basic,user.info.profile,user.info.stats,video.list,video.upload,video.publish";
+
+// TikTok insights: the account's counts and its recent videos with views, likes,
+// comments and shares. Needs the Display API scopes; says which are missing.
+async function tiktokStats(cursor) {
+  const t = await token("tiktok");
+  const H = { Authorization: `Bearer ${t.access_token}` };
+  const need = ["user.info.profile", "user.info.stats", "video.list"].filter(s => !(t.scope || "").includes(s));
+  const uf = "open_id,avatar_url,display_name,username,bio_description,profile_deep_link,is_verified,follower_count,following_count,likes_count,video_count";
+  const u = await json(await fetch(`https://open.tiktokapis.com/v2/user/info/?fields=${uf}`, { headers: H }));
+  const vf = "id,title,video_description,cover_image_url,share_url,embed_link,duration,create_time,view_count,like_count,comment_count,share_count";
+  const vr = await fetch(`https://open.tiktokapis.com/v2/video/list/?fields=${vf}`, { method: "POST", headers: { ...H, "Content-Type": "application/json" }, body: JSON.stringify({ max_count: 20, ...(cursor ? { cursor: Number(cursor) } : {}) }) });
+  const v = await json(vr);
+  const err = [u.error, v.error].filter(e => e?.code && e.code !== "ok").map(e => e.message || e.code);
+  return { user: u.data?.user || {}, videos: v.data?.videos || [], cursor: v.data?.cursor || 0, has_more: !!v.data?.has_more, missing: need, errors: [...new Set(err)] };
+}
+
+// Where a direct post stands (processing, published, failed) — TikTok works on it after the upload.
+async function tiktokPublishStatus(publish_id) {
+  const t = await token("tiktok");
+  const d = await json(await fetch("https://open.tiktokapis.com/v2/post/publish/status/fetch/", { method: "POST", headers: { Authorization: `Bearer ${t.access_token}`, "Content-Type": "application/json; charset=UTF-8" }, body: JSON.stringify({ publish_id }) }));
+  if (d.error?.code && d.error.code !== "ok") fail(502, `TikTok: ${d.error.message || d.error.code}`);
+  return d.data || {};
+}
+
 const UA = "web:earth-editions-erp:1.0 (by the shop's own account)";
 const ready = p => P[p].keys.every(k => env(k));
 
@@ -771,7 +798,7 @@ export default async function handler(req, res) {
           const old = await getSecret(k === "instagram" ? "ig_token" : "tt_token");
           if (old?.access_token) { t = { ...old, name: old.name || (old.username ? `@${old.username}` : "") }; await setSecret(`tok_${k}`, t); }
         }
-        out[k] = { ready: ready(k), connected: !!t?.access_token, name: t?.name || "", redirect: redirectUri(req, k), canPost: k !== "tiktok" || /video\.publish/.test(t?.scope || "") };
+        out[k] = { ready: ready(k), connected: !!t?.access_token, name: t?.name || "", redirect: redirectUri(req, k), canPost: k !== "tiktok" || /video\.publish/.test(t?.scope || ""), ...(k === "tiktok" && t?.access_token ? { insights: /video\.list/.test(t.scope || "") } : {}) };
       }
 
       out.journal = { ready: !!env("GITHUB_BLOG_TOKEN") };
@@ -791,6 +818,14 @@ export default async function handler(req, res) {
     if (action === "disconnect") { await setSecret(`tok_${p}`, null); return res.json({ ok: true }); }
 
     if (action === "log") return res.json({ log: await readLog() });
+
+    if (action === "tiktok_stats") return res.json(await tiktokStats(u.searchParams.get("cursor") || body.cursor));
+    if (action === "tiktok_publish_status") return res.json(await tiktokPublishStatus(String(body.publish_id || u.searchParams.get("id") || "")));
+    if (action === "tiktok_creator") {
+      const t = await token("tiktok");
+      const d = await json(await fetch("https://open.tiktokapis.com/v2/post/publish/creator_info/query/", { method: "POST", headers: { Authorization: `Bearer ${t.access_token}`, "Content-Type": "application/json; charset=UTF-8" }, body: "{}" }));
+      return res.json({ ...(d.data || {}), scope: t.scope || "", error: d.error?.code !== "ok" ? d.error?.message || d.error?.code : "" });
+    }
 
     if (action === "instagram_media") {
       const [media, log] = await Promise.all([igMedia(), readLog()]);
