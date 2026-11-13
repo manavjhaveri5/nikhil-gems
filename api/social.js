@@ -336,18 +336,17 @@ async function postTikTok({ text, video, mode = "draft", tt = {} }) {
     const post_info = { title: String(text || "").slice(0, 2200), privacy_level: privacy,
       disable_comment: !!tt.disable_comment || !!info.comment_disabled, disable_duet: !!tt.disable_duet || !!info.duet_disabled, disable_stitch: !!tt.disable_stitch || !!info.stitch_disabled,
       brand_content_toggle: !!tt.brand_content_toggle, brand_organic_toggle: !!tt.brand_organic_toggle };
-    const go = level => call("/v2/post/publish/video/init/", { post_info: { ...post_info, privacy_level: level }, source_info });
-    // An app TikTok hasn't audited yet may only post privately: fall back to
-    // private then, and say so in the result.
-    try { init = await go(privacy); }
-    catch (e) { if (privacy === "SELF_ONLY" || tt.brand_content_toggle || !/unaudited|private/i.test(e.message)) throw e; privacy = "SELF_ONLY"; init = await go(privacy); }
+    // Until TikTok reviews the app it only lets it post to a *private account*
+    // (the account itself, not just the video): say so plainly.
+    try { init = await call("/v2/post/publish/video/init/", { post_info, source_info }); }
+    catch (e) { if (/unaudited_client_can_only_post_to_private_accounts/.test(e.message)) fail(400, "TikTok hasn't reviewed this app yet, so it can only post straight to a private TikTok account. Use \"Send as draft\" (you post it from the TikTok app), or make the account private in TikTok first."); throw e; }
   } else init = await call("/v2/post/publish/inbox/video/init/", { source_info });
   for (let i = 0; i < count; i++) {
     const start = i * chunk, end = i === count - 1 ? size : start + chunk;
     const r = await fetch(init.upload_url, { method: "PUT", headers: { "Content-Type": "video/mp4", "Content-Length": String(end - start), "Content-Range": `bytes ${start}-${end - 1}/${size}` }, body: buf.subarray(start, end) });
     if (!r.ok && r.status !== 206) fail(502, `TikTok upload failed (${r.status})`);
   }
-  return { url: "", note: mode === "post" ? (privacy !== tt.privacy_level ? "posted privately — TikTok hasn't reviewed the app yet" : "sent — TikTok takes a few minutes to process it") : "in your TikTok inbox — finish and post it in the app", publish_id: init.publish_id };
+  return { url: "", note: mode === "post" ? "sent — TikTok takes a few minutes to process it" : "in your TikTok inbox — finish and post it in the app", publish_id: init.publish_id };
 }
 
 // YouTube: a vertical video under 3 minutes is a Short; #Shorts in the title helps it along.

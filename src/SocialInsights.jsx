@@ -65,7 +65,7 @@ export default function SocialInsights({ st, showToast, onAccounts }) {
           {u.bio_description && <div style={{ fontSize: 12.5, color: C.inkMid, marginTop: 2 }}>{u.bio_description}</div>}
           {creator?.privacy_level_options && <div style={{ fontSize: 11.5, color: C.inkFaint, marginTop: 3 }}>
             Direct posts can go: {creator.privacy_level_options.map(o => o.replace(/_/g, " ").toLowerCase()).join(", ")}
-            {creator.privacy_level_options.length === 1 && creator.privacy_level_options[0] === "SELF_ONLY" && " — only private until TikTok approves the app"}
+            
             {creator.max_video_post_duration_sec ? ` · up to ${Math.round(creator.max_video_post_duration_sec / 60)} min` : ""}</div>}
         </div>
         {u.profile_deep_link && <a href={u.profile_deep_link} target="_blank" rel="noreferrer" style={{ ...btn(), textDecoration: "none" }}>Open on TikTok ↗</a>}
