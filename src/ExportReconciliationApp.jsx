@@ -562,6 +562,12 @@ const NG_DOC_SLOTS = [
   { key: "inward", label: "Inward Remittance", match: /inward|\bfirc\b|remittance|inward\s*advice/i },
 ];
 const ngSlotOf = att => {
+  /* The column it was uploaded to wins. Reading the file name first sent
+     "BL 320626018566 - SB …" (a bill of lading uploaded under HAWB / HBL)
+     to Shipping Bill, because the name has "SB" in it. */
+  if (att?.slot) return att.slot;
+  const byLabel = NG_DOC_SLOTS.find(s => s.label === att?.label);
+  if (byLabel) return byLabel.key;
   const hay = `${att?.label || ""} ${att?.fileName || att?.name || ""}`;
   if (/\bbrc\b|realisation|realization/i.test(hay)) return "brc";
   if (/\binvoice\b|commercial\s*invoice/i.test(hay)) return "invoice";
@@ -1008,7 +1014,7 @@ function NgInvoiceSheet({ renderInvoicePdf }) {
     try {
       const safe = (file.name || "document").replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 90) || "document";
       const url = await uploadToStorage(`invoice-shipment-docs/ng/${inv.id}/${Date.now()}-${ngUid()}-${safe}`, file);
-      const att = { id: ngUid(), label: slot.key === "other" ? (file.name || "Document") : slot.label, url, fileName: file.name, name: file.name, type: file.type || "", size: file.size || 0, uploadedAt: new Date().toISOString() };
+      const att = { id: ngUid(), slot: slot.key, label: slot.key === "other" ? (file.name || "Document") : slot.label, url, fileName: file.name, name: file.name, type: file.type || "", size: file.size || 0, uploadedAt: new Date().toISOString() };
       let invoiceNote = "";
       let invoicePatch = {};
       if (slot.key === "invoice") {
