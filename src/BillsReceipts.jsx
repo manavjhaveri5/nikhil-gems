@@ -1,14 +1,7 @@
-// Bills & receipts: every vendor bill, vendor payment and expense of one company with
-// the files attached to it, as a list, cards or a thumbnail grid, and a zip download
-// of whatever is ticked. Read-only — nothing here changes a record.
-//
-// Where the files live:
-//   vendor bills   → purchases[].docUrl (bill-docs bucket) or docData, plus attachments[]
-//   expenses       → the Finance entry they were booked from (expenses[].ledgerTxnId →
-//                    txns[].attachments), plus the expense's own receipt if it has one
-//   vendor payment → Finance entries classified as "Bill Paid" / "Adv. PO", attachments[]
-// Finance debits that carry a file but were never booked as an expense or a vendor
-// payment are listed as expenses too, so no receipt is left out.
+// Supplier bills: every vendor/supplier bill in Purchases with the bill scan attached to it,
+// as a list, cards or a thumbnail grid, and a zip download of whatever is ticked.
+// Only bills — payment screenshots and expense photos are left out (Sir, 13 Nov 2026).
+// Read-only — nothing here changes a record.
 import { useState, useEffect, useMemo } from "react";
 import { loadK, fmtDate, mob } from "./utils.js";
 import { C, FI } from "./ui.jsx";
@@ -60,9 +53,8 @@ const filesOf = (...srcs) => {
 
 const safe = s => String(s || "").replace(/[\\/:*?"<>|#%&{}$!'@+`=]/g, "-").replace(/\s+/g, " ").trim().slice(0, 50);
 
-function buildRows(purchases, expenses, txns) {
+function buildRows(purchases) {
   const rows = [];
-  const txnById = new Map((txns || []).map(t => [t.id, t]));
   for (const p of purchases || []) {
     if (p.type !== "bill") continue;
     const files = filesOf(
@@ -71,24 +63,6 @@ function buildRows(purchases, expenses, txns) {
     );
     const due = (+p.totalAmount || 0) - (+p.paidAmount || 0);
     rows.push({ id: "b-" + p.id, type: "Bill", date: p.billDate || p.date || (p.createdAt || "").slice(0, 10), party: p.supplier || "", ref: p.billNumber || "", what: (p.items || []).map(i => i.desc || i.purchaseDesc).filter(Boolean).slice(0, 2).join(", "), amount: +p.totalAmount || 0, currency: p.currency || "INR", status: due > 0.5 ? "Unpaid " + money(due, p.currency) : "Paid", files });
-  }
-  const bookedTxn = new Set();
-  for (const e of expenses || []) {
-    const t = e.ledgerTxnId ? txnById.get(e.ledgerTxnId) : null;
-    if (t) bookedTxn.add(t.id);
-    const files = filesOf(e.receipt ? { url: e.receipt, name: e.receiptName } : null, e.attachments, t?.attachments, t?.attachmentUrl ? { url: t.attachmentUrl, name: t.attachmentName } : null);
-    rows.push({ id: "e-" + e.id, type: "Expense", date: e.date || "", party: e.party || t?.payee || "", ref: e.cat || "", what: e.notes || e.description || "", amount: +e.amount || 0, currency: e.currency || "INR", status: e.payFromAccount ? "Paid" : "", files });
-  }
-  for (const t of txns || []) {
-    if (bookedTxn.has(t.id) || t.type !== "debit") continue;
-    const files = filesOf(t.attachments, t.attachmentUrl ? { url: t.attachmentUrl, name: t.attachmentName } : null);
-    const cls = t.classifiedAs;
-    if (cls === "vendor_bill" || cls === "vendor_po") {
-      const refs = t.classifiedRef?.billNumbers?.join(", ") || (t.classifiedRef?.paymentOnAccount ? "On account" : "") || (cls === "vendor_po" ? "Advance" : "");
-      rows.push({ id: "t-" + t.id, type: "Payment", date: t.date || "", party: t.payee || t.rawPayee || "", ref: refs, what: t.notes || "", amount: +t.amount || 0, currency: t.currency || "INR", status: "Paid", files });
-    } else if (files.length && cls !== "cc_payment" && cls !== "customer_receipt") {
-      rows.push({ id: "t-" + t.id, type: "Expense", date: t.date || "", party: t.payee || t.rawPayee || "", ref: t.category || "Unbooked", what: t.notes || "", amount: +t.amount || 0, currency: t.currency || "INR", status: cls ? "Paid" : "Not booked yet", files });
-    }
   }
   return rows;
 }
@@ -143,8 +117,6 @@ const Thumb = ({ f, size }) => isLink(f)
   : <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", flexDirection: "column", gap: 2, color: C.inkMid, fontSize: size > 100 ? 30 : 18 }}>📄<span style={{ fontSize: 9, fontWeight: 700, textTransform: "uppercase" }}>{extOf(f)}</span></div>;
 
 export default function BillsReceipts({ company, purchases, onOpenBill }) {
-  const [expenses, setExpenses] = useState(null);
-  const [txns, setTxns] = useState(null);
   const [view, setView] = useState(() => { try { return localStorage.getItem(VIEW_KEY) || (mob ? "cards" : "list"); } catch { return "list"; } });
   const [type, setType] = useState("all");
   const [fileF, setFileF] = useState("all");
@@ -156,16 +128,10 @@ export default function BillsReceipts({ company, purchases, onOpenBill }) {
   const [msg, setMsg] = useState("");
   const [preview, setPreview] = useState(null);
 
-  useEffect(() => {
-    setExpenses(null); setTxns(null); setSel(new Set());
-    const co = company === "at" ? "at" : "ng";
-    Promise.all([loadK(`${co}-expenses-v1`), loadK(`${co}-fin-txns-v1`)])
-      .then(([e, t]) => { setExpenses(Array.isArray(e) ? e : []); setTxns(Array.isArray(t) ? t : []); })
-      .catch(() => { setExpenses([]); setTxns([]); });
-  }, [company]);
+  useEffect(() => { setSel(new Set()); }, [company]);
   useEffect(() => { try { localStorage.setItem(VIEW_KEY, view); } catch {} }, [view]);
 
-  const all = useMemo(() => expenses && txns ? buildRows(purchases, expenses, txns) : [], [purchases, expenses, txns]);
+  const all = useMemo(() => buildRows(purchases), [purchases]);
   const rows = useMemo(() => {
     const s = q.trim().toLowerCase();
     return all.filter(r =>
@@ -195,13 +161,11 @@ export default function BillsReceipts({ company, purchases, onOpenBill }) {
     setBusy({ done: 0, total: dlFiles }); setMsg("");
     try {
       const span = from || to ? `${from || "start"}_to_${to || "now"}` : new Date().toISOString().slice(0, 10);
-      const r = await zipAndDownload(dlRows, `${company === "at" ? "Atyahara" : "NikhilGems"}_bills-receipts_${span}.zip`, done => setBusy({ done, total: dlFiles }));
+      const r = await zipAndDownload(dlRows, `${company === "at" ? "Atyahara" : "NikhilGems"}_supplier-bills_${span}.zip`, done => setBusy({ done, total: dlFiles }));
       setMsg(r.failed ? `Zip saved. ${r.failed} of ${r.total} files couldn't be fetched; they're listed in could-not-download.txt inside it.` : `Zip saved with ${r.total} files and an index.csv.`);
     } catch (e) { setMsg("Download failed: " + e.message); }
     setBusy(null);
   };
-
-  if (!expenses || !txns) return <p style={{ color: C.inkFaint, textAlign: "center", paddingTop: 40, fontSize: 13 }}>Loading bills and receipts…</p>;
 
   const seg = (opts, val, set) => (
     <div style={{ display: "flex", gap: 1, background: C.card, borderRadius: 6, padding: 3, border: `1px solid ${C.border}`, flexWrap: "wrap" }}>
@@ -225,7 +189,7 @@ export default function BillsReceipts({ company, purchases, onOpenBill }) {
   return (
     <div>
       <div style={{ display: "grid", gridTemplateColumns: mob ? "repeat(2,1fr)" : "repeat(4,1fr)", gap: 10, marginBottom: 14 }}>
-        {[[counts.Bill, "Vendor bills"], [counts.Payment, "Payments"], [counts.Expense, "Expenses"], [counts.files, `Files · ${counts.missing} records without one`]].map(([v, l]) => (
+        {[[counts.Bill, "Supplier bills"], [counts.Bill - counts.missing, "With the bill attached"], [counts.missing, "Bill not attached yet"], [counts.files, "Files"]].map(([v, l]) => (
           <div key={l} style={{ ...card, borderRadius: 9, padding: "10px 14px" }}>
             <div style={{ fontSize: 9, fontWeight: 700, color: C.inkFaint, textTransform: "uppercase", letterSpacing: .5 }}>{l}</div>
             <div style={{ fontSize: 20, fontWeight: 600, color: C.ink, marginTop: 2 }}>{v}</div>
@@ -234,15 +198,14 @@ export default function BillsReceipts({ company, purchases, onOpenBill }) {
       </div>
 
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 10 }}>
-        {seg([["all", "All"], ["Bill", "Vendor bills"], ["Payment", "Payments"], ["Expense", "Expenses"]], type, setType)}
         {seg([["all", "Any"], ["has", "With file"], ["missing", "Missing file"]], fileF, setFileF)}
         <div style={{ marginLeft: mob ? 0 : "auto" }}>{seg([["list", "☰ List"], ["cards", "▤ Cards"], ["grid", "▦ Grid"]], view, setView)}</div>
       </div>
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 12 }}>
-        <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search vendor, bill no., category…" style={{ ...FI, flex: "1 1 200px", minWidth: 0, fontSize: 12, padding: "7px 10px" }} />
+        <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search supplier, bill no., item…" style={{ ...FI, flex: "1 1 200px", minWidth: 0, fontSize: 12, padding: "7px 10px" }} />
         <label style={{ fontSize: 11, color: C.inkMid, display: "flex", alignItems: "center", gap: 4 }}>From <input type="month" value={from} onChange={e => setFrom(e.target.value)} style={{ ...FI, width: "auto", fontSize: 12, padding: "5px 8px" }} /></label>
         <label style={{ fontSize: 11, color: C.inkMid, display: "flex", alignItems: "center", gap: 4 }}>To <input type="month" value={to} onChange={e => setTo(e.target.value)} style={{ ...FI, width: "auto", fontSize: 12, padding: "5px 8px" }} /></label>
-        {(from || to || q || type !== "all" || fileF !== "all") && <button className="bs" style={{ fontSize: 11 }} onClick={() => { setFrom(""); setTo(""); setQ(""); setType("all"); setFileF("all"); }}>Clear</button>}
+        {(from || to || q || fileF !== "all") && <button className="bs" style={{ fontSize: 11 }} onClick={() => { setFrom(""); setTo(""); setQ(""); setFileF("all"); }}>Clear</button>}
       </div>
 
       <div style={{ ...card, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", padding: "8px 12px", marginBottom: 12, position: "sticky", top: 0, zIndex: 2 }}>
@@ -262,7 +225,7 @@ export default function BillsReceipts({ company, purchases, onOpenBill }) {
       {rows.length > 0 && view === "list" && (mob ? null : (
         <div style={{ ...card, borderRadius: 9, overflow: "hidden" }}>
           <div style={{ display: "grid", gridTemplateColumns: "28px 92px 84px 1.4fr 1fr 110px 120px 80px", gap: 8, padding: "8px 12px", background: C.card, borderBottom: `1px solid ${C.border}` }}>
-            {["", "Type", "Date", "Party", "Ref / category", "Amount", "Status", "Files"].map(h => <div key={h} style={{ fontSize: 9, fontWeight: 700, color: C.inkFaint, textTransform: "uppercase", letterSpacing: .4 }}>{h}</div>)}
+            {["", "Type", "Date", "Supplier", "Bill no.", "Amount", "Status", "Files"].map(h => <div key={h} style={{ fontSize: 9, fontWeight: 700, color: C.inkFaint, textTransform: "uppercase", letterSpacing: .4 }}>{h}</div>)}
           </div>
           {rows.map(r => (
             <div key={r.id} onClick={() => openRow(r)} style={{ display: "grid", gridTemplateColumns: "28px 92px 84px 1.4fr 1fr 110px 120px 80px", gap: 8, padding: "8px 12px", borderBottom: `1px solid ${C.border}`, alignItems: "center", cursor: "pointer", fontSize: 12, background: sel.has(r.id) ? C.card : "transparent" }}>

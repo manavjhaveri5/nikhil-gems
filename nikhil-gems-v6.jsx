@@ -10465,7 +10465,7 @@ IMPORTANT: supplierName must be the FULL business name. Extract every line item 
         <>
           <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:18,flexWrap:"wrap"}}>
             <div style={{display:"flex",gap:1,background:C.card,borderRadius:6,padding:3,border:`1px solid ${C.border}`}}>
-              {[["all","All"],["po","Orders"],["bill","Bills"],["unpaid","Unpaid"],["unexpanded","Expand Queue"],["files","📎 Bills & receipts"]].map(([id,label])=>(
+              {[["all","All"],["po","Orders"],["bill","Bills"],["unpaid","Unpaid"],["unexpanded","Expand Queue"],["files","📎 Bill files"]].map(([id,label])=>(
                 <button key={id} onClick={()=>setTab(id)} style={{background:tab===id?C.surface:"transparent",color:tab===id?C.ink:C.inkMid,border:tab===id?`1px solid ${C.border}`:"1px solid transparent",borderRadius:4,padding:"5px 13px",cursor:"pointer",fontSize:12,fontWeight:tab===id?500:400,transition:"all .15s",position:"relative",whiteSpace:"nowrap"}}>
                   {label}
                   {id==="unexpanded"&&unexpanded.length>0&&<span style={{position:"absolute",top:-3,right:-3,background:C.amber,color:"#fff",borderRadius:"50%",width:14,height:14,fontSize:8,fontWeight:700,display:"flex",alignItems:"center",justifyContent:"center"}}>{unexpanded.length}</span>}
