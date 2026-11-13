@@ -43,6 +43,7 @@ const RajApp            = React.lazy(() => import("./src/RajApp.jsx"));
 const GirtonApp         = React.lazy(() => import("./src/GirtonApp.jsx"));
 const SoniyaApp         = React.lazy(() => import("./src/SoniyaApp.jsx"));
 const AlexApp           = React.lazy(() => import("./src/AlexApp.jsx"));
+const BillsReceipts     = React.lazy(() => import("./src/BillsReceipts.jsx"));
 const RajCard           = React.lazy(() => import("./src/RajCard.jsx"));
 const InboxCard         = React.lazy(() => import("./src/InboxCard.jsx"));
 const SocialApp         = React.lazy(() => import("./src/SocialApp.jsx"));
@@ -10464,20 +10465,20 @@ IMPORTANT: supplierName must be the FULL business name. Extract every line item 
         <>
           <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:18,flexWrap:"wrap"}}>
             <div style={{display:"flex",gap:1,background:C.card,borderRadius:6,padding:3,border:`1px solid ${C.border}`}}>
-              {[["all","All"],["po","Orders"],["bill","Bills"],["unpaid","Unpaid"],["unexpanded","Expand Queue"]].map(([id,label])=>(
+              {[["all","All"],["po","Orders"],["bill","Bills"],["unpaid","Unpaid"],["unexpanded","Expand Queue"],["files","📎 Bills & receipts"]].map(([id,label])=>(
                 <button key={id} onClick={()=>setTab(id)} style={{background:tab===id?C.surface:"transparent",color:tab===id?C.ink:C.inkMid,border:tab===id?`1px solid ${C.border}`:"1px solid transparent",borderRadius:4,padding:"5px 13px",cursor:"pointer",fontSize:12,fontWeight:tab===id?500:400,transition:"all .15s",position:"relative",whiteSpace:"nowrap"}}>
                   {label}
                   {id==="unexpanded"&&unexpanded.length>0&&<span style={{position:"absolute",top:-3,right:-3,background:C.amber,color:"#fff",borderRadius:"50%",width:14,height:14,fontSize:8,fontWeight:700,display:"flex",alignItems:"center",justifyContent:"center"}}>{unexpanded.length}</span>}
                 </button>
               ))}
             </div>
-            <select value={sortBy} onChange={e=>setSortBy(e.target.value)} style={{...FI,width:"auto",fontSize:12,padding:"6px 10px",cursor:"pointer"}}>
+            {tab!=="files"&&<select value={sortBy} onChange={e=>setSortBy(e.target.value)} style={{...FI,width:"auto",fontSize:12,padding:"6px 10px",cursor:"pointer"}}>
               <option value="date">Newest first</option>
               <option value="oldest">Oldest first</option>
               <option value="unpaid_amt">Highest unpaid</option>
-            </select>
+            </select>}
           </div>
-          <PurchaseList purchases={purchases} filtered={filtered} tab={tab} totalBilled={totalBilled} totalPaid={totalPaid} unpaidBills={unpaidBills} unexpanded={unexpanded} onDetail={p=>{setDetail(p);}} onExpand={p=>{setExpandBill(p);setView("expand");}}/>
+          {tab==="files"?<React.Suspense fallback={<p style={{color:C.inkFaint,textAlign:"center",paddingTop:40,fontSize:13}}>Loading…</p>}><BillsReceipts company={company} purchases={purchases} onOpenBill={id=>{const b=purchases.find(p=>p.id===id);if(b)setDetail(b);}}/></React.Suspense>:<PurchaseList purchases={purchases} filtered={filtered} tab={tab} totalBilled={totalBilled} totalPaid={totalPaid} unpaidBills={unpaidBills} unexpanded={unexpanded} onDetail={p=>{setDetail(p);}} onExpand={p=>{setExpandBill(p);setView("expand");}}/>}
         </>
       )}
       {loaded&&view==="list"&&detail&&(detail.type==="po"
