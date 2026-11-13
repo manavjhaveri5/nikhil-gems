@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { STUDIO } from "./studio.js";
 import { supabase } from "./supabase.js";
 
 const C = {
@@ -74,9 +75,9 @@ export default function LoginScreen() {
     <div style={{ minHeight: "100vh", background: C.bg, display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "system-ui, sans-serif" }}>
       <div style={{ width: 360, background: C.surface, borderRadius: 16, border: `1px solid ${C.border}`, padding: "40px 36px", boxShadow: "0 4px 24px #0000000a" }}>
         <div style={{ textAlign: "center", marginBottom: 32 }}>
-          <div style={{ fontSize: 28, marginBottom: 4 }}>💎</div>
-          <div style={{ fontSize: 20, fontWeight: 700, color: C.ink, letterSpacing: 0.3 }}>Nikhil Gems</div>
-          <div style={{ fontSize: 10, color: C.inkFaint, letterSpacing: 1.5, fontWeight: 600, textTransform: "uppercase", marginTop: 2 }}>Business Suite</div>
+          {!STUDIO && <div style={{ fontSize: 28, marginBottom: 4 }}>💎</div>}
+          <div style={{ fontSize: 20, fontWeight: 700, color: C.ink, letterSpacing: 0.3 }}>{STUDIO ? "Earth Editions" : "Nikhil Gems"}</div>
+          <div style={{ fontSize: 10, color: C.inkFaint, letterSpacing: 1.5, fontWeight: 600, textTransform: "uppercase", marginTop: 2 }}>{STUDIO ? "Studio" : "Business Suite"}</div>
         </div>
 
         <form onSubmit={login}>

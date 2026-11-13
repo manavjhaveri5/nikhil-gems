@@ -694,7 +694,7 @@ function Log() {
 }
 
 /* ── the module ────────────────────────────────────────────────────────── */
-export default function SocialApp({ onHome }) {
+export default function SocialApp({ onHome, studio }) {
   const [tab, setTab] = useState("calendar");
   const [st, setSt] = useState(null);
   const [toast, setToast] = useState("");
@@ -708,9 +708,9 @@ export default function SocialApp({ onHome }) {
       {toast && <div style={{ position: "fixed", bottom: 22, left: 16, right: 16, margin: "0 auto", maxWidth: 520, zIndex: 1300, background: C.ink, color: "#fff", padding: "11px 16px", borderRadius: 10, fontSize: 13, textAlign: "center" }}>{toast}</div>}
       <div style={{ position: "sticky", top: 0, zIndex: 100, background: C.surface, borderBottom: `1px solid ${C.border}` }}>
         <div style={{ display: "flex", alignItems: "center", gap: 12, padding: mob() ? "10px 14px" : "11px 28px" }}>
-          <button onClick={onHome} style={{ background: "none", border: "none", cursor: "pointer", color: C.inkMid, fontFamily: "inherit", fontSize: 13, padding: "0 12px 0 0", borderRight: `1px solid ${C.border}` }}>← Home</button>
+          <button onClick={onHome} style={{ background: "none", border: "none", cursor: "pointer", color: C.inkMid, fontFamily: "inherit", fontSize: 13, padding: "0 12px 0 0", borderRight: `1px solid ${C.border}` }}>{studio ? "Sign out" : "← Home"}</button>
           <div>
-            <div style={{ fontFamily: "'Cormorant Garamond',Georgia,serif", fontSize: 22, fontWeight: 600, lineHeight: 1 }}>Social</div>
+            <div style={{ fontFamily: "'Cormorant Garamond',Georgia,serif", fontSize: 22, fontWeight: 600, lineHeight: 1 }}>{studio ? "Earth Editions Studio" : "Social"}</div>
             <div style={{ fontSize: 11, color: C.inkFaint, marginTop: 2 }}>Instagram · TikTok · YouTube · Pinterest · Threads · X · Journal · Reddit</div>
           </div>
         </div>

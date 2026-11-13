@@ -5,6 +5,10 @@ import { createRoot } from "react-dom/client";
 import Root from "../nikhil-gems-v6.jsx";
 import { supabase } from "./supabase.js";
 import LoginScreen from "./LoginScreen.jsx";
+import { lazy, Suspense } from "react";
+import { STUDIO, STUDIO_NAME } from "./studio.js";
+const SocialApp = lazy(() => import("./SocialApp.jsx"));
+if (STUDIO) { document.title = STUDIO_NAME; document.querySelector('meta[name="apple-mobile-web-app-title"]')?.setAttribute("content", STUDIO_NAME); }
 import { warmCache, DEMO_MODE, syncOfflineQueue, getOfflineQueueCount, logActivity } from "./utils.js";
 import { inject as injectAnalytics } from "@vercel/analytics";
 import { watchModals } from "./modalWatch.js";
@@ -114,6 +118,8 @@ function App() {
     </div>
   );
   if (!session) return <ErrorBoundary><LoginScreen /></ErrorBoundary>;
+  // studio.eartheditions.co: Social on its own (see studio.js).
+  if (STUDIO) return <ErrorBoundary><Suspense fallback={null}><SocialApp studio onHome={() => supabase.auth.signOut()} /></Suspense></ErrorBoundary>;
   return <ErrorBoundary><Root onSignOut={DEMO_MODE ? () => {} : () => supabase.auth.signOut()} /></ErrorBoundary>;
 }
 
