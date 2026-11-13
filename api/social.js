@@ -116,7 +116,7 @@ const P = {
   },
   tiktok: {
     keys: ["TIKTOK_CLIENT_KEY", "TIKTOK_CLIENT_SECRET"],
-    login: (req, state) => `https://www.tiktok.com/v2/auth/authorize/?client_key=${env("TIKTOK_CLIENT_KEY")}&scope=${encodeURIComponent(TT_SCOPES)}&response_type=code&redirect_uri=${encodeURIComponent(redirectUri(req, "tiktok"))}&state=${state}`,
+    login: (req, state) => `https://www.tiktok.com/v2/auth/authorize/?client_key=${env("TIKTOK_CLIENT_KEY")}&scope=${encodeURIComponent(TT_SCOPES)}&response_type=code&redirect_uri=${encodeURIComponent(redirectUri(req, "tiktok"))}&state=${state}&disable_auto_auth=1`, // always show what is being granted
     async token(req, code) {
       const d = await json(await fetch("https://open.tiktokapis.com/v2/oauth/token/", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" },
         body: form({ client_key: env("TIKTOK_CLIENT_KEY"), client_secret: env("TIKTOK_CLIENT_SECRET"), code, grant_type: "authorization_code", redirect_uri: redirectUri(req, "tiktok") }) }));
