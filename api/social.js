@@ -25,6 +25,7 @@ import { isRowKey, readRows } from "../lib/app-rows.js";
 import { requireUser, hasStoreSecret, cronKeyOk } from "../lib/auth.js";
 import { INSTAGRAM_VOICE, instagramShape, HASHTAG_ENDING } from "../lib/instagramVoice.js";
 import { writeWithBest } from "../lib/captionWriter.js";
+import { tagPayload } from "../lib/socialLinks.js";
 
 export const config = { maxDuration: 300 };
 
@@ -450,6 +451,8 @@ async function postReddit({ sub, title, kind = "image", body = "", images = [], 
   return { url };
 }
 POST.reddit = postReddit;
+// Every post, by hand, scheduled or autopilot, goes out with its store links tagged for its platform (lib/socialLinks.js).
+for (const k of Object.keys(POST)) { const send = POST[k]; POST[k] = payload => send(tagPayload(payload, k)); }
 
 /* ── reading: Instagram posts, Reddit threads ────────────────────────────── */
 async function igMedia() {
