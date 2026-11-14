@@ -10,6 +10,8 @@
 import { useState, useEffect, useMemo, useCallback } from "react";
 import { supabase } from "./supabase.js";
 import { C, mob } from "./lmTheme.js";
+// Likely bots (one-page China/Singapore hits, data-centre crawlers) are left out unless asked for.
+import { botLike } from "../lib/siteBots.js";
 
 const card = { background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12 };
 const btn = (on = false) => ({ background: on ? C.ink : C.surface, color: on ? "#fff" : C.ink, border: on ? "none" : `1px solid ${C.border}`, borderRadius: 999, padding: "6px 13px", fontSize: 12.5, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap" });
@@ -26,10 +28,6 @@ const pageName = e => e.handle ? (e.title || e.handle).replace(/ \| Earth Editio
 const ACTION = { add_to_cart: "🛒 Added to cart", checkout: "💳 Went to checkout", purchase: "✅ Bought", signup: "✉️ Joined the list", option: "Picked an option", search: "🔍 Searched" };
 const RANGES = [["today", "Today"], ["7d", "7 days"], ["30d", "30 days"], ["90d", "90 days"]];
 const since = r => { const d = new Date(); if (r === "today") d.setHours(0, 0, 0, 0); else d.setDate(d.getDate() - ({ "7d": 7, "90d": 90 }[r] || 30)); return d.toISOString(); };
-/* Likely bots: since October 2026 hundreds of visits a day from China (Taiyuan) and
-   Singapore, each one page and nothing else, all "direct" on desktop. They're left
-   out of the numbers unless asked for. */
-const botLike = v => ["CN", "SG"].includes(v.country) && v.events.length === 1 && v.events[0].type === "view";
 const usd = n => `$${Math.round(n).toLocaleString("en-US")}`;
 
 async function pages(build, max = 20000) {
@@ -186,7 +184,7 @@ export default function VisitorsTab({ showToast, site }) {
       <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
         {RANGES.map(([k, l]) => <button key={k} onClick={() => setRange(k)} style={btn(range === k)}>{l}</button>)}
         <label style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 12.5, color: C.inkMid, marginLeft: 6 }}><input type="checkbox" checked={staff} onChange={e => setStaff(e.target.checked)} />Include staff</label>
-        <label title="One-page visits from China and Singapore: bots reading the site, not shoppers" style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 12.5, color: C.inkMid }}><input type="checkbox" checked={bots} onChange={e => setBots(e.target.checked)} />Include likely bots{events && !bots && s.hiddenBots ? ` (${s.hiddenBots})` : ""}</label>
+        <label title="One-page visits from China, Singapore and data-centre towns (Ashburn, Council Bluffs…), and direct hits on old Wix links: bots reading the site, not shoppers" style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 12.5, color: C.inkMid }}><input type="checkbox" checked={bots} onChange={e => setBots(e.target.checked)} />Include likely bots{events && !bots && s.hiddenBots ? ` (${s.hiddenBots})` : ""}</label>
         <div style={{ flex: 1 }} /><button onClick={() => { load(); loadLive(); }} style={btn()}>↻ Refresh</button>
       </div>
 
