@@ -220,6 +220,8 @@ eartheditions.co`,
 function BuyersTab({ showToast, siteUrl, signOff }) {
   const [rows, setRows] = useState(null);
   const [filter, setFilter] = useState("pending");
+  // Extra filters on top of the status, each on or off: phone, account set up or not, emails, logged in.
+  const [extra, setExtra] = useState({});
   const [search, setSearch] = useState("");
   const [links, setLinks] = useState({}); // id → invite link, shown once
   const [justApproved, setJustApproved] = useState({}); // id → true when the link came from approving them
@@ -414,8 +416,17 @@ function BuyersTab({ showToast, siteUrl, signOff }) {
 
   const count = s => (rows || []).filter(b => b.status === s).length;
   const words = search.toLowerCase().split(/\s+/).filter(Boolean);
-  const shown = (rows || []).filter(b => (filter === "all" || b.status === filter) &&
-    words.every(w => `${b.name} ${b.company} ${b.email} ${b.state} ${b.country}`.toLowerCase().includes(w)));
+  const EXTRAS = [
+    ["phone",   "📱 Has phone",          b => waNum(b.phone).length >= 7],
+    ["setup",   "🔑 Account set up",     b => !!b.has_password],
+    ["nosetup", "⏳ No password yet",    b => !b.has_password],
+    ["optin",   "✉ Opted in to emails", b => !!b.marketing_opt_in],
+    ["login",   "👤 Has logged in",      b => !!b.last_login],
+  ];
+  const byStatus = b => filter === "all" || b.status === filter;
+  const byExtras = (b, skip) => EXTRAS.every(([k, , f]) => k === skip || !extra[k] || f(b));
+  const shown = (rows || []).filter(b => byStatus(b) && byExtras(b) &&
+    words.every(w => `${b.name} ${b.company} ${b.email} ${b.phone} ${b.state} ${b.country}`.toLowerCase().includes(w)));
 
   return (
     <div>
@@ -425,10 +436,23 @@ function BuyersTab({ showToast, siteUrl, signOff }) {
             {l}{k !== "all" ? ` · ${count(k)}` : ` · ${(rows || []).length}`}
           </button>
         ))}
-        <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search name, shop, email…" style={{ ...FI({ width: mob() ? "100%" : 220, borderRadius: 999 }) }} />
+        <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search name, shop, email, phone…" style={{ ...FI({ width: mob() ? "100%" : 220, borderRadius: 999 }) }} />
         <div style={{ flex: 1 }} />
         <button onClick={() => setAdding(a => a ? null : { name: "", company: "", email: "", phone: "", country: "", discount: "" })} style={btn(C.ink, "#fff")}>＋ Invite a buyer</button>
         <button onClick={bulkInvites} disabled={busy} style={btn()}>{busy ? "Making links…" : "✉ Set-up links for all (CSV)"}</button>
+      </div>
+      {/* Narrow the list further; the counts are within the status picked above. */}
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 12, alignItems: "center" }}>
+        {EXTRAS.map(([k, l, f]) => {
+          const on = !!extra[k];
+          const n = (rows || []).filter(b => byStatus(b) && byExtras(b, k) && f(b)).length;
+          return (
+            <button key={k} onClick={() => setExtra(x => { const y = { ...x, [k]: !x[k] }; if (k === "setup" && y.setup) y.nosetup = false; if (k === "nosetup" && y.nosetup) y.setup = false; return y; })}
+              style={{ ...btn(on ? C.green : C.surface, on ? "#fff" : C.ink), borderRadius: 999, fontSize: 12 }}>{l} · {n}</button>
+          );
+        })}
+        {Object.values(extra).some(Boolean) && <button onClick={() => setExtra({})} style={{ ...btn(), borderRadius: 999, fontSize: 12, color: C.inkMid }}>Clear</button>}
+        {rows && <span style={{ fontSize: 12, color: C.inkFaint, marginLeft: 4 }}>Showing {shown.length}</span>}
       </div>
       {adding && (
         <div style={{ ...card, padding: 14, marginBottom: 12, display: "grid", gap: 10 }}>
