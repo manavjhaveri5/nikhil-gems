@@ -177,7 +177,7 @@ ${intro ? `What Manav wants said up top (keep his meaning, his facts): ${intro}`
 Shape of the post:
 1. A short, human opener (2-3 sentences): who we are (a small mineral shop, Earth Editions) and what's on the table this Sunday — no sales pitch.
 2. Each piece in order: **Name** — price — one or two sentences on what makes it worth a look (formation, colour, inclusions, locality, what it's like in hand), honest about natural marks or treatment if given. Then its link on its own line.
-3. One line with the shipping${/free/i.test(shipping) ? ` — "${shipping}" on every piece, no minimum` : ""}.
+3. One line with the shipping${/free/i.test(shipping) ? ` — "${shipping}" stated plainly` : ""}.
 4. A warm close inviting questions about any piece (IDs, more photos, measurements), and the shop link ${SITE}.
 
 The title: under 120 characters, friendly and specific (name a piece or two), not clickbait, no ALL CAPS, no emojis. It may start with "[Shop]" or not — whatever reads naturally.${/free/i.test(shipping) ? ` It must end with "· ${shipping}" (exactly that wording). Also say "${shipping}" once in the opener.` : ""}
