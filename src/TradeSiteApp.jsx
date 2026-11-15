@@ -191,6 +191,32 @@ function EnquiriesTab({ showToast, onMakeInvoice }) {
 }
 
 /* ── Buyers ────────────────────────────────────────────────────────────── */
+/* The welcome email after Approve, filled in for one buyer. */
+function welcomeMail(b, link, signOff) {
+  const first = String(b.name || "").trim().split(/\s+/)[0] || "there";
+  const company = String(b.company || "").trim();
+  return {
+    subject: "Your Earth Editions wholesale account is approved",
+    body: `Hi ${first},
+
+Thank you for applying for a wholesale account with Earth Editions. I'm happy to let you know that ${company || "your account"} is approved.
+
+To get started, set your password here:
+${link}
+
+The link is personal to you and works for the next 14 days. Once your password is set, you can log in at trade.eartheditions.co anytime to see our full catalogue with wholesale pricing.
+
+A little about us: we exhibit at Tucson, Denver, Munich and Tokyo, and export year-round to shops worldwide. We focus on high-quality natural material, honest grading and dependable support. All orders ship DDP, so the price you see is the price you pay, with no customs fees or import duties on delivery.
+
+If you have any questions or would like help putting together a first order, just reply to this email or message us on WhatsApp.
+
+Looking forward to working with you,
+
+${signOff ? `${signOff}\n` : ""}Earth Editions
+eartheditions.co`,
+  };
+}
+
 function BuyersTab({ showToast, siteUrl, signOff }) {
   const [rows, setRows] = useState(null);
   const [filter, setFilter] = useState("pending");
@@ -515,6 +541,23 @@ function BuyersTab({ showToast, siteUrl, signOff }) {
                   <button disabled={busy} onClick={() => emailSetupLink(b, links[b.id])} style={btn()}>✉ Email from Earth Editions</button>
                 </div>
                 <div style={{ color: C.inkFaint, marginTop: 6 }}>Works once, for 14 days. Only shown now — make a new one if it's lost.</div>
+                {/* The welcome email, written out with this buyer's link, to send
+                    from your own inbox: the automated one can't send while
+                    Omnisend's free plan is full (15 Nov 2026). */}
+                {welcome(b) && (() => { const m = welcomeMail(b, links[b.id], signOff); return (
+                  <div style={{ marginTop: 12, borderTop: `1px solid ${C.border}`, paddingTop: 10 }}>
+                    <div style={{ fontWeight: 800, marginBottom: 6 }}>Email to send from your inbox</div>
+                    <div style={{ marginBottom: 4 }}><b>To:</b> {b.email}</div>
+                    <div style={{ marginBottom: 6 }}><b>Subject:</b> {m.subject}</div>
+                    <textarea readOnly value={m.body} rows={14} onFocus={e => e.target.select()}
+                      style={{ width: "100%", boxSizing: "border-box", fontFamily: "inherit", fontSize: 12.5, lineHeight: 1.5, border: `1px solid ${C.border}`, borderRadius: 6, padding: 8, background: "#fff", color: C.ink, resize: "vertical" }} />
+                    <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 6 }}>
+                      <button onClick={() => navigator.clipboard.writeText(b.email).then(() => showToast("Email address copied"))} style={btn()}>Copy address</button>
+                      <button onClick={() => navigator.clipboard.writeText(m.subject).then(() => showToast("Subject copied"))} style={btn()}>Copy subject</button>
+                      <button onClick={() => navigator.clipboard.writeText(m.body).then(() => showToast("Email text copied"))} style={btn("#1f8f4e", "#fff")}>Copy email text</button>
+                    </div>
+                  </div>
+                ); })()}
               </div>
             )}
           </div>
