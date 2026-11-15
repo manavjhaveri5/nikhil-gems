@@ -5,9 +5,11 @@
 
    Server side: api/social.js actions feed (posts + account + scheduled),
    remove (delete a post) and unschedule. */
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, lazy, Suspense } from "react";
 import { C, mob } from "./lmTheme.js";
 
+const SocialReddit = lazy(() => import("./SocialReddit.jsx"));   // r/Crystals Sunday shop post — written here, posted by hand
+const REDDIT = { k: "reddit", icon: "👽", label: "Reddit" };
 const FEEDS = ["instagram", "tiktok", "youtube", "pinterest"];
 const card = { background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: "14px 16px" };
 const btn = (bg = C.surface, fg = C.ink) => ({ background: bg, color: fg, border: bg === C.surface ? `1px solid ${C.border}` : "none", borderRadius: 8, padding: "7px 13px", fontSize: 13, fontWeight: 650, cursor: "pointer", fontFamily: "inherit" });
@@ -68,8 +70,8 @@ export default function SocialPlatforms({ st, platforms, showToast, onCreate, on
 
   const chips = (
     <div style={{ display: "flex", gap: 6, overflowX: "auto", paddingBottom: 4, marginBottom: 12 }}>
-      {[{ k: "all", icon: "🌐", label: "All" }, ...platforms].map(p => {
-        const on = sel === p.k, conn = p.k === "all" || st?.[p.k]?.connected;
+      {[{ k: "all", icon: "🌐", label: "All" }, ...platforms, REDDIT].map(p => {
+        const on = sel === p.k, conn = p.k === "all" || p.k === "reddit" || st?.[p.k]?.connected;
         return <button key={p.k} onClick={() => pick(p.k)} style={{ ...btn(on ? C.ink : C.surface, on ? "#FAF0DC" : conn ? C.ink : C.inkFaint), borderRadius: 999, whiteSpace: "nowrap", padding: "6px 13px" }}>{p.icon} {p.label}{!conn ? " ·  off" : ""}</button>;
       })}
     </div>
@@ -109,9 +111,18 @@ export default function SocialPlatforms({ st, platforms, showToast, onCreate, on
                 </>}
             </button>);
         })}
+        <button onClick={() => pick("reddit")} style={{ ...card, textAlign: "left", cursor: "pointer", fontFamily: "inherit", color: C.ink }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+            <span style={{ fontSize: 22 }}>{REDDIT.icon}</span>
+            <div style={{ flex: 1 }}><b>Reddit</b><div style={{ fontSize: 12, color: C.inkFaint }}>r/Crystals · Sunday shop post</div></div>
+          </div>
+          <div style={{ fontSize: 12.5, color: C.inkMid }}>Pick the pieces and photos — the title and post are written around them, with prices, links and shipping. Past posts kept here.</div>
+        </button>
       </div>
     </div>
   );
+
+  if (sel === "reddit") return <div>{chips}<Suspense fallback={<div style={{ color: C.inkFaint, fontSize: 13 }}>Loading…</div>}><SocialReddit showToast={showToast} /></Suspense></div>;
 
   const p = platforms.find(x => x.k === sel) || platforms[0];
   const s = st?.[p.k] || {}, d = data[p.k] || {};
