@@ -58,17 +58,71 @@ const linkFor = (l, fact) => {
   return u ? `${u}${u.includes("?") ? "&" : "?"}utm_source=reddit&utm_medium=social&utm_campaign=crystals_sunday` : "";
 };
 
-async function download(url, name) {
-  try {
-    const r = await fetch(url);
-    if (!r.ok) throw new Error();
-    const b = await r.blob();
-    const ext = (b.type.split("/")[1] || "jpg").replace("jpeg", "jpg").replace(/\+.*/, "");
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(b); a.download = `${name}.${ext}`;
-    document.body.appendChild(a); a.click(); a.remove();
-    setTimeout(() => URL.revokeObjectURL(a.href), 4000);
-  } catch { window.open(url, "_blank"); }
+/* Photos as files. Straight from the image host when it allows it, else
+   through our API (Etsy's host sends no CORS headers). */
+async function getFile(url, name) {
+  let b;
+  try { const r = await fetch(url); if (!r.ok) throw new Error(); b = await r.blob(); }
+  catch {
+    const r = await fetch(`/api/social?action=image&url=${encodeURIComponent(url)}`);
+    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || `Couldn't get a photo (${r.status})`);
+    b = await r.blob();
+  }
+  const ext = (b.type.split("/")[1] || "jpg").replace("jpeg", "jpg").replace(/\+.*/, "");
+  return new File([b], `${name}.${ext}`, { type: b.type || "image/jpeg" });
+}
+const saveToDisk = f => {
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(f); a.download = f.name;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+};
+const canShare = fs => { try { return !!navigator.canShare?.({ files: fs }); } catch { return false; } };
+
+/* All the post's photos in one go. On a phone: the share sheet → "Save N
+   Images" puts them in Photos, in order. On a computer: downloads. Getting the
+   files and opening the share sheet are two taps — the sheet must open
+   straight from a tap. */
+function PhotoSaver({ photos, showToast }) {
+  const sig = photos.map(p => p.u).join("|");
+  const [files, setFiles] = useState(null);   // null | "loading" | File[]
+  const [got, setGot] = useState(0);
+  useEffect(() => { setFiles(null); setGot(0); }, [sig]);
+  const name = (p, n) => `${String(n + 1).padStart(2, "0")}-${p.name}`;
+  const prepare = async () => {
+    setFiles("loading"); setGot(0);
+    try {
+      const out = await Promise.all(photos.map((p, n) => getFile(p.u, name(p, n)).then(f => { setGot(g => g + 1); return f; })));
+      setFiles(out);
+    } catch (e) { setFiles(null); showToast(`⚠ ${e.message}`); }
+  };
+  const save = async () => {
+    if (canShare(files)) {
+      try { await navigator.share({ files }); } catch (e) { if (e.name !== "AbortError") showToast(`⚠ ${e.message}`); }
+      return;
+    }
+    for (const f of files) { saveToDisk(f); await new Promise(r => setTimeout(r, 300)); }
+  };
+  const one = async (p, n) => {
+    try {
+      const f = Array.isArray(files) ? files[n] : await getFile(p.u, name(p, n));
+      if (canShare([f])) await navigator.share({ files: [f] }).catch(() => {}); else saveToDisk(f);
+    } catch (e) { showToast(`⚠ ${e.message}`); }
+  };
+  const ready = Array.isArray(files);
+  return (<>
+    <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 8 }}>
+      {photos.map((p, n) => (
+        <button key={p.u + n} onClick={() => one(p, n)} title="Save this photo" style={{ position: "relative", border: "none", padding: 0, background: "none", cursor: "pointer" }}>
+          <img src={p.u} alt="" style={{ width: 64, height: 64, objectFit: "cover", borderRadius: 8, display: "block" }} />
+          <span style={{ position: "absolute", bottom: 3, left: 3, background: "rgba(0,0,0,.6)", color: "#fff", fontSize: 10, borderRadius: 5, padding: "0 5px" }}>{n + 1}</span>
+        </button>))}
+    </div>
+    {!ready
+      ? <button disabled={!photos.length || files === "loading"} onClick={prepare} style={btn(C.ink, "#FAF0DC")}>{files === "loading" ? `Getting photos… ${got}/${photos.length}` : `📲 Get all ${photos.length} photos`}</button>
+      : <button onClick={save} style={btn(C.green, "#fff")}>{canShare(files) ? `✓ Save ${files.length} photos to Photos` : `⬇ Download all ${files.length}`}</button>}
+    {ready && canShare(files) && <div style={{ fontSize: 11.5, color: C.inkFaint, marginTop: 5 }}>In the share sheet, tap “Save {files.length} Images”. They're numbered in posting order.</div>}
+  </>);
 }
 const slug = s => String(s || "photo").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 40) || "photo";
 
@@ -188,7 +242,6 @@ Return ONLY JSON: {"title":"…","body":"… the full post in Reddit markdown �
     setBusy("");
   };
   const copy = (t, what) => navigator.clipboard.writeText(t).then(() => showToast(`✓ ${what} copied`)).catch(() => showToast("⚠ Couldn't copy"));
-  const dlAll = async () => { setBusy("dl"); let n = 0; for (const p of photos) { n++; await download(p.u, `${String(n).padStart(2, "0")}-${p.name}`); await new Promise(r => setTimeout(r, 350)); } setBusy(""); };
   const finish = async posted => {
     setBusy("save");
     try {
@@ -266,15 +319,8 @@ Return ONLY JSON: {"title":"…","body":"… the full post in Reddit markdown �
 
     {items.length > 0 && <div style={card}>
       <span style={lab}>4 · Photos to upload · {photos.length}</span>
-      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 8 }}>
-        {photos.map((p, n) => (
-          <button key={p.u + n} onClick={() => download(p.u, `${String(n + 1).padStart(2, "0")}-${p.name}`)} title="Download" style={{ position: "relative", border: "none", padding: 0, background: "none", cursor: "pointer" }}>
-            <img src={p.u} alt="" style={{ width: 64, height: 64, objectFit: "cover", borderRadius: 8, display: "block" }} />
-            <span style={{ position: "absolute", bottom: 3, left: 3, background: "rgba(0,0,0,.6)", color: "#fff", fontSize: 10, borderRadius: 5, padding: "0 5px" }}>{n + 1} ⬇</span>
-          </button>))}
-      </div>
-      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-        <button disabled={!photos.length || busy === "dl"} onClick={dlAll} style={btn()}>{busy === "dl" ? "Downloading…" : `⬇ Download all ${photos.length}`}</button>
+      <PhotoSaver photos={photos} showToast={showToast} />
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 10 }}>
         <a href={`https://www.reddit.com/r/${SUB}/submit`} target="_blank" rel="noreferrer" style={{ ...btn(), textDecoration: "none" }}>Open r/{SUB} to post ↗</a>
       </div>
       <div style={{ fontSize: 12, color: C.inkMid, margin: "10px 0 6px", lineHeight: 1.5 }}>On Reddit: choose <b>Images</b>, upload the photos in this order, paste the title, paste the post as the body (or the first comment if the image post has no body), and set the flair <b>{FLAIR}</b>.</div>
@@ -320,8 +366,8 @@ function PastPopup({ post, onClose, onDelete, onReuse, onSaveUrl, showToast }) {
           <button onClick={onClose} aria-label="Close" style={{ ...btn(), padding: "4px 10px" }}>✕</button>
         </div>
         <b style={{ fontSize: 15.5, display: "block", marginBottom: 8 }}>{post.title}</b>
-        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10 }}>
-          {(post.items || []).flatMap(i => i.chosen || []).map((u, n) => <img key={u + n} src={u} alt="" onClick={() => download(u, `${String(n + 1).padStart(2, "0")}-photo`)} title="Download" style={{ width: 64, height: 64, objectFit: "cover", borderRadius: 8, cursor: "pointer" }} />)}
+        <div style={{ marginBottom: 12 }}>
+          <PhotoSaver photos={(post.items || []).flatMap(i => (i.chosen || []).map(u => ({ u, name: slug(i.title) })))} showToast={showToast} />
         </div>
         <div style={{ fontSize: 13, lineHeight: 1.55, whiteSpace: "pre-wrap", background: C.bg, borderRadius: 10, padding: "10px 12px", maxHeight: 320, overflow: "auto" }}>{post.body}</div>
         <div style={{ display: "flex", gap: 6, marginTop: 10 }}>

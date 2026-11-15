@@ -979,6 +979,20 @@ export default async function handler(req, res) {
     }
 
     if (!(await requireUser(req, res))) return;
+    /* A listing photo, passed through so the browser may save it (Etsy's image
+       host sends no CORS headers). Only the hosts our listing photos live on. */
+    if (action === "image") {
+      let src;
+      try { src = new URL(String(u.searchParams.get("url") || "")); } catch { return res.status(400).json({ error: "Bad image link" }); }
+      if (src.protocol !== "https:" || !/(^|\.)(etsystatic\.com|blob\.vercel-storage\.com|shopify\.com|shopifycdn\.net|supabase\.co|eartheditions\.co)$/i.test(src.hostname))
+        return res.status(400).json({ error: "Not a listing photo" });
+      const r = await fetch(src, { redirect: "follow" });
+      const type = r.headers.get("content-type") || "";
+      if (!r.ok || !/^image\//i.test(type)) return res.status(502).json({ error: `Couldn't fetch the photo (${r.status})` });
+      res.setHeader("Content-Type", type);
+      res.setHeader("Cache-Control", "private, max-age=3600");
+      return res.send(Buffer.from(await r.arrayBuffer()));
+    }
 
     if (action === "auto_get") return res.json({ auto: await autoSettings(), queue: (await appData(QUEUE_KEY)) || [] });
     if (action === "auto_set") {
