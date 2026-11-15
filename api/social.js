@@ -109,6 +109,7 @@ async function unifiedInstagramToken(req, code) {
     if (m.username) { user_id = m.id || id; me = m; if (/eartheditions/i.test(m.username)) break; }
   }
   if (!user_id) {
+    await setSecret("ig_probe_token", { access_token: s.access_token, at: Date.now() }); // TEMP: to find where the account id lives
     const sc = (dbg.data?.granular_scopes || []).map(g => `${g.scope}${g.target_ids ? `[${g.target_ids.length}]` : ""}`).join(",");
     fail(400, `No Instagram account found on the login (type ${dbg.data?.type || "?"}; scopes ${sc || dbg.data?.scopes?.join(",") || "none"}; pages ${(pages.data || []).length}; businesses ${(biz.data || []).length}; tried ${cands.length}${pages.error ? `; ${pages.error.message}` : ""})`);
   }
@@ -838,6 +839,25 @@ export default async function handler(req, res) {
     }
 
     if (!(await requireUser(req, res))) return;
+
+    // TEMP: read-only Graph GET with the saved Unified-login token, to find the Instagram account id. Remove once connected.
+    if (action === "ig_probe") {
+      const t = await getSecret("ig_probe_token");
+      if (!t?.access_token) fail(400, "no probe token");
+      const path = String(u.searchParams.get("path") || "me");
+      if (!/^[\w/{}.,?=&-]+$/.test(path)) fail(400, "bad path");
+      return res.json(await json(await fetch(`${FB}/${path}${path.includes("?") ? "&" : "?"}access_token=${encodeURIComponent(t.access_token)}`)));
+    }
+    if (action === "ig_adopt") {
+      const t = await getSecret("ig_probe_token");
+      const id = String(u.searchParams.get("id") || "");
+      if (!t?.access_token || !/^\d+$/.test(id)) fail(400, "no token or id");
+      const m = await json(await fetch(`${FB}/${id}?fields=id,username&access_token=${encodeURIComponent(t.access_token)}`));
+      if (!m.username) fail(400, m.error?.message || "not an Instagram account");
+      await setSecret("tok_instagram", { access_token: t.access_token, host: FB, user_id: m.id, refreshed_at: Date.now(), name: `@${m.username}` });
+      await setSecret("ig_probe_token", null);
+      return res.json({ ok: true, name: m.username, id: m.id });
+    }
 
     if (action === "auto_get") return res.json({ auto: await autoSettings(), queue: (await appData(QUEUE_KEY)) || [] });
     if (action === "auto_set") {
