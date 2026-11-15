@@ -162,7 +162,7 @@ export default function SocialPlatforms({ st, platforms, showToast, onCreate, on
               <div style={{ padding: "8px 9px", flex: 1, display: "flex", flexDirection: "column", gap: 5 }}>
                 <div style={{ fontSize: 12, color: C.ink, display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden", minHeight: 30 }}>{x.text || <i style={{ color: C.inkFaint }}>No caption</i>}</div>
                 <div style={{ display: "flex", gap: "2px 9px", flexWrap: "wrap", fontSize: 11.5, color: C.inkMid }}>
-                  {Object.entries(x.stats).filter(([, v]) => v != null).map(([k, v]) => <span key={k}><b style={{ color: C.ink }}>{n(v)}</b> {STAT_LABEL[k] || k}</span>)}
+                  {Object.entries(x.stats).filter(([, v]) => v != null).map(([k, v]) => <span key={k}><b style={{ color: C.ink }}>{n(v)}</b> {(STAT_LABEL[k] || k).replace(/s$/, v === 1 && k !== "reach" ? "" : "s")}</span>)}
                 </div>
                 <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: "auto", paddingTop: 4 }}>
                   <span style={{ flex: 1, fontSize: 11, color: C.inkFaint }}>{when(x.at)}</span>
