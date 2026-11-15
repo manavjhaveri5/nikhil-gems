@@ -5,7 +5,7 @@
 
    Platforms and what each needs in Vercel (each is optional — a platform
    without its keys shows "set up" in the Accounts tab):
-     instagram  IG_APP_ID, IG_APP_SECRET (+ IG_CONFIG_ID for Unified login on newer Meta apps)
+     instagram  IG_APP_ID, IG_APP_SECRET (+ IG_CONFIG_ID and IG_USER_ID for Unified login on newer Meta apps)
      threads    THREADS_APP_ID, THREADS_APP_SECRET Meta app, Threads API use case
      tiktok     TIKTOK_CLIENT_KEY, TIKTOK_CLIENT_SECRET  Login Kit + Content Posting API
      youtube    GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET   Google Cloud, YouTube Data API v3
@@ -91,7 +91,8 @@ async function unifiedInstagramToken(req, code) {
   const at = encodeURIComponent(s.access_token);
   const get = async path => json(await fetch(`${FB}/${path}${path.includes("?") ? "&" : "?"}access_token=${at}`));
   // Which Instagram account the token covers: try the granted targets, then pages, then the business's accounts.
-  const cands = [];
+  // A system-user token can't list its accounts, so the account id is set once (IG_USER_ID, from Business Suite → Instagram accounts).
+  const cands = env("IG_USER_ID") ? [env("IG_USER_ID")] : [];
   const dbg = await json(await fetch(`${FB}/debug_token?input_token=${at}&access_token=${encodeURIComponent(`${env("IG_APP_ID")}|${env("IG_APP_SECRET")}`)}`));
   for (const g of dbg.data?.granular_scopes || []) if (/^instagram_/.test(g.scope)) cands.push(...(g.target_ids || []));
   const pages = await get("me/accounts?fields=instagram_business_account");
@@ -109,7 +110,6 @@ async function unifiedInstagramToken(req, code) {
     if (m.username) { user_id = m.id || id; me = m; if (/eartheditions/i.test(m.username)) break; }
   }
   if (!user_id) {
-    await setSecret("ig_probe_token", { access_token: s.access_token, at: Date.now() }); // TEMP: to find where the account id lives
     const sc = (dbg.data?.granular_scopes || []).map(g => `${g.scope}${g.target_ids ? `[${g.target_ids.length}]` : ""}`).join(",");
     fail(400, `No Instagram account found on the login (type ${dbg.data?.type || "?"}; scopes ${sc || dbg.data?.scopes?.join(",") || "none"}; pages ${(pages.data || []).length}; businesses ${(biz.data || []).length}; tried ${cands.length}${pages.error ? `; ${pages.error.message}` : ""})`);
   }
@@ -839,26 +839,6 @@ export default async function handler(req, res) {
     }
 
     if (!(await requireUser(req, res))) return;
-
-    // TEMP: read-only Graph GET with the saved Unified-login token, to find the Instagram account id. Remove once connected.
-    if (action === "ig_probe") {
-      const t = await getSecret("ig_probe_token");
-      if (!t?.access_token) fail(400, "no probe token");
-      const path = String(u.searchParams.get("path") || "me");
-      if (!/^[\w/{}.,?=&-]+$/.test(path)) fail(400, "bad path");
-      const host = u.searchParams.get("host") === "ig" ? "https://graph.instagram.com/v21.0" : FB;
-      return res.json(await json(await fetch(`${host}/${path}${path.includes("?") ? "&" : "?"}access_token=${encodeURIComponent(t.access_token)}`)));
-    }
-    if (action === "ig_adopt") {
-      const t = await getSecret("ig_probe_token");
-      const id = String(u.searchParams.get("id") || "");
-      if (!t?.access_token || !/^\d+$/.test(id)) fail(400, "no token or id");
-      const m = await json(await fetch(`${FB}/${id}?fields=id,username&access_token=${encodeURIComponent(t.access_token)}`));
-      if (!m.username) fail(400, m.error?.message || "not an Instagram account");
-      await setSecret("tok_instagram", { access_token: t.access_token, host: FB, user_id: m.id, refreshed_at: Date.now(), name: `@${m.username}` });
-      await setSecret("ig_probe_token", null);
-      return res.json({ ok: true, name: m.username, id: m.id });
-    }
 
     if (action === "auto_get") return res.json({ auto: await autoSettings(), queue: (await appData(QUEUE_KEY)) || [] });
     if (action === "auto_set") {
