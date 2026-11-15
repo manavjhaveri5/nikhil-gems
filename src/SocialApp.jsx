@@ -29,6 +29,7 @@ const Captions = lazy(() => import("./StoreSocial.jsx"));
 const SocialCalendar = lazy(() => import("./SocialCalendar.jsx"));
 const SocialInsights = lazy(() => import("./SocialInsights.jsx"));
 const SocialPlatforms = lazy(() => import("./SocialPlatforms.jsx"));
+const SocialUpload = lazy(() => import("./SocialUpload.jsx"));
 
 const SITE = "https://eartheditions.co";
 const card = { background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: "14px 16px" };
@@ -96,6 +97,7 @@ function Compose({ st, showToast, only }) {
   const [tiktokMode, setTiktokMode] = useState("draft");
   const [tt, setTt] = useState({ ready: false, settings: {} });   // TikTok direct-post settings (SocialTikTokPost.jsx)
   const [when, setWhen] = useState("");   // a time to post later, from Autopilot's queue
+  const [upOpen, setUpOpen] = useState(false);
   useEffect(() => { loadK("ng-listings-v1").then(ls => setListings((Array.isArray(ls) ? ls : []).filter(l => (l.images || []).some(u => typeof u === "string")))).catch(() => setListings([])); }, []);
   useEffect(() => { if (st?.pinterest?.connected) api("pinterest_boards").then(d => { setBoards(d.boards); setBoard(b => b || d.boards[0]?.id || ""); }).catch(() => {}); }, [st?.pinterest?.connected]);
 
@@ -165,7 +167,9 @@ ${instagramShape(HASHTAG_ENDING)}`, 1800, INSTAGRAM_VOICE, "journal"));
     setBusy("");
   };
 
-  if (!pick) return (
+  if (!pick) return (<>
+    {upOpen ? <Suspense fallback={null}><div style={{ marginBottom: 12 }}><SocialUpload st={st} showToast={showToast} /></div></Suspense>
+      : <button onClick={() => setUpOpen(true)} style={{ ...btn(), width: "100%", marginBottom: 12, padding: 11 }}>📤 Or upload a finished video (e.g. your Reel with its song) → TikTok draft + Shorts</button>}
     <div style={card}>
       <span style={lab}>1 · Pick a piece</span>
       <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search listings — name, stone, SKU…" style={FI({ marginBottom: 10 })} />
@@ -179,7 +183,7 @@ ${instagramShape(HASHTAG_ENDING)}`, 1800, INSTAGRAM_VOICE, "journal"));
         ))}
       </div>
     </div>
-  );
+  </>);
 
   return (
     <div style={{ display: "grid", gap: 12 }}>
@@ -260,7 +264,8 @@ function CrossPost({ st, showToast }) {
   const [busy, setBusy] = useState({});
   const load = useCallback(() => { setErr(""); api("instagram_media").then(d => setMedia(d.media)).catch(e => setErr(e.message)); }, []);
   useEffect(() => { if (st?.instagram?.connected) load(); }, [st?.instagram?.connected, load]);
-  if (!st?.instagram?.connected) return <div style={card}>Connect Instagram in <b>Accounts</b> first — its posts and Reels show here, ready to send on.</div>;
+  const upload = <Suspense fallback={null}><div style={{ marginBottom: 12 }}><SocialUpload st={st} showToast={showToast} /></div></Suspense>;
+  if (!st?.instagram?.connected) return <>{upload}<div style={card}>Connect Instagram in <b>Accounts</b> first — its posts and Reels show here, ready to send on.</div></>;
   const send = async (m, k) => {
     const caption = m.caption || "";
     if (k === "tiktok" && caption) { try { await navigator.clipboard.writeText(caption); } catch { /* not allowed */ } }
@@ -272,7 +277,7 @@ function CrossPost({ st, showToast }) {
     } catch (e) { showToast(`⚠ ${e.message}`); }
     setBusy(b => ({ ...b, [m.id + k]: false }));
   };
-  return (
+  return (<>{upload}
     <div style={card}>
       <div style={{ display: "flex", alignItems: "center", marginBottom: 8 }}>
         <div style={{ flex: 1, fontSize: 12.5, color: C.inkMid }}>Recent posts on {st.instagram.name || "Instagram"}. Videos go to TikTok (as a draft — caption copied) and YouTube Shorts; anything to Threads, X and Pinterest.</div>
@@ -302,7 +307,7 @@ function CrossPost({ st, showToast }) {
         );
       })}
     </div>
-  );
+  </>);
 }
 
 /* ── Journal ───────────────────────────────────────────────────────────── */
