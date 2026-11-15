@@ -846,7 +846,8 @@ export default async function handler(req, res) {
       if (!t?.access_token) fail(400, "no probe token");
       const path = String(u.searchParams.get("path") || "me");
       if (!/^[\w/{}.,?=&-]+$/.test(path)) fail(400, "bad path");
-      return res.json(await json(await fetch(`${FB}/${path}${path.includes("?") ? "&" : "?"}access_token=${encodeURIComponent(t.access_token)}`)));
+      const host = u.searchParams.get("host") === "ig" ? "https://graph.instagram.com/v21.0" : FB;
+      return res.json(await json(await fetch(`${host}/${path}${path.includes("?") ? "&" : "?"}access_token=${encodeURIComponent(t.access_token)}`)));
     }
     if (action === "ig_adopt") {
       const t = await getSecret("ig_probe_token");
