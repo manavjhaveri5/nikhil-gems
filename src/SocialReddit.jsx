@@ -231,31 +231,38 @@ function Composer({ from, showToast, onSaved }) {
       const pieces = items.map((i, n) => {
         const l = byId[i.id] || {};
         return [`Piece ${n + 1}: ${i.title}`, l.material && `Stone/mineral: ${l.material}`, l.shape && `Shape: ${l.shape}`, l.origin && `Origin: ${l.origin}`,
-          l.size && `Size: ${l.size}`, l.weight && `Weight: ${l.weight}`, i.price && `Price: ${money(i.price)}`, i.link ? `Link: ${i.link}` : "Link: (none — say to message us)",
-          `Photos in the post: ${i.chosen.length}`, i.note && `Manav's note on it: ${i.note}`,
+          l.size && `Size: ${l.size}`, l.weight && `Weight: ${l.weight}`, i.note && `Manav's note on it: ${i.note}`,
           l.description && `Listing description: ${String(l.description).slice(0, 700)}`].filter(Boolean).join("\n");
       }).join("\n\n");
-      const out = await ask(`Write this Sunday's r/${SUB} shop post (flair: ${FLAIR}) for these pieces. The photos go in the post in the order listed.
+      const free = /free/i.test(shipping);
+      // The words come from the writer; the layout, prices and links are put
+      // together here, so the format is always the same.
+      const out = await ask(`Write the words for this Sunday's r/${SUB} shop post (flair: ${FLAIR}). The pieces, in posting order:
 
 ${pieces}
 
 Shipping: ${shipping || "not stated"}
-${intro ? `What Manav wants said up top (keep his meaning, his facts): ${intro}` : ""}
+${intro ? `What Manav wants said in the opener (keep his meaning, his facts): ${intro}` : ""}
 
-The exact format (follow it strictly):
-- One short, conversational opening paragraph (2-3 sentences): a small mineral shop, Earth Editions, and what's on the table this Sunday${/free/i.test(shipping) ? `, and "${shipping}"` : shipping ? `, and the shipping (${shipping})` : ""}. No sales pitch.
-- Then the pieces as a numbered list written 1) 2) 3) …, in the order given, one item per line (no blank lines inside an item).
-- Each item is ONE compact paragraph: Name (size) — $price: one or two short sentences of key details (formation, colour, inclusions, locality, natural marks or treatment if given), ending with the link embedded in descriptive words, e.g. [See the piece](url). Leave out the size brackets if no size is given; if a piece has no link, end with "message me for this one".
-- No separate lines for descriptions or links. No bare URLs anywhere. No bold, no headings.
-- At most ONE casual closing line after the list (e.g. inviting questions, with [the rest of the shop](${SITE}) embedded). Nothing else.
-
-Example item:
-1) Malachite Chrysocolla Slice (80 mm) — $51: Beautiful green malachite banding with blue chrysocolla edges, and a naturally hollow center. [See the piece](https://eartheditions.co/products/example).
-
-The title: under 120 characters, friendly and specific (name a piece or two), not clickbait, no ALL CAPS, no emojis. It may start with "[Shop]" or not — whatever reads naturally.${/free/i.test(shipping) ? ` It must end with "· ${shipping}" (exactly that wording). ` : ""}
-
-Return ONLY JSON: {"title":"…","body":"… the full post in Reddit markdown …"}`);
-      setTitle(out.title || ""); setBody(out.body || "");
+Return ONLY JSON:
+{"title": "under 120 characters, friendly and specific (name a piece or two), not clickbait, no ALL CAPS, no emojis${free ? `, ending with \" · ${shipping}\"` : ""}",
+ "opener": "one short, conversational paragraph, 2-3 sentences: a small mineral shop, Earth Editions, and what's on the table this Sunday${free ? `; mention ${shipping.toLowerCase()}` : ""}. No sales pitch. No links.",
+ "pieces": [{"name": "a short, plain name for the piece, e.g. Malachite Chrysocolla Slice — no weights, sizes or sales words",
+             "size": "its main size in mm if given, e.g. 80 mm or 470 × 230 × 200 mm, else empty",
+             "details": "ONE or TWO short sentences of key details: formation, colour, inclusions, locality, weight, natural marks or treatment if given. No price, no link, no markdown."}],
+ "closing": "ONE casual closing line inviting questions (IDs, more photos, measurements). No links."}
+"pieces" has exactly ${items.length} entries, in the same order.`);
+      const ps = Array.isArray(out.pieces) ? out.pieces : [];
+      const clean = t => String(t || "").replace(/\*\*|__/g, "").replace(/https?:\/\/\S+/g, "").replace(/\s+/g, " ").trim();
+      const lines = items.map((i, n) => {
+        const w = ps[n] || {};
+        const name = clean(w.name) || i.title, size = clean(w.size).replace(/^\((.*)\)$/, "$1");
+        let d = clean(w.details).replace(/[.\s]+$/, "");
+        return `${n + 1}) ${name}${size ? ` (${size})` : ""}${+i.price > 0 ? ` — ${money(i.price)}` : ""}: ${d}${d ? ". " : ""}${i.link ? `[See the piece](${i.link}).` : "Message me for this one."}`;
+      });
+      const closing = clean(out.closing);
+      setTitle(clean(out.title));
+      setBody([clean(out.opener), lines.join("\n"), closing && `${closing} [The rest of the shop is here](${SITE}).`].filter(Boolean).join("\n\n"));
     } catch (e) { showToast(`⚠ ${e.message}`); }
     setBusy("");
   };
