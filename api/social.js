@@ -299,8 +299,9 @@ async function download(url) {
   return { buf: Buffer.from(await r.arrayBuffer()), type: r.headers.get("content-type") || "" };
 }
 
-// Instagram: one photo, a carousel of up to 10, or a Reel.
-async function postInstagram({ text, images = [], video }) {
+// Instagram: one photo, a carousel of up to 10, a Reel, or a Story (one
+// photo or video, up for 24 hours; the API can't add stickers or text to it).
+async function postInstagram({ text, images = [], video, story = false }) {
   const t = await token("instagram");
   const G = t.host || "https://graph.instagram.com/v21.0";
   const g = async (path, params) => {
@@ -310,7 +311,10 @@ async function postInstagram({ text, images = [], video }) {
   };
   const user = t.user_id || "me";
   let creation;
-  if (video) creation = (await g(`${user}/media`, { media_type: "REELS", video_url: video, caption: text })).id;
+  if (story) {
+    if (!video && !images[0]) fail(400, "A story needs a photo or a video");
+    creation = (await g(`${user}/media`, video ? { media_type: "STORIES", video_url: video } : { media_type: "STORIES", image_url: images[0] })).id;
+  } else if (video) creation = (await g(`${user}/media`, { media_type: "REELS", video_url: video, caption: text })).id;
   else if (images.length > 1) {
     const kids = [];
     for (const u of images.slice(0, 10)) kids.push((await g(`${user}/media`, { image_url: u, is_carousel_item: "true" })).id);
@@ -325,6 +329,7 @@ async function postInstagram({ text, images = [], video }) {
     await wait(5000);
   }
   const pub = await g(`${user}/media_publish`, { creation_id: creation });
+  if (story) return { url: "https://www.instagram.com/stories/eartheditions_/", note: "Story is up for the next 24 hours", id: pub.id };
   const link = await json(await fetch(`${G}/${pub.id}?fields=permalink&access_token=${encodeURIComponent(t.access_token)}`));
   return { url: link.permalink || "" };
 }

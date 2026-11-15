@@ -352,6 +352,31 @@ export default function StoryStudio({ listing: l, sold = false, kind: startKind,
     onShared?.(kind);
     setTimeout(() => URL.revokeObjectURL(a.href), 4000);
   };
+  /* Post now: straight onto @eartheditions_ through Instagram's API, from any
+     device. The photo story is uploaded to the ERP's storage first (Instagram
+     pulls it from a public link); a video story uses the piece's video as it
+     is. The API can't add stickers, so a story with the link sticker still
+     goes through Share. */
+  const [posting, setPosting] = useState("");
+  const postNow = async () => {
+    if (posting || !confirm(`Post this ${media === "video" ? "video" : "photo"} story to Instagram now? It goes up straight away, for 24 hours.`)) return;
+    try {
+      let body;
+      if (media === "video") body = { video };
+      else {
+        setPosting("Uploading…");
+        const f = fileRef.current || await toFile();
+        const { uploadToStorage } = await import("./storageUtils.js");
+        body = { images: [await uploadToStorage(`social-stories/${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}.jpg`, f)] };
+      }
+      setPosting(media === "video" ? "Instagram is processing the video…" : "Posting…");
+      const r = await fetch("/api/social?action=post&p=instagram", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...body, p: "instagram", story: true, source: `story:${l.id}`, title: `${kind === "sold" ? "Sold" : "Just listed"} story · ${name.trim()}` }) });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(d.error || `Failed (${r.status})`);
+      setPosting(""); flash("✓ Story is up on Instagram"); onShared?.(kind);
+    } catch (e) { setPosting(""); flash("⚠ " + (e instanceof TypeError ? "The connection dropped. Check Instagram before trying again" : e.message)); }
+  };
   const copy = async () => { try { await navigator.clipboard.writeText(link); flash("Link copied"); } catch { flash("Couldn't copy — select the link and copy it"); } };
 
   // Drag the photo to reframe it; the story stays full bleed.
@@ -450,11 +475,14 @@ export default function StoryStudio({ listing: l, sold = false, kind: startKind,
             )}
 
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+              <button disabled={!!posting || (media === "video" ? !video : !ready)} onClick={postNow}
+                style={{ ...pill(true), padding: "11px 22px", fontSize: 14, background: C.ink, color: "#FAF0DC", border: "none", opacity: posting || (media === "video" ? !video : !ready) ? .55 : 1 }}>
+                {posting || "📸 Post story now"}</button>
               {media === "video" ? <>
-                <button disabled={!clip} onClick={share} style={{ ...pill(true), padding: "11px 22px", fontSize: 14, opacity: clip ? 1 : .5 }}>{clip ? "Share video to Instagram" : clipErr ? "Video unavailable" : `Getting the video…${clipPct ? ` ${clipPct}%` : ""}`}</button>
+                <button disabled={!clip} onClick={share} style={{ ...pill(false), padding: "11px 22px", fontSize: 14, opacity: clip ? 1 : .5 }}>{clip ? "Share video to Instagram" : clipErr ? "Video unavailable" : `Getting the video…${clipPct ? ` ${clipPct}%` : ""}`}</button>
                 <button disabled={!clip} onClick={() => save().catch(e => flash("⚠ " + e.message))} style={{ ...pill(false), padding: "11px 18px", fontSize: 14, opacity: clip ? 1 : .5 }}>Download</button>
               </> : <>
-                <button disabled={!ready} onClick={share} style={{ ...pill(true), padding: "11px 22px", fontSize: 14, opacity: ready ? 1 : .5 }}>{bmp && !ready ? "Updating…" : "Share to Instagram"}</button>
+                <button disabled={!ready} onClick={share} style={{ ...pill(false), padding: "11px 22px", fontSize: 14, opacity: ready ? 1 : .5 }}>{bmp && !ready ? "Updating…" : "Share to Instagram"}</button>
                 <button disabled={!bmp} onClick={() => save().catch(e => flash("⚠ " + e.message))} style={{ ...pill(false), padding: "11px 18px", fontSize: 14, opacity: bmp ? 1 : .5 }}>Download</button>
               </>}
               {note && <span style={{ fontSize: 12.5, color: C.inkMid }}>{note}</span>}
@@ -466,6 +494,7 @@ export default function StoryStudio({ listing: l, sold = false, kind: startKind,
                 : kind === "listed"
                 ? "Share opens your phone's share sheet: pick Instagram → Story. The link is copied as you share, so add the link sticker, paste, and set it on the dashed box."
                 : "Share opens your phone's share sheet: pick Instagram → Story, and post."}
+              {" "}Post story now puts it straight on @eartheditions_ from here{kind === "listed" ? ", without the link sticker (Instagram doesn't let apps add one)" : ""}.
             </div>
           </div>
         </div>
