@@ -31,6 +31,7 @@ export default function SocialPlatforms({ st, platforms, showToast, onCreate, on
   const [data, setData] = useState({});   // platform → { posts, account, scheduled, note } | { error }
   const [sort, setSort] = useState("new");
   const [busy, setBusy] = useState("");
+  const [open, setOpen] = useState(null);   // { k, post } — the post popup
   const pick = k => { setSel(k); try { localStorage.setItem("ee-social-platform", k); } catch { /* private window */ } };
   const live = useMemo(() => FEEDS.filter(k => st?.[k]?.connected), [st]);
   const load = useCallback(k => {
@@ -42,8 +43,20 @@ export default function SocialPlatforms({ st, platforms, showToast, onCreate, on
   const del = async (k, post) => {
     if (!confirm(`Delete this ${post.type.toLowerCase()} from ${platforms.find(p => p.k === k)?.label}? This can't be undone.`)) return;
     setBusy(post.id);
-    try { await api("remove", k, { id: post.id }); setData(d => ({ ...d, [k]: { ...d[k], posts: d[k].posts.filter(x => x.id !== post.id) } })); showToast("✓ Deleted"); }
+    try { await api("remove", k, { id: post.id }); setData(d => ({ ...d, [k]: { ...d[k], posts: d[k].posts.filter(x => x.id !== post.id) } })); setOpen(null); showToast("✓ Deleted"); }
     catch (e) { showToast(`⚠ ${e.message}`); }
+    setBusy("");
+  };
+  const save = async (k, post, fields) => {
+    setBusy(post.id);
+    try {
+      await api("edit", k, { id: post.id, fields });
+      const upd = x => x.id !== post.id ? x : { ...x, ...(fields.title != null && k === "youtube" ? { text: fields.title } : fields.title != null || fields.description != null ? { text: fields.title || fields.description || x.text } : {}),
+        ...(fields.privacy ? { type: fields.privacy === "public" ? "Short" : `Short · ${fields.privacy}` } : {}), edit: { ...(x.edit || {}), ...fields } };
+      setData(d => ({ ...d, [k]: { ...d[k], posts: d[k].posts.map(upd) } }));
+      setOpen(o => o && { ...o, post: upd(o.post) });
+      showToast("✓ Saved");
+    } catch (e) { showToast(`⚠ ${e.message}`); }
     setBusy("");
   };
   const unschedule = async (k, id) => {
@@ -154,12 +167,12 @@ export default function SocialPlatforms({ st, platforms, showToast, onCreate, on
         <div style={{ display: "grid", gridTemplateColumns: `repeat(auto-fill, minmax(${mob() ? 150 : 180}px, 1fr))`, gap: 10 }}>
           {posts.map(x => (
             <div key={x.id} style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, overflow: "hidden", display: "flex", flexDirection: "column" }}>
-              <a href={x.url} target="_blank" rel="noreferrer" style={{ position: "relative", display: "block" }}>
+              <a href={x.url} onClick={e => { e.preventDefault(); setOpen({ k: p.k, post: x }); }} style={{ position: "relative", display: "block", cursor: "pointer" }}>
                 {x.thumb ? <img src={x.thumb} alt="" style={{ width: "100%", aspectRatio: "4/5", objectFit: "cover", display: "block", background: C.card }} />
                   : <div style={{ width: "100%", aspectRatio: "4/5", background: C.card, display: "grid", placeItems: "center", fontSize: 12, color: C.inkFaint }}>No preview</div>}
                 <span style={{ position: "absolute", top: 6, left: 6, background: "rgba(0,0,0,.6)", color: "#fff", fontSize: 10.5, borderRadius: 6, padding: "2px 6px" }}>{x.type}</span>
               </a>
-              <div style={{ padding: "8px 9px", flex: 1, display: "flex", flexDirection: "column", gap: 5 }}>
+              <div onClick={e => { if (!e.target.closest("a,button")) setOpen({ k: p.k, post: x }); }} style={{ padding: "8px 9px", flex: 1, display: "flex", flexDirection: "column", gap: 5, cursor: "pointer" }}>
                 <div style={{ fontSize: 12, color: C.ink, display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden", minHeight: 30 }}>{x.text || <i style={{ color: C.inkFaint }}>No caption</i>}</div>
                 <div style={{ display: "flex", gap: "2px 9px", flexWrap: "wrap", fontSize: 11.5, color: C.inkMid }}>
                   {Object.entries(x.stats).filter(([, v]) => v != null).map(([k, v]) => <span key={k}><b style={{ color: C.ink }}>{n(v)}</b> {(STAT_LABEL[k] || k).replace(/s$/, v === 1 && k !== "reach" ? "" : "s")}</span>)}
@@ -175,6 +188,71 @@ export default function SocialPlatforms({ st, platforms, showToast, onCreate, on
             </div>))}
         </div>
       </>}
+      {open && <PostPopup k={open.k} post={open.post} platform={p} note={d.deleteNote} busy={busy === open.post.id} onClose={() => setOpen(null)}
+        onSave={f => save(open.k, open.post, f)} onDelete={() => del(open.k, open.post)} showToast={showToast} />}
     </div>
   );
 }
+
+const PRIVACY = [["public", "Public"], ["unlisted", "Unlisted"], ["private", "Private"]];
+function PostPopup({ k, post, platform, note, busy, onClose, onSave, onDelete, showToast }) {
+  const [f, setF] = useState(post.edit || {});
+  useEffect(() => { setF(post.edit || {}); }, [post]);
+  useEffect(() => { const esc = e => e.key === "Escape" && onClose(); window.addEventListener("keydown", esc); return () => window.removeEventListener("keydown", esc); }, [onClose]);
+  const changed = Object.keys(f).some(key => f[key] !== (post.edit || {})[key]);
+  const field = (key, label, rows) => (
+    <label style={{ display: "block", marginBottom: 8 }}>
+      <span style={{ fontSize: 10.5, fontWeight: 800, color: C.inkFaint, textTransform: "uppercase", letterSpacing: .6 }}>{label}</span>
+      {rows ? <textarea value={f[key] ?? ""} rows={rows} onChange={e => setF(o => ({ ...o, [key]: e.target.value }))} style={inp} />
+        : <input value={f[key] ?? ""} onChange={e => setF(o => ({ ...o, [key]: e.target.value }))} style={inp} />}
+    </label>);
+  const editable = k === "youtube" || k === "pinterest";
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 1200, background: "rgba(20,16,10,.55)", display: "flex", alignItems: mob() ? "flex-end" : "center", justifyContent: "center", padding: mob() ? 0 : 20 }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: C.surface, borderRadius: mob() ? "16px 16px 0 0" : 16, width: "100%", maxWidth: 860, maxHeight: mob() ? "92vh" : "88vh", overflow: "auto", display: "flex", flexDirection: mob() ? "column" : "row" }}>
+        <div style={{ flex: mob() ? "none" : "0 0 340px", background: "#111", display: "flex", alignItems: "center", justifyContent: "center", position: "relative" }}>
+          {post.thumb ? <img src={post.thumb} alt="" style={{ width: "100%", maxHeight: mob() ? 300 : "88vh", objectFit: "contain", display: "block" }} /> : <div style={{ color: "#aaa", padding: 40, fontSize: 13 }}>No preview</div>}
+          <a href={post.url} target="_blank" rel="noreferrer" style={{ position: "absolute", bottom: 10, right: 10, background: "rgba(0,0,0,.65)", color: "#fff", fontSize: 12.5, borderRadius: 8, padding: "6px 10px", textDecoration: "none" }}>Open on {platform.label} ↗</a>
+        </div>
+        <div style={{ flex: 1, padding: "16px 18px", minWidth: 0 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+            <span style={{ fontSize: 20 }}>{platform.icon}</span>
+            <div style={{ flex: 1, fontSize: 13, color: C.inkMid }}>{post.type} · {new Date(post.at).toLocaleString(undefined, { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })}</div>
+            <button onClick={onClose} aria-label="Close" style={{ ...btn(), padding: "4px 10px" }}>✕</button>
+          </div>
+          <div style={{ display: "flex", gap: 16, flexWrap: "wrap", margin: "8px 0 14px" }}>
+            {Object.entries(post.stats).filter(([, v]) => v != null).map(([key, v]) => <Stat key={key} label={STAT_LABEL[key] || key} value={v} />)}
+          </div>
+
+          {editable ? <>
+            {field("title", "Title")}
+            {field("description", "Description", 5)}
+            {k === "pinterest" && field("link", "Link")}
+            {k === "youtube" && <label style={{ display: "block", marginBottom: 8 }}>
+              <span style={{ fontSize: 10.5, fontWeight: 800, color: C.inkFaint, textTransform: "uppercase", letterSpacing: .6 }}>Visibility</span>
+              <select value={f.privacy || "public"} onChange={e => setF(o => ({ ...o, privacy: e.target.value }))} style={inp}>{PRIVACY.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select>
+            </label>}
+            <button disabled={!changed || busy} onClick={() => onSave(Object.fromEntries(Object.entries(f).filter(([key, v]) => v !== (post.edit || {})[key])))}
+              style={{ ...btn(C.ink, "#FAF0DC"), width: "100%", padding: 10, opacity: !changed || busy ? .5 : 1 }}>{busy ? "Saving…" : changed ? "Save changes" : "No changes"}</button>
+          </> : <>
+            <div style={{ fontSize: 13.5, lineHeight: 1.55, whiteSpace: "pre-wrap", color: C.ink, background: C.bg, borderRadius: 10, padding: "10px 12px", maxHeight: 260, overflow: "auto" }}>{post.text || <i style={{ color: C.inkFaint }}>No caption</i>}</div>
+            <div style={{ fontSize: 12, color: C.inkFaint, margin: "8px 0" }}>{k === "instagram" ? "Instagram doesn't let apps change a caption — edit it in the app." : k === "tiktok" ? "TikTok doesn't let apps edit videos — change it in the TikTok app." : ""}</div>
+            {post.canComments && <div style={{ display: "flex", gap: 8, marginBottom: 6 }}>
+              <button disabled={busy} onClick={() => onSave({ comments: false })} style={btn()}>Turn comments off</button>
+              <button disabled={busy} onClick={() => onSave({ comments: true })} style={btn()}>Turn comments on</button>
+            </div>}
+          </>}
+
+          <div style={{ display: "flex", gap: 8, marginTop: 14, flexWrap: "wrap", borderTop: `1px solid ${C.border}`, paddingTop: 12 }}>
+            {post.text && <button onClick={() => navigator.clipboard.writeText(post.edit?.description || post.text).then(() => showToast("Copied"))} style={btn()}>Copy caption</button>}
+            <a href={post.url} target="_blank" rel="noreferrer" style={{ ...btn(), textDecoration: "none" }}>Open ↗</a>
+            <span style={{ flex: 1 }} />
+            {post.canDelete ? <button disabled={busy} onClick={onDelete} style={{ ...btn(C.redBg, C.red) }}>Delete</button>
+              : <span style={{ fontSize: 12, color: C.inkFaint, alignSelf: "center" }}>{note || "Delete it in the app"}</span>}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+const inp = { display: "block", width: "100%", boxSizing: "border-box", marginTop: 3, border: `1px solid ${C.border}`, borderRadius: 8, padding: "8px 10px", fontSize: 13.5, fontFamily: "inherit", background: C.bg, color: C.ink, resize: "vertical" };

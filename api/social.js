@@ -530,7 +530,7 @@ async function igFeed() {
   if (d.error) fail(502, `Instagram: ${d.error.message}`);
   const posts = (d.data || []).map(m => ({ id: m.id, url: m.permalink, thumb: m.thumbnail_url || m.media_url || "", text: m.caption || "", at: m.timestamp,
     type: m.media_product_type === "REELS" ? "Reel" : m.media_type === "CAROUSEL_ALBUM" ? "Carousel" : m.media_type === "VIDEO" ? "Video" : "Photo",
-    stats: { likes: num(m.like_count), comments: num(m.comments_count) }, canDelete: false }));
+    stats: { likes: num(m.like_count), comments: num(m.comments_count) }, canDelete: false, canComments: true }));
   // Views, reach, saves and shares need the insights permission; without it the list still shows likes and comments.
   let insights = true;
   await Promise.all(posts.map(async p => {
@@ -566,6 +566,7 @@ async function ytFeed() {
   const v = ids ? await json(await fetch(`https://www.googleapis.com/youtube/v3/videos?part=snippet,statistics,status&id=${ids}`, { headers: H })) : { items: [] };
   return { posts: (v.items || []).map(x => ({ id: x.id, url: `https://youtube.com/shorts/${x.id}`, thumb: x.snippet.thumbnails?.high?.url || x.snippet.thumbnails?.default?.url, text: x.snippet.title, at: x.snippet.publishedAt,
       type: x.status?.privacyStatus && x.status.privacyStatus !== "public" ? `Short · ${x.status.privacyStatus}` : "Short",
+      edit: { title: x.snippet.title, description: x.snippet.description || "", privacy: x.status?.privacyStatus || "public" },
       stats: { views: num(x.statistics.viewCount), likes: num(x.statistics.likeCount), comments: num(x.statistics.commentCount) }, canDelete: true })),
     account: { name: c.snippet.title, followers: num(c.statistics.subscriberCount), posts: num(c.statistics.videoCount), views: num(c.statistics.viewCount), url: c.snippet.customUrl ? `https://youtube.com/${c.snippet.customUrl}` : `https://youtube.com/channel/${c.id}` } };
 }
@@ -577,11 +578,48 @@ async function pinFeed() {
   const a = await json(await fetch("https://api.pinterest.com/v5/user_account", { headers: H }));
   return { posts: (d.items || []).map(p => { const m = p.pin_metrics?.lifetime_metrics || p.pin_metrics?.["90d"] || {};
       return { id: p.id, url: `https://www.pinterest.com/pin/${p.id}/`, thumb: p.media?.images?.["600x"]?.url || p.media?.images?.["400x300"]?.url || "", text: p.title || p.description || "", at: p.created_at, type: "Pin",
+        edit: { title: p.title || "", description: p.description || "", link: p.link || "" },
         stats: { views: num(m.impression), saves: num(m.save), clicks: num(m.outbound_click ?? m.pin_click), comments: num(m.comment) }, canDelete: true }; }),
     account: { name: a.username, followers: num(a.follower_count), posts: num(a.pin_count), views: num(a.monthly_views), url: a.username ? `https://www.pinterest.com/${a.username}/` : "" },
     note: "Trial access: new pins go to Pinterest's sandbox until Standard access is granted." };
 }
 const FEED = { instagram: igFeed, tiktok: ttFeed, youtube: ytFeed, pinterest: pinFeed };
+
+// Change a post where the platform lets apps: YouTube title/description/privacy, Pinterest title/description/link, Instagram comments on/off.
+async function editPost(p, id, f = {}) {
+  if (!/^[\w-]+$/.test(String(id))) fail(400, "Which post?");
+  if (p === "youtube") {
+    const t = await token("youtube");
+    const H = { Authorization: `Bearer ${t.access_token}`, "Content-Type": "application/json" };
+    const v = (await json(await fetch(`https://www.googleapis.com/youtube/v3/videos?part=snippet,status&id=${id}`, { headers: H }))).items?.[0];
+    if (!v) fail(404, "YouTube: video not found");
+    const snippet = { ...v.snippet, title: String(f.title ?? v.snippet.title).slice(0, 100), description: String(f.description ?? v.snippet.description).slice(0, 4900) };
+    delete snippet.thumbnails; delete snippet.localized;
+    const status = { ...v.status, privacyStatus: ["public", "unlisted", "private"].includes(f.privacy) ? f.privacy : v.status.privacyStatus };
+    const r = await fetch("https://www.googleapis.com/youtube/v3/videos?part=snippet,status", { method: "PUT", headers: H, body: JSON.stringify({ id, snippet, status }) });
+    if (r.status === 403) fail(403, "YouTube needs the wider permission to edit — reconnect YouTube in Accounts");
+    if (!r.ok) fail(502, `YouTube: ${(await json(r)).error?.message || r.status}`);
+    return;
+  }
+  if (p === "pinterest") {
+    const t = await token("pinterest");
+    const body = {};
+    if (f.title != null) body.title = String(f.title).slice(0, 100);
+    if (f.description != null) body.description = String(f.description).slice(0, 500);
+    if (f.link != null) body.link = String(f.link);
+    const r = await fetch(`https://api.pinterest.com/v5/pins/${id}`, { method: "PATCH", headers: { Authorization: `Bearer ${t.access_token}`, "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    if (!r.ok) fail(502, `Pinterest: ${(await json(r)).message || r.status}`);
+    return;
+  }
+  if (p === "instagram" && typeof f.comments === "boolean") {
+    const t = await token("instagram");
+    const G = t.host || "https://graph.instagram.com/v21.0";
+    const d = await json(await fetch(`${G}/${id}`, { method: "POST", body: form({ comment_enabled: String(f.comments), access_token: t.access_token }) }));
+    if (d.error) fail(502, `Instagram: ${d.error.message}`);
+    return;
+  }
+  fail(400, `${p} doesn't let apps edit posts — change it in the ${p} app`);
+}
 
 async function removePost(p, id) {
   if (!/^[\w-]+$/.test(String(id))) fail(400, "Which post?");
@@ -1002,6 +1040,10 @@ export default async function handler(req, res) {
       const out = await FEED[p]();
       const queue = ((await appData(QUEUE_KEY)) || []).filter(q => q.platform === p && q.status === "pending");
       return res.json({ ...out, scheduled: queue.map(q => ({ id: q.id, at: q.at, title: q.payload?.title || "", text: q.payload?.text || "", thumb: q.payload?.images?.[0] || "" })) });
+    }
+    if (action === "edit") {
+      await editPost(p, body.id, body.fields || {});
+      return res.json({ ok: true });
     }
     if (action === "remove") {
       await removePost(p, body.id);
