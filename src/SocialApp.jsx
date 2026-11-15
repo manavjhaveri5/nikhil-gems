@@ -28,6 +28,7 @@ const SocialStories = lazy(() => import("./SocialStories.jsx"));
 const Captions = lazy(() => import("./StoreSocial.jsx"));
 const SocialCalendar = lazy(() => import("./SocialCalendar.jsx"));
 const SocialInsights = lazy(() => import("./SocialInsights.jsx"));
+const SocialPlatforms = lazy(() => import("./SocialPlatforms.jsx"));
 
 const SITE = "https://eartheditions.co";
 const card = { background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: "14px 16px" };
@@ -80,7 +81,7 @@ const storeLink = l => {
   const u = s?.storefront_url || s?.url || "";
   return u ? `${u}${u.includes("?") ? "&" : "?"}utm_source=social&utm_medium=social` : "";
 };
-function Compose({ st, showToast }) {
+function Compose({ st, showToast, only }) {
   const [listings, setListings] = useState(null);
   const [q, setQ] = useState("");
   const [pick, setPick] = useState(null);
@@ -105,7 +106,7 @@ function Compose({ st, showToast }) {
   const choose = l => {
     setPick(l); setImgs((l.images || []).filter(u => typeof u === "string").slice(0, 10)); setTxt({}); setRes({});
     setUseVideo(!!l.video);
-    setOn(Object.fromEntries(PLATFORMS.map(p => [p.k, !!st?.[p.k]?.connected && (p.media !== "video" || !!l.video) && (p.k !== "pinterest" || !!storeLink(l))])));
+    setOn(Object.fromEntries(PLATFORMS.map(p => [p.k, (!only || only === p.k) && !!st?.[p.k]?.connected && (p.media !== "video" || !!l.video) && (p.k !== "pinterest" || !!storeLink(l))])));
   };
   const video = useVideo && pick?.video ? pick.video : "";
   const link = pick ? storeLink(pick) : "";
@@ -695,14 +696,16 @@ function Log() {
 
 /* ── the module ────────────────────────────────────────────────────────── */
 export default function SocialApp({ onHome, studio }) {
-  const [tab, setTab] = useState("calendar");
+  const [tab, setTab] = useState("platforms");
+  const [only, setOnly] = useState("");   // Create opened from a platform: that platform ticked
+  const create = k => { setOnly(k || ""); setTab("compose"); };
   const [st, setSt] = useState(null);
   const [toast, setToast] = useState("");
   const showToast = useCallback(m => { setToast(m); setTimeout(() => setToast(""), 4500); }, []);
   const reload = useCallback(() => api("status").then(setSt).catch(e => showToast(`⚠ ${e.message}`)), [showToast]);
   useEffect(() => { reload(); }, [reload]);
   const connected = st ? PLATFORMS.filter(p => st[p.k]?.connected).length : 0;
-  const TABS = [["calendar", "📅", "Calendar"], ["compose", "✍️", "Compose"], ["stories", "📸", "Stories"], ["captions", "💬", "Captions"], ["crosspost", "🔁", "Cross-post"], ["autopilot", "🤖", "Autopilot"], ["insights", "📊", "Insights"], ["journal", "📝", "Journal"], ["community", "👥", "Community"], ["accounts", "🔗", `Accounts${st ? ` · ${connected}/${PLATFORMS.length}` : ""}`], ["log", "🗒", "Log"]];
+  const TABS = [["platforms", "🌐", "Platforms"], ["compose", "✍️", "Create"], ["calendar", "📅", "Calendar"], ["stories", "📸", "Stories"], ["captions", "💬", "Captions"], ["crosspost", "🔁", "Cross-post"], ["autopilot", "🤖", "Autopilot"], ["insights", "📊", "Insights"], ["journal", "📝", "Journal"], ["community", "👥", "Community"], ["accounts", "🔗", `Accounts${st ? ` · ${connected}/${PLATFORMS.length}` : ""}`], ["log", "🗒", "Log"]];
   return (
     <div style={{ minHeight: "100vh", background: C.bg, color: C.ink, fontFamily: "Inter, system-ui, sans-serif" }}>
       {toast && <div style={{ position: "fixed", bottom: 22, left: 16, right: 16, margin: "0 auto", maxWidth: 520, zIndex: 1300, background: C.ink, color: "#fff", padding: "11px 16px", borderRadius: 10, fontSize: 13, textAlign: "center" }}>{toast}</div>}
@@ -716,13 +719,17 @@ export default function SocialApp({ onHome, studio }) {
         </div>
         <div style={{ display: "flex", overflowX: "auto", padding: mob() ? "0 8px" : "0 24px" }}>
           {TABS.map(([k, icon, label]) => (
-            <button key={k} onClick={() => setTab(k)} style={{ display: "flex", gap: 6, alignItems: "center", border: "none", background: "none", cursor: "pointer", fontFamily: "inherit", padding: "11px 12px", fontSize: 13, whiteSpace: "nowrap",
+            <button key={k} onClick={() => { if (k === "compose") setOnly(""); setTab(k); }} style={{ display: "flex", gap: 6, alignItems: "center", border: "none", background: "none", cursor: "pointer", fontFamily: "inherit", padding: "11px 12px", fontSize: 13, whiteSpace: "nowrap",
               fontWeight: tab === k ? 700 : 450, color: tab === k ? C.ink : C.inkMid, borderBottom: `2.5px solid ${tab === k ? C.gold : "transparent"}`, marginBottom: -1 }}>{icon} {label}</button>
           ))}
         </div>
       </div>
       <div style={{ padding: mob() ? 12 : "20px 28px", maxWidth: 980, margin: "0 auto" }}>
-        {tab === "compose" && <Compose st={st} showToast={showToast} />}
+        {tab === "platforms" && <Suspense fallback={<div style={{ color: C.inkFaint, fontSize: 13 }}>Loading…</div>}><SocialPlatforms st={st} platforms={PLATFORMS} showToast={showToast} onCreate={create} onAccounts={() => setTab("accounts")} /></Suspense>}
+        {tab === "compose" && <>
+          {only && <div style={{ fontSize: 12.5, color: C.inkMid, marginBottom: 8 }}>Posting to {PLATFORMS.find(p => p.k === only)?.label} — tick others below to add them. <button onClick={() => setOnly("")} style={{ background: "none", border: "none", color: C.inkMid, textDecoration: "underline", cursor: "pointer", fontFamily: "inherit", fontSize: 12.5 }}>All platforms</button></div>}
+          <Compose key={only || "all"} st={st} showToast={showToast} only={only} />
+        </>}
         {tab === "crosspost" && <CrossPost st={st} showToast={showToast} />}
         {tab === "calendar" && <Suspense fallback={<div style={{ color: C.inkFaint, fontSize: 13 }}>Loading…</div>}><SocialCalendar st={st} showToast={showToast} /></Suspense>}
         {(tab === "stories" || tab === "captions") && <Suspense fallback={<div style={{ color: C.inkFaint, fontSize: 13 }}>Loading…</div>}>

@@ -176,7 +176,7 @@ const P = {
   },
   youtube: {
     keys: ["GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET"],
-    login: (req, state) => `https://accounts.google.com/o/oauth2/v2/auth?client_id=${env("GOOGLE_CLIENT_ID")}&redirect_uri=${encodeURIComponent(redirectUri(req, "youtube"))}&response_type=code&scope=${encodeURIComponent("https://www.googleapis.com/auth/youtube.upload https://www.googleapis.com/auth/youtube.readonly")}&access_type=offline&prompt=consent&state=${state}`,
+    login: (req, state) => `https://accounts.google.com/o/oauth2/v2/auth?client_id=${env("GOOGLE_CLIENT_ID")}&redirect_uri=${encodeURIComponent(redirectUri(req, "youtube"))}&response_type=code&scope=${encodeURIComponent("https://www.googleapis.com/auth/youtube.upload https://www.googleapis.com/auth/youtube.readonly https://www.googleapis.com/auth/youtube")}&access_type=offline&prompt=consent&state=${state}`,
     async token(req, code) {
       const d = await json(await fetch("https://oauth2.googleapis.com/token", { method: "POST", body: form({ client_id: env("GOOGLE_CLIENT_ID"), client_secret: env("GOOGLE_CLIENT_SECRET"), code, grant_type: "authorization_code", redirect_uri: redirectUri(req, "youtube") }) }));
       if (!d.access_token) fail(400, d.error_description || d.error || "no token");
@@ -520,6 +520,87 @@ POST.reddit = postReddit;
 for (const k of Object.keys(POST)) { const send = POST[k]; POST[k] = payload => send(tagPayload(payload, k)); }
 
 /* ── reading: Instagram posts, Reddit threads ────────────────────────────── */
+/* ── per-platform views: recent posts with their numbers, the account's numbers, delete ── */
+// Every platform's posts in one shape: { id, url, thumb, text, at, type, stats: { views, likes, comments, shares, saves, reach }, canDelete }.
+const num = v => v == null || v === "" ? null : Number(v);
+async function igFeed() {
+  const t = await token("instagram");
+  const G = t.host || "https://graph.instagram.com/v21.0", uid = t.host ? t.user_id : "me", at = encodeURIComponent(t.access_token);
+  const d = await json(await fetch(`${G}/${uid}/media?fields=id,caption,media_type,media_product_type,thumbnail_url,media_url,permalink,timestamp,like_count,comments_count&limit=24&access_token=${at}`));
+  if (d.error) fail(502, `Instagram: ${d.error.message}`);
+  const posts = (d.data || []).map(m => ({ id: m.id, url: m.permalink, thumb: m.thumbnail_url || m.media_url || "", text: m.caption || "", at: m.timestamp,
+    type: m.media_product_type === "REELS" ? "Reel" : m.media_type === "CAROUSEL_ALBUM" ? "Carousel" : m.media_type === "VIDEO" ? "Video" : "Photo",
+    stats: { likes: num(m.like_count), comments: num(m.comments_count) }, canDelete: false }));
+  // Views, reach, saves and shares need the insights permission; without it the list still shows likes and comments.
+  let insights = true;
+  await Promise.all(posts.map(async p => {
+    if (!insights) return;
+    const r = await json(await fetch(`${G}/${p.id}/insights?metric=views,reach,saved,shares&access_token=${at}`));
+    if (r.error) { insights = false; return; }
+    for (const m of r.data || []) p.stats[{ saved: "saves" }[m.name] || m.name] = m.values?.[0]?.value ?? m.total_value?.value ?? null;
+  }));
+  const a = await json(await fetch(`${G}/${uid}?fields=username,followers_count,media_count&access_token=${at}`));
+  const account = { name: a.username ? `@${a.username}` : t.name, followers: num(a.followers_count), posts: num(a.media_count), url: a.username ? `https://instagram.com/${a.username}` : "" };
+  if (insights) {
+    const since = Math.floor(Date.now() / 1000) - 28 * 86400, until = Math.floor(Date.now() / 1000);
+    const r = await json(await fetch(`${G}/${uid}/insights?metric=reach,views,accounts_engaged&period=day&metric_type=total_value&since=${since}&until=${until}&access_token=${at}`));
+    for (const m of r.data || []) account[`${m.name}_28d`] = m.total_value?.value ?? null;
+  }
+  return { posts, account, note: insights ? "" : "Views, reach and saves need Instagram's insights permission — reconnect Instagram after it's added.", deleteNote: "Instagram doesn't let apps delete posts — open the post and delete it in the app." };
+}
+async function ttFeed() {
+  const d = await tiktokStats();
+  const u = d.user || {};
+  return { posts: (d.videos || []).map(v => ({ id: v.id, url: v.share_url, thumb: v.cover_image_url, text: v.video_description || v.title || "", at: new Date(v.create_time * 1000).toISOString(), type: "Video",
+      stats: { views: num(v.view_count), likes: num(v.like_count), comments: num(v.comment_count), shares: num(v.share_count) }, canDelete: false })),
+    account: { name: u.username ? `@${u.username}` : u.display_name, followers: num(u.follower_count), posts: num(u.video_count), likes: num(u.likes_count), url: u.profile_deep_link || "" },
+    note: d.missing?.length ? `TikTok numbers need ${d.missing.join(", ")} — reconnect TikTok.` : (d.errors || []).join(" · "), deleteNote: "TikTok doesn't let apps delete videos — delete it in the TikTok app." };
+}
+async function ytFeed() {
+  const t = await token("youtube");
+  const H = { Authorization: `Bearer ${t.access_token}` };
+  const c = (await json(await fetch("https://www.googleapis.com/youtube/v3/channels?part=snippet,statistics,contentDetails&mine=true", { headers: H }))).items?.[0];
+  if (!c) fail(502, "YouTube: this Google account has no channel");
+  const pl = await json(await fetch(`https://www.googleapis.com/youtube/v3/playlistItems?part=contentDetails&maxResults=24&playlistId=${c.contentDetails.relatedPlaylists.uploads}`, { headers: H }));
+  const ids = (pl.items || []).map(i => i.contentDetails.videoId).join(",");
+  const v = ids ? await json(await fetch(`https://www.googleapis.com/youtube/v3/videos?part=snippet,statistics,status&id=${ids}`, { headers: H })) : { items: [] };
+  return { posts: (v.items || []).map(x => ({ id: x.id, url: `https://youtube.com/shorts/${x.id}`, thumb: x.snippet.thumbnails?.high?.url || x.snippet.thumbnails?.default?.url, text: x.snippet.title, at: x.snippet.publishedAt,
+      type: x.status?.privacyStatus && x.status.privacyStatus !== "public" ? `Short · ${x.status.privacyStatus}` : "Short",
+      stats: { views: num(x.statistics.viewCount), likes: num(x.statistics.likeCount), comments: num(x.statistics.commentCount) }, canDelete: true })),
+    account: { name: c.snippet.title, followers: num(c.statistics.subscriberCount), posts: num(c.statistics.videoCount), views: num(c.statistics.viewCount), url: c.snippet.customUrl ? `https://youtube.com/${c.snippet.customUrl}` : `https://youtube.com/channel/${c.id}` } };
+}
+async function pinFeed() {
+  const t = await token("pinterest");
+  const H = { Authorization: `Bearer ${t.access_token}` };
+  const d = await json(await fetch("https://api.pinterest.com/v5/pins?page_size=25&pin_metrics=true", { headers: H }));
+  if (d.code && !d.items) fail(502, `Pinterest: ${d.message}`);
+  const a = await json(await fetch("https://api.pinterest.com/v5/user_account", { headers: H }));
+  return { posts: (d.items || []).map(p => { const m = p.pin_metrics?.lifetime_metrics || p.pin_metrics?.["90d"] || {};
+      return { id: p.id, url: `https://www.pinterest.com/pin/${p.id}/`, thumb: p.media?.images?.["600x"]?.url || p.media?.images?.["400x300"]?.url || "", text: p.title || p.description || "", at: p.created_at, type: "Pin",
+        stats: { views: num(m.impression), saves: num(m.save), clicks: num(m.outbound_click ?? m.pin_click), comments: num(m.comment) }, canDelete: true }; }),
+    account: { name: a.username, followers: num(a.follower_count), posts: num(a.pin_count), views: num(a.monthly_views), url: a.username ? `https://www.pinterest.com/${a.username}/` : "" },
+    note: "Trial access: new pins go to Pinterest's sandbox until Standard access is granted." };
+}
+const FEED = { instagram: igFeed, tiktok: ttFeed, youtube: ytFeed, pinterest: pinFeed };
+
+async function removePost(p, id) {
+  if (!/^[\w-]+$/.test(String(id))) fail(400, "Which post?");
+  if (p === "youtube") {
+    const t = await token("youtube");
+    const r = await fetch(`https://www.googleapis.com/youtube/v3/videos?id=${id}`, { method: "DELETE", headers: { Authorization: `Bearer ${t.access_token}` } });
+    if (r.status === 403) fail(403, "YouTube needs the wider permission to delete — reconnect YouTube in Accounts");
+    if (!r.ok) fail(502, `YouTube: ${(await json(r)).error?.message || r.status}`);
+    return;
+  }
+  if (p === "pinterest") {
+    const t = await token("pinterest");
+    const r = await fetch(`https://api.pinterest.com/v5/pins/${id}`, { method: "DELETE", headers: { Authorization: `Bearer ${t.access_token}` } });
+    if (!r.ok) fail(502, `Pinterest: ${(await json(r)).message || r.status}`);
+    return;
+  }
+  fail(400, `${p} doesn't let apps delete posts — delete it in the ${p} app`);
+}
+
 async function igMedia() {
   const t = await token("instagram");
   const d = await json(await fetch(`${t.host || "https://graph.instagram.com/v21.0"}/${t.host ? t.user_id : "me"}/media?fields=id,caption,media_type,media_url,thumbnail_url,permalink,timestamp,children{media_url,media_type}&limit=30&access_token=${encodeURIComponent(t.access_token)}`));
@@ -914,6 +995,18 @@ export default async function handler(req, res) {
       const t = await token("tiktok");
       const d = await json(await fetch("https://open.tiktokapis.com/v2/post/publish/creator_info/query/", { method: "POST", headers: { Authorization: `Bearer ${t.access_token}`, "Content-Type": "application/json; charset=UTF-8" }, body: "{}" }));
       return res.json({ ...(d.data || {}), scope: t.scope || "", error: d.error?.code !== "ok" ? d.error?.message || d.error?.code : "" });
+    }
+
+    if (action === "feed") {
+      if (!FEED[p]) fail(400, "Which platform?");
+      const out = await FEED[p]();
+      const queue = ((await appData(QUEUE_KEY)) || []).filter(q => q.platform === p && q.status === "pending");
+      return res.json({ ...out, scheduled: queue.map(q => ({ id: q.id, at: q.at, title: q.payload?.title || "", text: q.payload?.text || "", thumb: q.payload?.images?.[0] || "" })) });
+    }
+    if (action === "remove") {
+      await removePost(p, body.id);
+      await addLog({ platform: p, source: "", title: `Deleted ${body.id}`, url: "", note: "deleted from Studio" });
+      return res.json({ ok: true });
     }
 
     if (action === "instagram_media") {
