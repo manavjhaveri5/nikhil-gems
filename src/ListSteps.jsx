@@ -4,7 +4,7 @@
    orders, and each platform's fees are fixed, so there is nothing to set. */
 import { useEffect, useMemo, useState, Fragment } from "react";
 import { C } from "./lmTheme.js";
-import { CHANNELS, linkOf, tradeRefOnly, isEtsyKey } from "./listingChannels.js";
+import { CHANNELS, linkOf, tradeRefOnly, isEtsyKey, statusShort, statusLong } from "./listingChannels.js";
 import { storeSettings, storePriceFor } from "./StoreApp.jsx";
 import { chooseEtsyPublish } from "./etsyQueue.jsx";
 import { recommendCarriers, carrierLabel } from "./shipping.js";
@@ -585,7 +585,7 @@ export default function ListSteps({ form, orders, stock = [], weightKg: weightKg
                     <span style={{ display: "block", fontSize: 12, color: C.inkMid }}>{PLACE[c.key]}</span>
                   </span>
                   {ln.linked && <span style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 6, flex: "none" }}>
-                    <span style={{ fontSize: 11, fontWeight: 800, color: ln.status === "active" ? C.green : ln.status === "expired" ? C.red : C.amber }}>{ln.status === "active" ? "Live" : ln.status === "expired" ? "Expired" : "Draft"}</span>
+                    <span style={{ fontSize: 11, fontWeight: 800, color: ln.status === "active" ? C.green : ln.status === "expired" || ln.status === "missing" ? C.red : C.amber }}>{statusShort(ln.status)}</span>
                     <span style={{ display: "flex", gap: 6 }} onClick={e => e.stopPropagation()}>
                       {(ln.live || ln.admin) && <a href={ln.live || ln.admin} target="_blank" rel="noreferrer"
                         style={{ fontSize: 12, fontWeight: 700, color: C.ink, textDecoration: "none", border: `1px solid ${C.border}`, borderRadius: 7, padding: "4px 9px", background: "#fff" }}>View ↗</a>}
@@ -925,9 +925,9 @@ export default function ListSteps({ form, orders, stock = [], weightKg: weightKg
                         const l = linkOf(form, c.key);
                         if (!l.linked) return null;
                         const isDraft = l.status !== "active";
-                        if (l.status === "expired") return <span style={{ marginLeft: 8, fontSize: 11.5, fontWeight: 800, letterSpacing: ".04em", color: C.red }}>— expired there, publishing renews it</span>;
+                        const red = l.status === "expired" || l.status === "missing";
                         return <span style={{ marginLeft: 8, fontSize: 11.5, fontWeight: 800, letterSpacing: ".04em",
-                          color: isDraft ? C.amber : C.green }}>{isDraft ? "— already a draft there" : "— already live"}</span>;
+                          color: red ? C.red : isDraft ? C.amber : C.green }}>— {statusLong(l.status)}</span>;
                       })()}
                     </span>
                     <span style={{ fontSize: 14, color: /No price/.test(price) ? C.red : C.ink }}>{price}</span>
@@ -950,7 +950,8 @@ export default function ListSteps({ form, orders, stock = [], weightKg: weightKg
                        holding, and said nothing about the draft sitting there. */
                     const expired = !url && ln.linked && ln.status === "expired";
                     const draft = !url && !expired && ln.linked && ln.status !== "deleted";
-                    const draftUrl = draft ? (ln.admin || ln.live || "") : "";
+                    // A piece the site hides or sold has no page there to look at.
+                    const draftUrl = draft && c.key !== "store" ? (ln.admin || ln.live || "") : "";
                     const noPrice = /No price/.test(price);
                     return (
                       <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "0 16px 12px 34px", flexWrap: "wrap" }}>

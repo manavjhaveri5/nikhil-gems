@@ -39,7 +39,7 @@ import RenewalQueue from "./RenewalQueue.jsx";
 import EtsyQueuePanel, { enqueueEtsy, markQueueLive, chooseEtsyPublish, loadQueueSettings, queuesOnEtsy, whenLabel, QUEUE_KEY as ETSY_QUEUE_KEY } from "./etsyQueue.jsx";
 import { eeBestSection } from "../lib/eeSections.js";
 import { sbThumb } from "./photoUrls.js";
-import { CHANNELS, OTHER_CHANNELS, isEtsyKey, channel, titleFor, descFor, titleSource, linkOf, parseRef, connectPatch, readiness, readyScore, locationOf, needsLocation, knownLocations, withLocationLog, tradeRowOf, tradeRefOnly, defaultPieces, tradeTitleFor, nextLocation } from "./listingChannels.js";
+import { CHANNELS, OTHER_CHANNELS, isEtsyKey, channel, titleFor, descFor, titleSource, linkOf, parseRef, connectPatch, readiness, readyScore, locationOf, needsLocation, knownLocations, withLocationLog, tradeRowOf, tradeRefOnly, defaultPieces, tradeTitleFor, nextLocation, statusShort } from "./listingChannels.js";
 const now   = () => new Date().toISOString();
 
 /* ─── storage keys ───────────────────────────────────────────────────────── */
@@ -2362,7 +2362,9 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
   }, [initial?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // What eartheditions.co shows for this listing now: it keeps its own short name.
-  const [storeLive, setStoreLive] = useState(null);
+  // undefined until read; null when the site has no product for it.
+  const [storeLive, setStoreLive] = useState(undefined);
+  const reloadStoreLive = () => { if (initial?.id) loadStoreProduct(initial.id).then(r => setStoreLive(r || null)).catch(() => {}); };
   // The store's rate and discount, to show what the USA $ and India ₹ come to.
   const [storeCfg, setStoreCfg] = useState({});
   useEffect(() => { storeSettings().then(s => setStoreCfg(s || {})).catch(() => {}); }, []);
@@ -2370,7 +2372,10 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
   const sFx = +storeCfg.fx_inr_per_usd || 84, sDisc = storeCfg.etsy_discount_pct ?? 25;
   const autoUsd = +form.price_etsy > 0 ? storePriceFor({ price_etsy: form.price_etsy }, sFx, storeCfg.price_rounding || "whole", sDisc) : 0;
   const autoInr = +form.price_etsy > 0 ? Math.round(+form.price_etsy * (1 - (+sDisc || 0) / 100) / 10) * 10 : 0;
-  useEffect(() => { if (initial?.id) loadStoreProduct(initial.id).then(setStoreLive).catch(() => {}); }, [initial?.id]);
+  useEffect(reloadStoreLive, [initial?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  /* The form as the platforms see it: Earth Editions' status is the site's own,
+     once read, not the note saved when it was published. Display only, never saved. */
+  const siteForm = storeLive === undefined ? form : { ...form, _storeRow: storeLive };
   // Finding the stock a piece came from, by stone, SKU, box or show.
   // Stock sent to a show isn't on the shelf its card still names.
   const stockAway = x => (x.showId || x.showTag) ? 1 : 0;
@@ -2409,6 +2414,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
     }
     const r = await onPublishOne(ensureListingOrderId({ ...withLocationLog(f, initial?.officeLocation, who), tags, _ai: f._ai || null, updated_at: now() }), key, opts);
     setForm(x => ({ ...x, ...patch, id: r.listing.id, listing_order_id: r.listing.listing_order_id, images: r.listing.images, video: r.listing.video, platforms: r.listing.platforms }));
+    if (key === "store") reloadStoreLive();
     return { url: r.url, warning: r.warning || "", queued: r.queued || "" };
   };
   const handleSave = (patch = null, to = null, opts = {}) => {
@@ -2476,13 +2482,13 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
 
   /* Where the piece is on each platform, and what saving will do there. */
   const plan = key => {
-    const ln = linkOf(form, key);
+    const ln = linkOf(siteForm, key);
     if (ln.linked) return { ...ln, action: ln.ref ? "" : "update" };
     return { ...ln, action: publishTo[key] ? "add" : "" };
   };
   const statusChip = key => {
     const pl = plan(key);
-    const st = pl.linked ? (pl.status === "active" ? ["Live", C.green, C.greenBg] : [pl.status === "draft" ? "Draft" : (pl.status || "Linked"), C.amber, C.amberBg])
+    const st = pl.linked ? (pl.status === "active" ? ["Live", C.green, C.greenBg] : [pl.status ? statusShort(pl.status) : "Linked", pl.status === "missing" ? C.red : C.amber, pl.status === "missing" ? C.redBg || C.amberBg : C.amberBg])
       : pl.action === "add" ? ["Adding on save", C.blue, C.blueBg] : ["Not listed", C.inkFaint, C.card];
     return <span style={{ fontSize: 11, fontWeight: 800, color: st[1], background: st[2], borderRadius: 20, padding: "3px 10px", whiteSpace: "nowrap" }}>{st[0]}</span>;
   };
@@ -3685,7 +3691,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
 
       </div>
       {steps && (
-        <ListSteps research={admin} form={{ ...form, tags, _stockCost: stockCost, _lotCost: lotCost, _costPerKg: costPerKg, _tradeUnit: tradeRowOf(tradeFactsMap, form)?.unit || "", _loc: loc }} orders={orders} stock={stock} weightKg={pieceKg} comparables={comparables} rate={liveUsdRate} start={steps} renderWhere={pieceCard} renderPlatform={platformStep} renderLink={renderLink} onUnlink={unlink} onAI={generateAI} aiBusy={generating} onPublishOne={onPublishOne ? publishOneFromSteps : null}
+        <ListSteps research={admin} form={{ ...siteForm, tags, _stockCost: stockCost, _lotCost: lotCost, _costPerKg: costPerKg, _tradeUnit: tradeRowOf(tradeFactsMap, form)?.unit || "", _loc: loc }} orders={orders} stock={stock} weightKg={pieceKg} comparables={comparables} rate={liveUsdRate} start={steps} renderWhere={pieceCard} renderPlatform={platformStep} renderLink={renderLink} onUnlink={unlink} onAI={generateAI} aiBusy={generating} onPublishOne={onPublishOne ? publishOneFromSteps : null}
           onRemove={onUnpublish ? async pkey => {
             await onUnpublish(form, pkey);
             // Our two sites hide it (a draft); the marketplaces end it.

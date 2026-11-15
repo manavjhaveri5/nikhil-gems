@@ -67,8 +67,24 @@ export function linkOf(l, key) {
   // Our own two sites save the public page as `url`; Shopify saves its admin page there.
   else if (key === "trade" || key === "store") { live = pd.storefront_url || pd.url || ""; }
   else { live = pd.storefront_url || ""; admin = pd.url || ""; }
-  return { linked: true, id: String(id), status: pd.status || "active", live, admin, error: pd.error || pd.last_error || "", ref: !!pd.linked_only };
+  /* eartheditions.co keeps its own status, and staff hide or sell pieces
+     there without the listing hearing of it: the note saved at publish said
+     "active" for 135 pieces the site was hiding or had sold (15 Nov 2026).
+     When the caller has read the store's row (`_storeRow`, null = no row),
+     the site's word wins. */
+  let status = pd.status || "active";
+  if (key === "store" && l && "_storeRow" in l) status = l._storeRow ? (l._storeRow.status || "hidden") : "missing";
+  return { linked: true, id: String(id), status, live, admin, error: pd.error || pd.last_error || "", ref: !!pd.linked_only };
 }
+/* A linked piece that isn't on sale, in words. The store's own states first. */
+export const STATUS_WORDS = {
+  hidden:  ["Hidden on the site", "hidden on the site, publishing puts it back on sale"],
+  sold:    ["Sold on the site",   "marked sold on the site, publishing puts it back on sale"],
+  missing: ["Not on the site",    "not on the site any more, publishing adds it again"],
+  expired: ["Expired",            "expired there, publishing renews it"],
+};
+export const statusShort = s => STATUS_WORDS[s]?.[0] || (s === "active" ? "Live" : "Draft");
+export const statusLong = s => STATUS_WORDS[s]?.[1] || (s === "active" ? "already live" : "already a draft there");
 
 /* The trade product for a listing, from loadTradeFacts' map: the one naming
    this listing, else the one the listing is linked to. */
