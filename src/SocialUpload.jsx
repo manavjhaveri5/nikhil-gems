@@ -56,15 +56,20 @@ export default function SocialUpload({ st, showToast }) {
     setTitle((m.caption || "").split("\n")[0].replace(/#\S+/g, "").trim().slice(0, 90));
   };
   const send = async () => {
-    const list = TARGETS.filter(([k]) => on[k] && st?.[k]?.connected);
+    const list = TARGETS.filter(([k]) => on[k] && st?.[k]?.connected && !res[k]?.ok); // never post the same file twice
     if (!url || !list.length) return;
     setBusy(true);
     for (const [k] of list) {
       setRes(r => ({ ...r, [k]: { busy: true } }));
+      const body = { video: url, text, title: title || text.split("\n")[0].slice(0, 90), mode: k === "tiktok" ? "draft" : "", source: "upload" };
       try {
-        const d = await api("post", { p: k, body: { video: url, text, title: title || text.split("\n")[0].slice(0, 90), mode: k === "tiktok" ? "draft" : "", source: "upload" } });
+        // A dropped connection ("Load failed" / "Failed to fetch") is the
+        // browser, not the platform: try once more before showing an error.
+        let d;
+        try { d = await api("post", { p: k, body }); }
+        catch (e) { if (!(e instanceof TypeError)) throw e; setRes(r => ({ ...r, [k]: { busy: true, retry: true } })); d = await api("post", { p: k, body }); }
         setRes(r => ({ ...r, [k]: { ok: true, url: d.url, note: d.note } }));
-      } catch (e) { setRes(r => ({ ...r, [k]: { error: e.message } })); }
+      } catch (e) { setRes(r => ({ ...r, [k]: { error: e instanceof TypeError ? "The connection dropped. Check your internet, then send to this one again" : e.message } })); }
     }
     setBusy(false);
     showToast("Done — see each platform below");
@@ -103,7 +108,7 @@ export default function SocialUpload({ st, showToast }) {
                 {label} <span style={{ fontWeight: 400, fontSize: 12, color: C.inkFaint }}>{ok ? hint : "not connected"}</span>
               </label>
               {r && <div style={{ fontSize: 12.5, marginLeft: 24, color: r.error ? C.red : r.busy ? C.inkMid : C.green }}>
-                {r.busy ? "Sending…" : r.error ? `⚠ ${r.error}` : <>✓ {r.note || (k === "tiktok" ? "Sent to your TikTok drafts" : "Posted")} {r.url && <a href={r.url} target="_blank" rel="noreferrer">View ↗</a>}</>}</div>}
+                {r.busy ? (r.retry ? "Connection dropped, trying again…" : "Sending…") : r.error ? `⚠ ${r.error}` : <>✓ {r.note || (k === "tiktok" ? "Sent to your TikTok drafts" : "Posted")} {r.url && <a href={r.url} target="_blank" rel="noreferrer">View ↗</a>}</>}</div>}
             </div>);
         })}
         <div style={{ fontSize: 11.5, color: C.inkFaint, margin: "6px 0 10px" }}>A song licensed on Instagram can be claimed on YouTube or muted on TikTok — if that happens, the video stays up without it.</div>
