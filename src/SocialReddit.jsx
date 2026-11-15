@@ -21,7 +21,7 @@ const MAX_PIECES = 10;
 const card = { background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: "14px 16px" };
 const btn = (bg = C.surface, fg = C.ink) => ({ background: bg, color: fg, border: bg === C.surface ? `1px solid ${C.border}` : "none", borderRadius: 8, padding: "7px 13px", fontSize: 13, fontWeight: 650, cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap" });
 const lab = { fontSize: 10, fontWeight: 800, color: C.inkFaint, textTransform: "uppercase", letterSpacing: .7, marginBottom: 5, display: "block" };
-const money = v => +v > 0 ? `$${(+v).toFixed(+v % 1 ? 2 : 0)}` : "";
+const money = v => +v > 0 ? `$${(+v).toLocaleString("en-US", { minimumFractionDigits: +v % 1 ? 2 : 0, maximumFractionDigits: 2 })}` : "";
 const dateLine = iso => new Date(iso).toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short", year: "numeric" });
 
 // Today in r/Crystals' clock (US Central).
@@ -30,16 +30,37 @@ const central = () => {
   return { sunday: parts.weekday === "Sunday", weekday: parts.weekday, hour: +parts.hour % 24 };
 };
 
-const VOICE = `You write Earth Editions' Sunday shop post for r/${SUB} on Reddit.
-Earth Editions (${SITE}) is a small shop of natural mineral specimens, crystals and gemstone pieces.
-Sound like a mineral enthusiast who happens to run a shop — never a shop pretending to be an enthusiast:
-- knowledgeable about minerals, never pretentious; enthusiastic about beautiful natural specimens
-- friendly and approachable, a little eccentric in its humour but not whimsical or cutesy
-- transparent about origins, natural variation and any treatment; never invent a fact you weren't given
-- no healing, metaphysical or spiritual claims of our own (the sub is mixed: respect both, claim neither)
-- no hype words ("stunning", "must-have", "elevate", "don't miss"), no hashtags, at most one or two emojis in the whole post
-- it should read like a person talking to fellow collectors, not an advertisement
-Reddit markdown. Links are always embedded in descriptive words — [See the piece](url) — never a bare URL.`;
+/* Manav's own r/Crystals post — the voice and layout every Sunday post follows. */
+const EXAMPLE = `Shop high-quality crystals from our shop! We ship worldwide, duty free.
+
+Hello! We run a lapidary and mineral wholesale business, and here are a few pieces from our current collection.
+
+**1) Black Chalcedony, 26 kg — $1,500:** A massive double sided specimen from Jalgaon, India. Truly a statement piece. [Link](…)
+
+**2) Malachite Chrysocolla Palmstone — $60:** Love the mix of deep greens and bright turquoise on this one. [Link](…)
+
+**3) Afghanite Shivalingam, 60 mm — $120:** Such a nice deep blue. Fun fact: it turns fully yellow under UV! [Link](…)
+
+**4) Flint Sphere, 40 mm — $63:** Really nice earthy brown and grey patterns. Comes from Sandomierz, Poland. [Link](…)
+
+**5) Bi-Color Elbaite Tourmaline — $500:** A little green and pinkish-brown beauty from Zambia that I picked up at the recently concluded Munich Show. [Link](…)
+
+**6) Sonora Sunset Sphere, 48 mm — $205:** That red and turquoise combination is hard to miss. This stone has been super hard to get in 2026, thankfully we found some from a miner in Tucson this year. It only comes from Sonora, Mexico. [Link](…)
+
+**7) Print Stone Sphere, 50 mm — $40:** Almost looks like someone drew on it with a marker lol. [Link](…)
+
+Feel free to message me with any questions. Always happy to chat with fellow collectors!`;
+
+const VOICE = `You write the words for Earth Editions' Sunday shop post on r/${SUB}, in Manav's own voice.
+Earth Editions is his lapidary and mineral business. This is his own post — match its voice exactly:
+
+${EXAMPLE}
+
+What makes it work:
+- Each piece gets ONE or TWO short, casual sentences: the one thing he'd say if you picked it up — what catches the eye, where it's from, a story of where he got it, or one true, well-known fact about the mineral (like afghanite fluorescing under UV). Sometimes just a reaction ("Truly a statement piece.", "lol").
+- Never a spec dump: no weights, no lists of dimensions, no "exact piece shown", no talk of photos or lighting, no "polished/raw form", no grades.
+- Plain, warm, a bit playful. No hype words ("stunning", "must-have", "elevate"), no healing or metaphysical claims, no hashtags, no emojis.
+- Never invent a story, a source or a fact you weren't given; general mineral facts must be true.`;
 
 async function ask(prompt) {
   const res = await fetchWithRetry("/api/claude", { method: "POST", headers: { "Content-Type": "application/json" },
@@ -128,7 +149,7 @@ function PhotoSaver({ photos, showToast }) {
    text editor, markdown (plain text) for its markdown editor and the app. */
 const esc = t => t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 const toHtml = md => md.trim().split(/\n{2,}/).map(par => `<p>${par.split("\n").map(line =>
-  esc(line).replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g, (_, t, u) => `<a href="${u.replace(/"/g, "&quot;")}">${t}</a>`)).join("<br>")}</p>`).join("");
+  esc(line).replace(/\*\*(.+?)\*\*/g, "<b>$1</b>").replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g, (_, t, u) => `<a href="${u.replace(/"/g, "&quot;")}">${t}</a>`)).join("<br>")}</p>`).join("");
 async function copyPost(md) {
   try {
     if (window.ClipboardItem && navigator.clipboard?.write) {
@@ -179,7 +200,7 @@ export default function SocialReddit({ showToast }) {
       </div>
 
       {view === "new"
-        ? <Composer key={reuse?.id || "new"} from={reuse} showToast={showToast} onSaved={async p => { await save(p); setReuse(null); setView("past"); showToast("✓ Saved to past posts"); }} />
+        ? <Composer key={reuse?.id || "new"} from={reuse} past={past} showToast={showToast} onSaved={async p => { await save(p); setReuse(null); setView("past"); showToast("✓ Saved to past posts"); }} />
         : <Past past={past} onOpen={setOpen} />}
 
       {open && <PastPopup post={open} onClose={() => setOpen(null)} showToast={showToast} onDelete={() => remove(open.id)}
@@ -190,7 +211,7 @@ export default function SocialReddit({ showToast }) {
 }
 
 /* ── writing a new post ─────────────────────────────────────────────────── */
-function Composer({ from, showToast, onSaved }) {
+function Composer({ from, past, showToast, onSaved }) {
   const [listings, setListings] = useState(null);
   const [facts, setFacts] = useState({});
   const [q, setQ] = useState("");
@@ -234,35 +255,41 @@ function Composer({ from, showToast, onSaved }) {
           l.size && `Size: ${l.size}`, l.weight && `Weight: ${l.weight}`, i.note && `Manav's note on it: ${i.note}`,
           l.description && `Listing description: ${String(l.description).slice(0, 700)}`].filter(Boolean).join("\n");
       }).join("\n\n");
-      const free = /free/i.test(shipping);
+      // His latest posted Sunday post, as saved here — the freshest example of his voice.
+      const mine = (past || []).filter(x => x.posted_at && x.body).sort((a, b) => Date.parse(b.posted_at) - Date.parse(a.posted_at))[0];
       // The words come from the writer; the layout, prices and links are put
-      // together here, so the format is always the same.
-      const out = await ask(`Write the words for this Sunday's r/${SUB} shop post (flair: ${FLAIR}). The pieces, in posting order:
+      // together here, so the format is always his.
+      const out = await ask(`This Sunday's pieces, in posting order:
 
 ${pieces}
 
 Shipping: ${shipping || "not stated"}
-${intro ? `What Manav wants said in the opener (keep his meaning, his facts): ${intro}` : ""}
+${intro ? `What Manav wants said in the opener (his words — keep them): ${intro}` : ""}
+${mine ? `\nHis most recent Sunday post as he posted it (match this voice too):\n${mine.title}\n\n${mine.body.slice(0, 2500)}\n` : ""}
+Where a piece has "Manav's note", build its line on that note — his facts and his story, in his words, lightly tidied.
 
 Return ONLY JSON:
-{"title": "under 120 characters, friendly and specific (name a piece or two), not clickbait, no ALL CAPS, no emojis${free ? `, ending with \" · ${shipping}\"` : ""}",
- "opener": "one short, conversational paragraph, 2-3 sentences: a small mineral shop, Earth Editions, and what's on the table this Sunday${free ? `; mention ${shipping.toLowerCase()}` : ""}. No sales pitch. No links.",
- "pieces": [{"name": "a short, plain name for the piece, e.g. Malachite Chrysocolla Slice — no weights, sizes or sales words",
-             "size": "its main size in mm if given, e.g. 80 mm or 470 × 230 × 200 mm, else empty",
-             "details": "ONE or TWO short sentences of key details: formation, colour, inclusions, locality, weight, natural marks or treatment if given. No price, no link, no markdown."}],
- "closing": "ONE casual closing line inviting questions (IDs, more photos, measurements). No links."}
+{"title": "a short, plain title in the spirit of \"Shop high-quality crystals from our shop! We ship worldwide, duty free.\" — mention the shipping (${shipping || "worldwide"}); no clickbait, no emojis",
+ "opener": "ONE plain, friendly sentence like \"Hello! We run a lapidary and mineral wholesale business, and here are a few pieces from our current collection.\" — no meta talk like 'no hard sell'",
+ "pieces": [{"name": "short plain name, e.g. Afghanite Shivalingam — no sizes, weights or sales words",
+             "size": "ONE size: the main length or diameter in mm (e.g. 60 mm), or the weight in kg for a big specimen (e.g. 26 kg); empty if not given",
+             "details": "1-2 short casual sentences, as in his post"}],
+ "closing": "ONE casual line like \"Feel free to message me with any questions. Always happy to chat with fellow collectors!\""}
 "pieces" has exactly ${items.length} entries, in the same order.`);
       const ps = Array.isArray(out.pieces) ? out.pieces : [];
-      const clean = t => String(t || "").replace(/\*\*|__/g, "").replace(/https?:\/\/\S+/g, "").replace(/\s+/g, " ").trim();
+      const clean = t => String(t || "").replace(/\*\*|__/g, "").replace(/\[([^\]]*)\]\([^)]*\)/g, "$1").replace(/https?:\/\/\S+/g, "").replace(/\s+/g, " ").trim();
+      // Sizes and weights never sit in the name: the size has its own slot.
+      const noSize = t => t.replace(/[,(]?\s*\b\d+(?:\.\d+)?\s*(?:mm|cm|kg|g)\b\s*\)?/gi, "").replace(/\s{2,}/g, " ").replace(/[\s,–—-]+$/, "").trim();
       const lines = items.map((i, n) => {
         const w = ps[n] || {};
-        const name = clean(w.name) || i.title, size = clean(w.size).replace(/^\((.*)\)$/, "$1");
-        let d = clean(w.details).replace(/[.\s]+$/, "");
-        return `${n + 1}) ${name}${size ? ` (${size})` : ""}${+i.price > 0 ? ` — ${money(i.price)}` : ""}: ${d}${d ? ". " : ""}${i.link ? `[See the piece](${i.link}).` : "Message me for this one."}`;
+        const name = noSize(clean(w.name)) || noSize(i.title);
+        const size = clean(w.size).replace(/^\((.*)\)$/, "$1").split(/[,;]| \(/)[0].trim();
+        const d = clean(w.details);
+        const head = `${n + 1}) ${name}${size ? `, ${size}` : ""}${+i.price > 0 ? ` — ${money(i.price)}` : ""}:`;
+        return `**${head}** ${d}${d && !/[.!?]$/.test(d) ? "." : ""} ${i.link ? `[Link](${i.link})` : "Message me for this one."}`;
       });
-      const closing = clean(out.closing);
       setTitle(clean(out.title));
-      setBody([clean(out.opener), lines.join("\n"), closing && `${closing} [The rest of the shop is here](${SITE}).`].filter(Boolean).join("\n\n"));
+      setBody([clean(out.opener), ...lines, clean(out.closing)].filter(Boolean).join("\n\n"));
     } catch (e) { showToast(`⚠ ${e.message}`); }
     setBusy("");
   };
@@ -315,7 +342,7 @@ Return ONLY JSON:
             <input value={i.price} onChange={e => upd(i.id, { price: e.target.value })} placeholder="Price $" inputMode="decimal" style={FI({ padding: "7px 10px" })} />
             <input value={i.link} onChange={e => upd(i.id, { link: e.target.value })} placeholder="Link (not on eartheditions.co yet)" style={FI({ padding: "7px 10px" })} />
           </div>
-          <input value={i.note} onChange={e => upd(i.id, { note: e.target.value })} placeholder="Anything to say about it? (optional — e.g. 'heavy for its size', 'my favourite this month')" style={FI({ padding: "7px 10px", marginTop: 6 })} />
+          <input value={i.note} onChange={e => upd(i.id, { note: e.target.value })} placeholder="Your line for it (optional) — where you got it, a fun fact, what you love about it" style={FI({ padding: "7px 10px", marginTop: 6 })} />
         </div>))}
       <div style={{ display: "grid", gridTemplateColumns: mob() ? "1fr" : "1fr 2fr", gap: 6, borderTop: `1px solid ${C.border}`, paddingTop: 10 }}>
         <label><span style={lab}>Shipping</span><input value={shipping} onChange={e => setShipping(e.target.value)} style={FI({ padding: "7px 10px" })} /></label>
