@@ -435,13 +435,15 @@ async function pinterestSandbox(_h, pin) {
   let listErr = "";
   const list = async () => { const d = await json(await fetch(`${SB}/boards?page_size=100`, { headers: h })); if (!d.items) listErr = d.message || JSON.stringify(d).slice(0, 160); return d.items || []; };
   let board_id = (await list()).find(b => b.name === NAME)?.id || (await list())[0]?.id;
-  if (!board_id) {
-    const b = await fetch(`${SB}/boards`, { method: "POST", headers: h, body: JSON.stringify({ name: NAME }) });
+  // The sandbox's board list can come back empty even when a board exists, so fall back to a fresh name.
+  for (const name of [NAME, `${NAME} · Studio`, `Studio ${new Date().toISOString().slice(0, 16)}`]) {
+    if (board_id) break;
+    const b = await fetch(`${SB}/boards`, { method: "POST", headers: h, body: JSON.stringify({ name }) });
     const bd = await json(b);
-    if (!b.ok && !/already have a board/i.test(bd.message || "")) fail(502, `Pinterest sandbox: ${bd.message || b.status}`);
-    board_id = bd.id || (await list()).find(b => b.name === NAME)?.id;
-    if (!board_id) fail(502, `Pinterest sandbox: couldn't find or make a board${listErr ? ` (${listErr})` : ""}`);
+    if (bd.id) board_id = bd.id;
+    else if (!/already have a board/i.test(bd.message || "")) fail(502, `Pinterest sandbox: ${bd.message || b.status}`);
   }
+  if (!board_id) fail(502, `Pinterest sandbox: couldn't find or make a board${listErr ? ` (${listErr})` : ""}`);
   const r = await fetch(`${SB}/pins`, { method: "POST", headers: h, body: JSON.stringify({ ...pin, board_id }) });
   const d = await json(r);
   if (!r.ok) fail(502, `Pinterest sandbox: ${d.message || r.status}`);
