@@ -5,7 +5,7 @@
 
    Platforms and what each needs in Vercel (each is optional — a platform
    without its keys shows "set up" in the Accounts tab):
-     instagram  IG_APP_ID, IG_APP_SECRET         Meta app, "Instagram API with Instagram Login"
+     instagram  IG_APP_ID, IG_APP_SECRET (+ IG_CONFIG_ID for Unified login on newer Meta apps)
      threads    THREADS_APP_ID, THREADS_APP_SECRET Meta app, Threads API use case
      tiktok     TIKTOK_CLIENT_KEY, TIKTOK_CLIENT_SECRET  Login Kit + Content Posting API
      youtube    GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET   Google Cloud, YouTube Data API v3
@@ -82,11 +82,34 @@ const redirectUri = (req, p) => CLEAN_CALLBACK.has(p) ? `${site(req)}/api/${p}-c
 /* ── the platforms ───────────────────────────────────────────────────────── */
 // login: how to send someone to the platform's login. token: code → tokens.
 // refresh: an expiring token → a fresh one. who: the account's name.
+// Unified login: code → a business token that doesn't expire; the Instagram account comes from the token's granted targets.
+const FB = "https://graph.facebook.com/v21.0";
+async function unifiedInstagramToken(req, code) {
+  const q = new URLSearchParams({ client_id: env("IG_APP_ID"), client_secret: env("IG_APP_SECRET"), redirect_uri: redirectUri(req, "instagram"), code });
+  const s = await json(await fetch(`${FB}/oauth/access_token?${q}`));
+  if (!s.access_token) fail(400, s.error?.message || "no token");
+  const at = encodeURIComponent(s.access_token);
+  let user_id = "";
+  const dbg = await json(await fetch(`${FB}/debug_token?input_token=${at}&access_token=${encodeURIComponent(`${env("IG_APP_ID")}|${env("IG_APP_SECRET")}`)}`));
+  for (const g of dbg.data?.granular_scopes || []) if (/^instagram_(basic|content_publish)$/.test(g.scope) && g.target_ids?.[0]) { user_id = g.target_ids[0]; break; }
+  if (!user_id) {
+    const pages = await json(await fetch(`${FB}/me/accounts?fields=instagram_business_account&access_token=${at}`));
+    user_id = (pages.data || []).map(x => x.instagram_business_account?.id).find(Boolean) || "";
+  }
+  if (!user_id) fail(400, "No Instagram account was shared with the app — connect again and pick @eartheditions_");
+  const me = await json(await fetch(`${FB}/${user_id}?fields=username&access_token=${at}`));
+  return { access_token: s.access_token, host: FB, user_id, refreshed_at: Date.now(), name: me.username ? `@${me.username}` : "" };
+}
+
 const P = {
   instagram: {
     keys: ["IG_APP_ID", "IG_APP_SECRET"],
-    login: (req, state) => `https://www.instagram.com/oauth/authorize?client_id=${env("IG_APP_ID")}&redirect_uri=${encodeURIComponent(redirectUri(req, "instagram"))}&response_type=code&scope=${encodeURIComponent("instagram_business_basic,instagram_business_content_publish")}&state=${state}`,
+    // New Meta apps get "Unified login" (Facebook Login for Business + a configuration, IG_CONFIG_ID). Older apps use Instagram Login.
+    login: (req, state) => env("IG_CONFIG_ID")
+      ? `https://www.facebook.com/v21.0/dialog/oauth?client_id=${env("IG_APP_ID")}&config_id=${env("IG_CONFIG_ID")}&redirect_uri=${encodeURIComponent(redirectUri(req, "instagram"))}&response_type=code&override_default_response_type=true&state=${state}`
+      : `https://www.instagram.com/oauth/authorize?client_id=${env("IG_APP_ID")}&redirect_uri=${encodeURIComponent(redirectUri(req, "instagram"))}&response_type=code&scope=${encodeURIComponent("instagram_business_basic,instagram_business_content_publish")}&state=${state}`,
     async token(req, code) {
+      if (env("IG_CONFIG_ID")) return unifiedInstagramToken(req, code);
       const s = await json(await fetch("https://api.instagram.com/oauth/access_token", { method: "POST", body: form({ client_id: env("IG_APP_ID"), client_secret: env("IG_APP_SECRET"), grant_type: "authorization_code", redirect_uri: redirectUri(req, "instagram"), code }) }));
       if (!s.access_token) fail(400, s.error_message || "no token");
       const l = await json(await fetch(`https://graph.instagram.com/access_token?grant_type=ig_exchange_token&client_secret=${encodeURIComponent(env("IG_APP_SECRET"))}&access_token=${encodeURIComponent(s.access_token)}`));
@@ -95,7 +118,7 @@ const P = {
       return { access_token, expires_at: Date.now() + (l.expires_in || 3600) * 1000, refreshed_at: Date.now(), user_id: me.user_id || me.id || s.user_id, name: me.username ? `@${me.username}` : "" };
     },
     async refresh(t) {
-      if (Date.now() - (t.refreshed_at || 0) < 864e5) return t;
+      if (t.host || Date.now() - (t.refreshed_at || 0) < 864e5) return t; // Unified-login tokens don't expire.
       const d = await json(await fetch(`https://graph.instagram.com/refresh_access_token?grant_type=ig_refresh_token&access_token=${encodeURIComponent(t.access_token)}`));
       return d.access_token ? { ...t, access_token: d.access_token, expires_at: Date.now() + (d.expires_in || 5184000) * 1000, refreshed_at: Date.now() } : t;
     },
@@ -264,8 +287,9 @@ async function download(url) {
 // Instagram: one photo, a carousel of up to 10, or a Reel.
 async function postInstagram({ text, images = [], video }) {
   const t = await token("instagram");
+  const G = t.host || "https://graph.instagram.com/v21.0";
   const g = async (path, params) => {
-    const d = await json(await fetch(`https://graph.instagram.com/v21.0/${path}`, { method: "POST", body: form({ ...params, access_token: t.access_token }) }));
+    const d = await json(await fetch(`${G}/${path}`, { method: "POST", body: form({ ...params, access_token: t.access_token }) }));
     if (d.error) fail(502, `Instagram: ${d.error.message}`);
     return d;
   };
@@ -280,13 +304,13 @@ async function postInstagram({ text, images = [], video }) {
   else fail(400, "Instagram needs a photo or video");
   // A video is processed before it can go up.
   for (let i = 0; video && i < 40; i++) {
-    const s = await json(await fetch(`https://graph.instagram.com/v21.0/${creation}?fields=status_code&access_token=${encodeURIComponent(t.access_token)}`));
+    const s = await json(await fetch(`${G}/${creation}?fields=status_code&access_token=${encodeURIComponent(t.access_token)}`));
     if (s.status_code === "FINISHED") break;
     if (s.status_code === "ERROR") fail(502, "Instagram couldn't process the video");
     await wait(5000);
   }
   const pub = await g(`${user}/media_publish`, { creation_id: creation });
-  const link = await json(await fetch(`https://graph.instagram.com/v21.0/${pub.id}?fields=permalink&access_token=${encodeURIComponent(t.access_token)}`));
+  const link = await json(await fetch(`${G}/${pub.id}?fields=permalink&access_token=${encodeURIComponent(t.access_token)}`));
   return { url: link.permalink || "" };
 }
 
@@ -477,7 +501,7 @@ for (const k of Object.keys(POST)) { const send = POST[k]; POST[k] = payload => 
 /* ── reading: Instagram posts, Reddit threads ────────────────────────────── */
 async function igMedia() {
   const t = await token("instagram");
-  const d = await json(await fetch(`https://graph.instagram.com/v21.0/me/media?fields=id,caption,media_type,media_url,thumbnail_url,permalink,timestamp,children{media_url,media_type}&limit=30&access_token=${encodeURIComponent(t.access_token)}`));
+  const d = await json(await fetch(`${t.host || "https://graph.instagram.com/v21.0"}/${t.host ? t.user_id : "me"}/media?fields=id,caption,media_type,media_url,thumbnail_url,permalink,timestamp,children{media_url,media_type}&limit=30&access_token=${encodeURIComponent(t.access_token)}`));
   if (d.error) fail(502, `Instagram: ${d.error.message}`);
   return d.data || [];
 }

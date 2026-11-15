@@ -44,7 +44,7 @@ export const PLATFORMS = [
   { k: "x", label: "X", icon: "𝕏", media: "photos or text", limit: 280 },
 ];
 const SETUP = {
-  instagram: ["developers.facebook.com → Create app → Business → add Instagram → \"API setup with Instagram login\". Your Instagram must be a Business or Creator account; add it as a tester.", "IG_APP_ID", "IG_APP_SECRET"],
+  instagram: ["developers.facebook.com → Create app → \"Manage messaging & content on Instagram\" → link the business portfolio → \"API setup with Unified login\" → create a configuration and save the redirect link. Set its Configuration ID as IG_CONFIG_ID.", "IG_APP_ID", "IG_APP_SECRET"],
   threads: ["developers.facebook.com → Create app → use case \"Access the Threads API\". Add your Threads account as a tester.", "THREADS_APP_ID", "THREADS_APP_SECRET"],
   tiktok: ["developers.tiktok.com → Manage apps → Connect an app → add Login Kit, Display API (user.info.profile, user.info.stats, video.list) and Content Posting API (Direct Post on). Add your account as a target user.", "TIKTOK_CLIENT_KEY", "TIKTOK_CLIENT_SECRET"],
   youtube: ["console.cloud.google.com → new project → enable \"YouTube Data API v3\" → OAuth consent screen (External, add yourself as test user) → Credentials → OAuth client ID (Web).", "GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET"],
