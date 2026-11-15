@@ -68,6 +68,8 @@ export default function SocialUpload({ st, showToast }) {
         let d;
         try { d = await api("post", { p: k, body }); }
         catch (e) { if (!(e instanceof TypeError)) throw e; setRes(r => ({ ...r, [k]: { busy: true, retry: true } })); d = await api("post", { p: k, body }); }
+        // TikTok drops the caption on drafts, so it goes to the clipboard to paste in.
+        if (k === "tiktok" && text) navigator.clipboard?.writeText(text).catch(() => {});
         setRes(r => ({ ...r, [k]: { ok: true, url: d.url, note: d.note } }));
       } catch (e) { setRes(r => ({ ...r, [k]: { error: e instanceof TypeError ? "The connection dropped. Check your internet, then send to this one again" : e.message } })); }
     }
@@ -108,7 +110,9 @@ export default function SocialUpload({ st, showToast }) {
                 {label} <span style={{ fontWeight: 400, fontSize: 12, color: C.inkFaint }}>{ok ? hint : "not connected"}</span>
               </label>
               {r && <div style={{ fontSize: 12.5, marginLeft: 24, color: r.error ? C.red : r.busy ? C.inkMid : C.green }}>
-                {r.busy ? (r.retry ? "Connection dropped, trying again…" : "Sending…") : r.error ? `⚠ ${r.error}` : <>✓ {r.note || (k === "tiktok" ? "Sent to your TikTok drafts" : "Posted")} {r.url && <a href={r.url} target="_blank" rel="noreferrer">View ↗</a>}</>}</div>}
+                {r.busy ? (r.retry ? "Connection dropped, trying again…" : "Sending…") : r.error ? `⚠ ${r.error}` : <>✓ {r.note || (k === "tiktok" ? "Sent to your TikTok drafts" : "Posted")} {r.url && <a href={r.url} target="_blank" rel="noreferrer">View ↗</a>}
+                  {k === "tiktok" && text && <><br /><span style={{ color: C.inkMid }}>TikTok doesn't carry the caption on drafts. It's copied: paste it in TikTok.</span>{" "}
+                    <button onClick={() => navigator.clipboard?.writeText(text).then(() => showToast("Caption copied")).catch(() => {})} style={{ ...btn(), padding: "2px 9px", fontSize: 12 }}>Copy again</button></>}</>}</div>}
             </div>);
         })}
         <div style={{ fontSize: 11.5, color: C.inkFaint, margin: "6px 0 10px" }}>A song licensed on Instagram can be claimed on YouTube or muted on TikTok — if that happens, the video stays up without it.</div>
