@@ -39,7 +39,7 @@ Sound like a mineral enthusiast who happens to run a shop — never a shop prete
 - no healing, metaphysical or spiritual claims of our own (the sub is mixed: respect both, claim neither)
 - no hype words ("stunning", "must-have", "elevate", "don't miss"), no hashtags, at most one or two emojis in the whole post
 - it should read like a person talking to fellow collectors, not an advertisement
-Reddit markdown: **bold** for each piece name, plain links written out in full, blank lines between paragraphs.`;
+Reddit markdown. Links are always embedded in descriptive words — [See the piece](url) — never a bare URL.`;
 
 async function ask(prompt) {
   const res = await fetchWithRetry("/api/claude", { method: "POST", headers: { "Content-Type": "application/json" },
@@ -123,6 +123,20 @@ function PhotoSaver({ photos, showToast }) {
       : <button onClick={save} style={btn(C.green, "#fff")}>{canShare(files) ? `✓ Save ${files.length} photos to Photos` : `⬇ Download all ${files.length}`}</button>}
     {ready && canShare(files) && <div style={{ fontSize: 11.5, color: C.inkFaint, marginTop: 5 }}>In the share sheet, tap “Save {files.length} Images”. They're numbered in posting order.</div>}
   </>);
+}
+/* The post on the clipboard twice over: hyperlinks (HTML) for Reddit's rich
+   text editor, markdown (plain text) for its markdown editor and the app. */
+const esc = t => t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+const toHtml = md => md.trim().split(/\n{2,}/).map(par => `<p>${par.split("\n").map(line =>
+  esc(line).replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g, (_, t, u) => `<a href="${u.replace(/"/g, "&quot;")}">${t}</a>`)).join("<br>")}</p>`).join("");
+async function copyPost(md) {
+  try {
+    if (window.ClipboardItem && navigator.clipboard?.write) {
+      await navigator.clipboard.write([new ClipboardItem({ "text/html": new Blob([toHtml(md)], { type: "text/html" }), "text/plain": new Blob([md], { type: "text/plain" }) })]);
+      return;
+    }
+  } catch { /* fall back to plain text */ }
+  await navigator.clipboard.writeText(md);
 }
 const slug = s => String(s || "photo").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 40) || "photo";
 
@@ -228,13 +242,17 @@ ${pieces}
 Shipping: ${shipping || "not stated"}
 ${intro ? `What Manav wants said up top (keep his meaning, his facts): ${intro}` : ""}
 
-Shape of the post:
-1. A short, human opener (2-3 sentences): who we are (a small mineral shop, Earth Editions) and what's on the table this Sunday — no sales pitch.
-2. Each piece in order: **Name** — price — one or two sentences on what makes it worth a look (formation, colour, inclusions, locality, what it's like in hand), honest about natural marks or treatment if given. Then its link on its own line.
-3. One line with the shipping${/free/i.test(shipping) ? ` — "${shipping}" stated plainly` : ""}.
-4. A warm close inviting questions about any piece (IDs, more photos, measurements), and the shop link ${SITE}.
+The exact format (follow it strictly):
+- One short, conversational opening paragraph (2-3 sentences): a small mineral shop, Earth Editions, and what's on the table this Sunday${/free/i.test(shipping) ? `, and "${shipping}"` : shipping ? `, and the shipping (${shipping})` : ""}. No sales pitch.
+- Then the pieces as a numbered list written 1) 2) 3) …, in the order given, one item per line (no blank lines inside an item).
+- Each item is ONE compact paragraph: Name (size) — $price: one or two short sentences of key details (formation, colour, inclusions, locality, natural marks or treatment if given), ending with the link embedded in descriptive words, e.g. [See the piece](url). Leave out the size brackets if no size is given; if a piece has no link, end with "message me for this one".
+- No separate lines for descriptions or links. No bare URLs anywhere. No bold, no headings.
+- At most ONE casual closing line after the list (e.g. inviting questions, with [the rest of the shop](${SITE}) embedded). Nothing else.
 
-The title: under 120 characters, friendly and specific (name a piece or two), not clickbait, no ALL CAPS, no emojis. It may start with "[Shop]" or not — whatever reads naturally.${/free/i.test(shipping) ? ` It must end with "· ${shipping}" (exactly that wording). Also say "${shipping}" once in the opener.` : ""}
+Example item:
+1) Malachite Chrysocolla Slice (80 mm) — $51: Beautiful green malachite banding with blue chrysocolla edges, and a naturally hollow center. [See the piece](https://eartheditions.co/products/example).
+
+The title: under 120 characters, friendly and specific (name a piece or two), not clickbait, no ALL CAPS, no emojis. It may start with "[Shop]" or not — whatever reads naturally.${/free/i.test(shipping) ? ` It must end with "· ${shipping}" (exactly that wording). ` : ""}
 
 Return ONLY JSON: {"title":"…","body":"… the full post in Reddit markdown …"}`);
       setTitle(out.title || ""); setBody(out.body || "");
@@ -311,9 +329,8 @@ Return ONLY JSON: {"title":"…","body":"… the full post in Reddit markdown �
         <div style={{ fontSize: 11, color: title.length > 300 ? C.red : C.inkFaint, textAlign: "right", margin: "2px 0 6px" }}>{title.length}/300</div>
         <textarea value={body} onChange={e => setBody(e.target.value)} rows={14} style={FI({ fontSize: 13, lineHeight: 1.55, resize: "vertical", fontFamily: "ui-monospace, Menlo, monospace" })} />
         <div style={{ display: "flex", gap: 6, marginTop: 6, flexWrap: "wrap" }}>
-          <button onClick={() => copy(body, "Post")} style={btn(C.ink, "#FAF0DC")}>Copy post</button>
-          <button onClick={() => copy(`${title}\n\n${body}`, "Title + post")} style={btn()}>Copy title + post</button>
-        </div>
+          <button onClick={() => copyPost(body).then(() => showToast("✓ Post copied — links stay links")).catch(() => showToast("⚠ Couldn't copy"))} style={btn(C.ink, "#FAF0DC")}>Copy post</button>
+                  </div>
       </> : <div style={{ fontSize: 12.5, color: C.inkFaint }}>Write it once the pieces, photos and prices look right — then edit anything.</div>}
     </div>}
 
@@ -323,7 +340,7 @@ Return ONLY JSON: {"title":"…","body":"… the full post in Reddit markdown �
       <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 10 }}>
         <a href={`https://www.reddit.com/r/${SUB}/submit`} target="_blank" rel="noreferrer" style={{ ...btn(), textDecoration: "none" }}>Open r/{SUB} to post ↗</a>
       </div>
-      <div style={{ fontSize: 12, color: C.inkMid, margin: "10px 0 6px", lineHeight: 1.5 }}>On Reddit: choose <b>Images</b>, upload the photos in this order, paste the title, paste the post as the body (or the first comment if the image post has no body), and set the flair <b>{FLAIR}</b>.</div>
+      <div style={{ fontSize: 12, color: C.inkMid, margin: "10px 0 6px", lineHeight: 1.5 }}>On Reddit: choose <b>Images</b>, upload the photos in this order, paste the title, paste the post as the body — the links come through as links — and set the flair <b>{FLAIR}</b>.</div>
       <input value={url} onChange={e => setUrl(e.target.value)} placeholder="Reddit link of the post (optional — paste once it's up)" style={FI({ padding: "7px 10px", marginBottom: 8 })} />
       <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
         <button disabled={!body || busy === "save"} onClick={() => finish(true)} style={btn(C.ink, "#FAF0DC")}>{busy === "save" ? "Saving…" : "✓ Posted — save it"}</button>
@@ -376,7 +393,7 @@ function PastPopup({ post, onClose, onDelete, onReuse, onSaveUrl, showToast }) {
         </div>
         <div style={{ display: "flex", gap: 6, marginTop: 12, flexWrap: "wrap", borderTop: `1px solid ${C.border}`, paddingTop: 12 }}>
           <button onClick={() => copy(post.title, "Title")} style={btn()}>Copy title</button>
-          <button onClick={() => copy(post.body, "Post")} style={btn()}>Copy post</button>
+          <button onClick={() => copyPost(post.body).then(() => showToast("✓ Post copied"))} style={btn()}>Copy post</button>
           {post.url && <a href={post.url} target="_blank" rel="noreferrer" style={{ ...btn(), textDecoration: "none" }}>Open on Reddit ↗</a>}
           <button onClick={onReuse} style={btn()}>Use as a starting point</button>
           <span style={{ flex: 1 }} />
