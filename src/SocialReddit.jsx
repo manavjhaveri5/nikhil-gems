@@ -126,6 +126,7 @@ function Composer({ from, showToast, onSaved }) {
   const [listings, setListings] = useState(null);
   const [facts, setFacts] = useState({});
   const [q, setQ] = useState("");
+  const [more, setMore] = useState(12);
   const [items, setItems] = useState(() => from?.items || []);   // [{ id, title, images:[all], chosen:[urls], price, link, note }]
   const [shipping, setShipping] = useState(from?.shipping ?? "Free shipping");
   const [intro, setIntro] = useState(from?.intro || "");
@@ -140,8 +141,9 @@ function Composer({ from, showToast, onSaved }) {
   const byId = useMemo(() => Object.fromEntries((listings || []).map(l => [l.id, l])), [listings]);
   const shown = useMemo(() => {
     const w = q.toLowerCase().split(/\s+/).filter(Boolean);
-    return (listings || []).filter(l => w.every(x => `${l.title} ${l.material} ${l.sku}`.toLowerCase().includes(x))).slice(0, 30);
-  }, [listings, q]);
+    return (listings || []).filter(l => w.every(x => `${l.title} ${l.material} ${l.sku}`.toLowerCase().includes(x))).slice(0, more);
+  }, [listings, q, more]);
+  const total = useMemo(() => { const w = q.toLowerCase().split(/\s+/).filter(Boolean); return (listings || []).filter(l => w.every(x => `${l.title} ${l.material} ${l.sku}`.toLowerCase().includes(x))).length; }, [listings, q]);
   const picked = new Set(items.map(i => i.id));
 
   const toggle = l => {
@@ -199,9 +201,9 @@ Return ONLY JSON: {"title":"…","body":"… the full post in Reddit markdown �
   return (<>
     <div style={card}>
       <span style={lab}>1 · Pick the pieces · {items.length} chosen</span>
-      <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search listings — name, stone, SKU…" style={FI({ marginBottom: 10 })} />
+      <input value={q} onChange={e => { setQ(e.target.value); setMore(12); }} placeholder="Search listings — name, stone, SKU…" style={FI({ marginBottom: 10 })} />
       {!listings && <div style={{ color: C.inkFaint, fontSize: 13 }}>Loading…</div>}
-      <div style={{ display: "grid", gridTemplateColumns: `repeat(auto-fill, minmax(${mob() ? 100 : 120}px, 1fr))`, gap: 8, maxHeight: 360, overflowY: "auto" }}>
+      <div style={{ display: "grid", gridTemplateColumns: `repeat(auto-fill, minmax(${mob() ? 100 : 120}px, 1fr))`, gap: 8 }}>
         {shown.map(l => {
           const on = picked.has(l.id), price = facts[l.id]?.price ?? l.price_store;
           return (
@@ -213,6 +215,7 @@ Return ONLY JSON: {"title":"…","body":"… the full post in Reddit markdown �
             </button>);
         })}
       </div>
+      {total > shown.length && <button onClick={() => setMore(m => m + 24)} style={{ ...btn(), width: "100%", marginTop: 10 }}>Show more · {total - shown.length} left</button>}
     </div>
 
     {items.length > 0 && <div style={card}>
