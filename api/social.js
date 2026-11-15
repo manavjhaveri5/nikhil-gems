@@ -89,15 +89,29 @@ async function unifiedInstagramToken(req, code) {
   const s = await json(await fetch(`${FB}/oauth/access_token?${q}`));
   if (!s.access_token) fail(400, s.error?.message || "no token");
   const at = encodeURIComponent(s.access_token);
-  let user_id = "";
+  const get = async path => json(await fetch(`${FB}/${path}${path.includes("?") ? "&" : "?"}access_token=${at}`));
+  // Which Instagram account the token covers: try the granted targets, then pages, then the business's accounts.
+  const cands = [];
   const dbg = await json(await fetch(`${FB}/debug_token?input_token=${at}&access_token=${encodeURIComponent(`${env("IG_APP_ID")}|${env("IG_APP_SECRET")}`)}`));
-  for (const g of dbg.data?.granular_scopes || []) if (/^instagram_(basic|content_publish)$/.test(g.scope) && g.target_ids?.[0]) { user_id = g.target_ids[0]; break; }
-  if (!user_id) {
-    const pages = await json(await fetch(`${FB}/me/accounts?fields=instagram_business_account&access_token=${at}`));
-    user_id = (pages.data || []).map(x => x.instagram_business_account?.id).find(Boolean) || "";
+  for (const g of dbg.data?.granular_scopes || []) if (/^instagram_/.test(g.scope)) cands.push(...(g.target_ids || []));
+  const pages = await get("me/accounts?fields=instagram_business_account");
+  cands.push(...(pages.data || []).map(x => x.instagram_business_account?.id).filter(Boolean));
+  const biz = await get("me/businesses?fields=id");
+  for (const b of biz.data || []) {
+    for (const edge of ["owned_instagram_accounts", "instagram_business_accounts", "client_instagram_assets"]) {
+      const r = await get(`${b.id}/${edge}?fields=id,username`);
+      cands.push(...(r.data || []).map(x => x.id));
+    }
   }
-  if (!user_id) fail(400, "No Instagram account was shared with the app — connect again and pick @eartheditions_");
-  const me = await json(await fetch(`${FB}/${user_id}?fields=username&access_token=${at}`));
+  let user_id = "", me = {};
+  for (const id of [...new Set(cands)]) {
+    const m = await get(`${id}?fields=id,username`);
+    if (m.username) { user_id = m.id || id; me = m; if (/eartheditions/i.test(m.username)) break; }
+  }
+  if (!user_id) {
+    const sc = (dbg.data?.granular_scopes || []).map(g => `${g.scope}${g.target_ids ? `[${g.target_ids.length}]` : ""}`).join(",");
+    fail(400, `No Instagram account found on the login (type ${dbg.data?.type || "?"}; scopes ${sc || dbg.data?.scopes?.join(",") || "none"}; pages ${(pages.data || []).length}; businesses ${(biz.data || []).length}; tried ${cands.length}${pages.error ? `; ${pages.error.message}` : ""})`);
+  }
   return { access_token: s.access_token, host: FB, user_id, refreshed_at: Date.now(), name: me.username ? `@${me.username}` : "" };
 }
 
