@@ -432,14 +432,15 @@ async function pinterestSandbox(_h, pin) {
   if (!env("PINTEREST_SANDBOX_TOKEN")) fail(502, "Pinterest is on Trial access, which can't create live pins. Add a sandbox token (PINTEREST_SANDBOX_TOKEN) to test, or wait for Standard access");
   const h = { Authorization: `Bearer ${env("PINTEREST_SANDBOX_TOKEN")}`, "Content-Type": "application/json" };
   const NAME = "Natural Crystals & Minerals";
-  const list = async () => (await json(await fetch(`${SB}/boards?page_size=100&privacy=ALL`, { headers: h }))).items || [];
+  let listErr = "";
+  const list = async () => { const d = await json(await fetch(`${SB}/boards?page_size=100`, { headers: h })); if (!d.items) listErr = d.message || JSON.stringify(d).slice(0, 160); return d.items || []; };
   let board_id = (await list()).find(b => b.name === NAME)?.id || (await list())[0]?.id;
   if (!board_id) {
     const b = await fetch(`${SB}/boards`, { method: "POST", headers: h, body: JSON.stringify({ name: NAME }) });
     const bd = await json(b);
     if (!b.ok && !/already have a board/i.test(bd.message || "")) fail(502, `Pinterest sandbox: ${bd.message || b.status}`);
     board_id = bd.id || (await list()).find(b => b.name === NAME)?.id;
-    if (!board_id) fail(502, "Pinterest sandbox: couldn't find or make a board");
+    if (!board_id) fail(502, `Pinterest sandbox: couldn't find or make a board${listErr ? ` (${listErr})` : ""}`);
   }
   const r = await fetch(`${SB}/pins`, { method: "POST", headers: h, body: JSON.stringify({ ...pin, board_id }) });
   const d = await json(r);
