@@ -27,6 +27,28 @@ const lab = { fontSize: 9.5, fontWeight: 700, color: C.inkFaint, textTransform: 
 const usd = (n, cur = "usd") => new Intl.NumberFormat(cur === "inr" ? "en-IN" : "en-US", { style: "currency", currency: String(cur || "usd").toUpperCase(), maximumFractionDigits: cur === "inr" ? 0 : 2 }).format(+n || 0);
 const fmtDate = v => v ? new Date(v).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" }) : "—";
 const q = async p => { const { data, error } = await p; if (error) throw new Error(error.message); return data; };
+
+/* The site caches its pages for 10 minutes and doesn't watch the database, so
+   a piece put back on sale kept its "not found" page that long. After any
+   change here the site is told which pages to rebuild (eartheditions.co
+   /api/revalidate, checked against this sign-in). Gathered for a moment so a
+   bulk sync sends one call, and never in the way of the publish itself. */
+const refreshQueue = new Set(); let refreshTimer = null;
+export function refreshSitePages(...handles) {
+  handles.flat().filter(Boolean).forEach(h => refreshQueue.add(String(h)));
+  clearTimeout(refreshTimer);
+  refreshTimer = setTimeout(async () => {
+    const all = [...refreshQueue]; refreshQueue.clear();
+    try {
+      const { data } = await supabase.auth.getSession();
+      const token = data?.session?.access_token;
+      if (!token) return;
+      for (let i = 0; i < Math.max(all.length, 1); i += 50)
+        await fetch("https://eartheditions.co/api/revalidate", { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${token}` }, body: JSON.stringify({ handles: all.slice(i, i + 50) }) });
+    } catch { /* the cache runs out on its own in 10 minutes */ }
+  }, 1500);
+}
+const handleOf = async id => (await q(supabase.from("store_products").select("handle").eq("id", id).maybeSingle()))?.handle;
 const LIST_KEY = "ng-listings-v1";
 
 /* ── listing → store product ────────────────────────────────────────────── */
@@ -188,6 +210,7 @@ export async function publishListingToStore(listing, { syncOnly = false, overrid
     await q(supabase.from("store_products").upsert(plain, { onConflict: "id" }));
     row = { ...row, _noVariants: true };
   }
+  refreshSitePages(row.handle, existing?.handle);
   const base = String(s.site_url || "https://eartheditions.co").replace(/\/+$/, "");
   return { product_id: id, url: `${base}/products/${row.handle}`, status: row.status === "active" ? "active" : "draft",
     ...(row._noVariants && row.variants?.length ? { warning: "Its sizes/options didn't go up yet — the store's database needs its update (supabase migration store_variants)." } : {}) };
@@ -229,10 +252,12 @@ export async function linkStoreProduct(productId, listingId) {
 export async function markStoreSold(productId) {
   if (!productId) throw new Error("Not on the store");
   await q(supabase.from("store_products").update({ status: "sold", sold_at: new Date().toISOString(), updated_at: new Date().toISOString() }).eq("id", productId));
+  handleOf(productId).then(h => refreshSitePages(h)).catch(() => {});
 }
 export async function hideStoreProduct(productId) {
   if (!productId) throw new Error("Not on the store");
   await q(supabase.from("store_products").update({ status: "hidden", updated_at: new Date().toISOString() }).eq("id", productId).neq("status", "sold"));
+  handleOf(productId).then(h => refreshSitePages(h)).catch(() => {});
 }
 
 /* ── the app ────────────────────────────────────────────────────────────── */
@@ -410,12 +435,13 @@ export function StoreProductsPanel({ showToast, settings: given, site: givenSite
       if (manual.length) patch.source = { ...(cur?.source || {}), manual: [...new Set([...(cur?.source?.manual || []), ...manual])] };
       const row = await q(supabase.from("store_products").update(patch).eq("id", id).select().single());
       setRows(r => r.map(x => x.id === id ? row : x));
+      refreshSitePages(row?.handle, cur?.handle);
       return row;
     } catch (e) { toast("⚠ " + (/store_products_handle_key|duplicate key/.test(e.message) ? "Another product already uses that web address" : e.message)); throw e; }
   };
   const del = async p => {
     if (!window.confirm(`Delete "${p.title}" from the store completely? (Hide keeps it for later.)`)) return false;
-    try { await q(supabase.from("store_products").delete().eq("id", p.id)); setRows(r => r.filter(x => x.id !== p.id)); toast("Deleted from the store"); return true; }
+    try { await q(supabase.from("store_products").delete().eq("id", p.id)); refreshSitePages(p.handle); setRows(r => r.filter(x => x.id !== p.id)); toast("Deleted from the store"); return true; }
     catch (e) { toast("⚠ " + e.message); return false; }
   };
   const words = search.toLowerCase().split(/\s+/).filter(Boolean);
@@ -680,6 +706,7 @@ function ImportFromListings({ settings, existing, onClose, onDone }) {
     setBusy(`Adding ${rows.length}…`);
     try {
       for (let i = 0; i < rows.length; i += 100) await q(supabase.from("store_products").upsert(rows.slice(i, i + 100), { onConflict: "id" }));
+      refreshSitePages(rows.map(r => r.handle));
       onDone(rows.length);
     } catch (e) { setBusy(""); alert(e.message); }
   };
