@@ -414,7 +414,17 @@ async function postYouTube({ title, text, video }) {
 }
 
 // Pinterest: a pin with a link back to the piece, on the board chosen (or the first).
-async function postPinterest({ title, text, images = [], link, board }) {
+// A multi-photo pin needs every photo the same shape; when they aren't, the
+// pin goes up with the first photo alone rather than failing.
+async function postPinterest(args) {
+  try { return await postPinterestOnce(args); }
+  catch (e) {
+    if (!(args.images?.length > 1) || !/width\/height|ratio/i.test(e.message || "")) throw e;
+    const out = await postPinterestOnce({ ...args, images: args.images.slice(0, 1) });
+    return { ...out, note: [out.note, "Posted with the first photo only: the photos are different shapes, and Pinterest needs them all the same for a multi-photo pin"].filter(Boolean).join(". ") };
+  }
+}
+async function postPinterestOnce({ title, text, images = [], link, board }) {
   if (!images[0]) fail(400, "Pinterest needs a photo");
   const t = await token("pinterest");
   const h = { Authorization: `Bearer ${t.access_token}`, "Content-Type": "application/json" };
