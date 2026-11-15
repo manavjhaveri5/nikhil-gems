@@ -522,7 +522,7 @@ for (const k of Object.keys(POST)) { const send = POST[k]; POST[k] = payload => 
 /* ── reading: Instagram posts, Reddit threads ────────────────────────────── */
 /* ── per-platform views: recent posts with their numbers, the account's numbers, delete ── */
 // Every platform's posts in one shape: { id, url, thumb, text, at, type, stats: { views, likes, comments, shares, saves, reach }, canDelete }.
-const num = v => v == null || v === "" ? null : Number(v);
+const num = v => v == null || v === "" || Number(v) < 0 ? null : Number(v);
 async function igFeed() {
   const t = await token("instagram");
   const G = t.host || "https://graph.instagram.com/v21.0", uid = t.host ? t.user_id : "me", at = encodeURIComponent(t.access_token);
