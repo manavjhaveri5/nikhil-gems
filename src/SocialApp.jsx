@@ -55,7 +55,7 @@ const LIMITS = {
   instagram: "", threads: "",
   tiktok: "Until TikTok reviews the app, \"Post now\" only works while the TikTok account itself is private — drafts work fully (you post from the TikTok app). Autopilot and Cross-post only ever send TikTok drafts.",
   youtube: "Uploads go out public. Google hasn't verified the app yet, so it could start making uploads private; if that happens, publish them from YouTube Studio.",
-  pinterest: "Trial access: pins are visible only to you. Standard access (an application to Pinterest) makes them public.",
+  pinterest: "Trial access can't create pins at all. Pinterest has to grant Standard access (an application to Pinterest) before posting works.",
   x: "Free plan: about 500 posts a month.",
 };
 
