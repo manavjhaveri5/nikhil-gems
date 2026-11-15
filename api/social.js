@@ -377,12 +377,30 @@ async function postPinterest({ title, text, images = [], link, board }) {
   let board_id = board;
   if (!board_id) board_id = (await json(await fetch("https://api.pinterest.com/v5/boards?page_size=1", { headers: h }))).items?.[0]?.id;
   if (!board_id) fail(400, "Make a board on Pinterest first");
-  const r = await fetch("https://api.pinterest.com/v5/pins", { method: "POST", headers: h, body: JSON.stringify({
-    board_id, title: String(title || "").slice(0, 100), description: String(text || "").slice(0, 500), link: link || undefined,
-    media_source: images.length > 1 ? { source_type: "multiple_image_urls", items: images.slice(0, 5).map(url => ({ url })) } : { source_type: "image_url", url: images[0] } }) });
+  const body = id => ({
+    board_id: id, title: String(title || "").slice(0, 100), description: String(text || "").slice(0, 500), link: link || undefined,
+    media_source: images.length > 1 ? { source_type: "multiple_image_urls", items: images.slice(0, 5).map(url => ({ url })) } : { source_type: "image_url", url: images[0] } });
+  const r = await fetch("https://api.pinterest.com/v5/pins", { method: "POST", headers: h, body: JSON.stringify(body(board_id)) });
   const d = await json(r);
+  if (!r.ok && /Trial access/i.test(d.message || "")) return pinterestSandbox(h, body(board_id));
   if (!r.ok) fail(502, `Pinterest: ${d.message || r.status}`);
   return { url: d.id ? `https://www.pinterest.com/pin/${d.id}/` : "" };
+}
+
+// Trial-access apps may only create pins in Pinterest's sandbox. Used until Standard access is granted; the pin is NOT live.
+async function pinterestSandbox(h, pin) {
+  const SB = "https://api-sandbox.pinterest.com/v5";
+  let board_id = (await json(await fetch(`${SB}/boards?page_size=1`, { headers: h }))).items?.[0]?.id;
+  if (!board_id) {
+    const b = await fetch(`${SB}/boards`, { method: "POST", headers: h, body: JSON.stringify({ name: "Natural Crystals & Minerals" }) });
+    const bd = await json(b);
+    if (!b.ok) fail(502, `Pinterest sandbox: ${bd.message || b.status}`);
+    board_id = bd.id;
+  }
+  const r = await fetch(`${SB}/pins`, { method: "POST", headers: h, body: JSON.stringify({ ...pin, board_id }) });
+  const d = await json(r);
+  if (!r.ok) fail(502, `Pinterest sandbox: ${d.message || r.status}`);
+  return { url: "", note: `Sandbox pin ${d.id || ""} created. Not live on Pinterest until Standard access is granted` };
 }
 
 // X: text with up to four photos (free tier).
