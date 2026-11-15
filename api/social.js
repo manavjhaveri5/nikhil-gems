@@ -9,7 +9,7 @@
      threads    THREADS_APP_ID, THREADS_APP_SECRET Meta app, Threads API use case
      tiktok     TIKTOK_CLIENT_KEY, TIKTOK_CLIENT_SECRET  Login Kit + Content Posting API
      youtube    GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET   Google Cloud, YouTube Data API v3
-     pinterest  PINTEREST_APP_ID, PINTEREST_APP_SECRET
+     pinterest  PINTEREST_APP_ID, PINTEREST_APP_SECRET (+ PINTEREST_SANDBOX_TOKEN while on Trial access)
      x          X_CLIENT_ID, X_CLIENT_SECRET     X developer app, OAuth 2.0 (free tier)
      reddit     REDDIT_CLIENT_ID, REDDIT_CLIENT_SECRET   read-only, to find threads
      journal    GITHUB_BLOG_TOKEN                fine-grained token, contents:write on earth-store
@@ -388,8 +388,10 @@ async function postPinterest({ title, text, images = [], link, board }) {
 }
 
 // Trial-access apps may only create pins in Pinterest's sandbox. Used until Standard access is granted; the pin is NOT live.
-async function pinterestSandbox(h, pin) {
+async function pinterestSandbox(_h, pin) {
   const SB = "https://api-sandbox.pinterest.com/v5";
+  if (!env("PINTEREST_SANDBOX_TOKEN")) fail(502, "Pinterest is on Trial access, which can't create live pins. Add a sandbox token (PINTEREST_SANDBOX_TOKEN) to test, or wait for Standard access");
+  const h = { Authorization: `Bearer ${env("PINTEREST_SANDBOX_TOKEN")}`, "Content-Type": "application/json" };
   let board_id = (await json(await fetch(`${SB}/boards?page_size=1`, { headers: h }))).items?.[0]?.id;
   if (!board_id) {
     const b = await fetch(`${SB}/boards`, { method: "POST", headers: h, body: JSON.stringify({ name: "Natural Crystals & Minerals" }) });
