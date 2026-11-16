@@ -694,10 +694,13 @@ async function etsyHandler(req, res) {
       if (!token) return res.status(401).json({ error: "OAuth token required", fix: "Visit /api/etsy-auth?action=start" });
       const id = String(req.query.listing_id || "").replace(/\D/g, "");
       if (!id) return res.status(400).json({ error: "listing_id required" });
+      // A listing deleted on Etsy (by hand, or by Etsy) leaves the expired list
+      // for good, but a queue read before then still shows it: say so by name,
+      // so the queue can drop it and offer to list the piece as new.
       const { getJson } = etsyQueue(authHeaders);
-      const d = await getJson(`https://openapi.etsy.com/v3/application/listings/batch?listing_ids=${id}&includes=Images`);
-      const listing = (d.results || [])[0];
-      if (!listing) return res.status(404).json({ error: "Etsy has no listing with that id" });
+      const { results } = await batchListings(getJson, [id]);
+      const listing = results[0];
+      if (!listing) return res.status(404).json({ ok: false, gone: true, listing_id: id, error: "Etsy no longer has this listing — it was deleted on Etsy, so it can't be renewed" });
       return res.json({ ok: true, listing });
     }
 
@@ -1458,11 +1461,35 @@ async function ledgerWindow({ getJson, allPages }, sid, k, nowS) {
   return { k, from, to, final: to < nowS - 7 * 86400, fees, tx, rc, sales, titles, ads: r2(ads), ...(unplaced ? { unplaced: r2(unplaced) } : {}) };
 }
 
+/* Up to 100 listings in one call, and the ids Etsy no longer has. Etsy's
+   batch read leaves a deleted listing out when others in the call exist, but
+   answers 404 ("Not all requested listings exist. Missing listing_ids: …")
+   when none do — so a missing id comes back named, never as an error, and the
+   rest are read again without the ones it named. */
+async function batchListings(getJson, ids, includes = "Images") {
+  ids = [...new Set(ids.map(String))].slice(0, 100);
+  if (!ids.length) return { results: [], missing: [] };
+  try {
+    const d = await getJson(`https://openapi.etsy.com/v3/application/listings/batch?listing_ids=${ids.join(",")}${includes ? `&includes=${includes}` : ""}`);
+    const results = d.results || [];
+    const have = new Set(results.map(l => String(l.listing_id)));
+    return { results, missing: ids.filter(id => !have.has(id)) };
+  } catch (e) {
+    if (e.status !== 404) throw e;
+    const named = (String(e.message).match(/Missing listing_ids:\s*([\d,\s]+)/) || [])[1] || "";
+    const gone = new Set(named.split(",").map(x => x.trim()).filter(x => ids.includes(x)));
+    const rest = ids.filter(id => !gone.has(id));
+    if (!gone.size || !rest.length) return { results: [], missing: ids };
+    const again = await batchListings(getJson, rest, includes);
+    return { results: again.results, missing: [...gone, ...again.missing] };
+  }
+}
+
 // Picture, title, price and state for up to 100 listings, in one call.
 async function briefListings({ getJson }, ids) {
   if (!ids.length) return [];
-  const d = await getJson(`https://openapi.etsy.com/v3/application/listings/batch?listing_ids=${ids.slice(0, 100).join(",")}&includes=Images`);
-  return (d.results || []).map(l => {
+  const { results } = await batchListings(getJson, ids.slice(0, 100));
+  return results.map(l => {
     const img = [...(l.images || [])].sort((a, b) => (a.rank || 0) - (b.rank || 0))[0];
     return { id: String(l.listing_id), title: String(l.title || "").slice(0, 120), state: l.state || "",
       img: img ? img.url_170x135 || img.url_75x75 || img.url_570xN || "" : "",

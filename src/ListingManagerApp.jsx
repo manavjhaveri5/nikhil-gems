@@ -10656,14 +10656,41 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
      saved until the steps save it. */
   // mode "edit" opens the piece itself; otherwise the listing steps, where it can
   // also go to EarthEditions, eBay, the store or trade.
+  /* Etsy is asked first even when the ERP has the piece: the queue can be half
+     an hour old, and a listing deleted on Etsy since (Sir's own clean-up, or
+     Etsy's) can't be renewed. That one opens as a new listing instead — from
+     the ERP's copy, else from what the queue holds — and the answer says
+     { gone: true } so the queue drops the row. */
   const renewFromQueue = async (row, mode = "where") => {
     const status = row.state === "expired" ? "expired" : "active";
     let base = listings.find(l => String(l.platforms?.etsy?.listing_id || "") === row.id);
-    if (!base) {
+    let d = {}, r = null;
+    try {
       const tok = await getEtsyToken();
-      const r = await fetch(`/api/etsy?action=renewal_listing&listing_id=${row.id}&_=${Date.now()}`, { headers: tok ? { "X-Etsy-Token": tok } : {}, cache: "no-store" });
-      const d = await r.json().catch(() => ({}));
-      if (!r.ok || !d.ok) throw new Error(d.error || `Etsy didn't answer (${r.status})`);
+      r = await fetch(`/api/etsy?action=renewal_listing&listing_id=${row.id}&_=${Date.now()}`, { headers: tok ? { "X-Etsy-Token": tok } : {}, cache: "no-store" });
+      d = await r.json().catch(() => ({}));
+    } catch (e) { if (!base) throw e; }
+    if (d.gone) {
+      const fromRow = () => listingFromEtsy({
+        title: row.title, quantity: row.qty, skus: row.sku ? [row.sku] : [],
+        price: +row.price > 0 ? { amount: Math.round(+row.price * 100), divisor: 100, currency_code: row.cur } : null,
+        images: row.img ? [{ url_fullxfull: row.img.replace(/\/il_\d+x\d+\./, "/il_fullxfull."), rank: 1 }] : [],
+      }, stock);
+      const fresh = base ? { ...base } : fromRow();
+      const listing = {
+        ...fresh,
+        // No Etsy id: publishing makes a new Etsy listing rather than renewing a dead one.
+        platforms: { ...(fresh.platforms || {}), etsy: {} },
+        ...(+row.price > 0 && !(+fresh.price_etsy > 0) ? { price_etsy: String(Math.round(+row.price)) } : {}),
+      };
+      setEditing(listing); setFormSteps(base ? (mode === "edit" ? null : "where") : null); setShowForm(true);
+      showToast(base
+        ? "Etsy deleted this listing, so it can't be renewed — opened the ERP's copy to list it as new on Etsy"
+        : "Etsy deleted this listing, so it can't be renewed — opened it as a new listing from its title, price and photo; add the description before publishing", 9000);
+      return { gone: true };
+    }
+    if (!base) {
+      if (!r?.ok || !d.ok) throw new Error(d.error || `Etsy didn't answer (${r?.status ?? "no reply"})`);
       base = listingFromEtsy(d.listing, stock);
     }
     base = {

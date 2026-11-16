@@ -556,9 +556,22 @@ export default function RenewalQueue({ listings = [], stock = [], getToken, onRe
     }
   }, [ready, missing.length, missingWins.length, briefIds.length, busy, statsErr, ledgerErr, view, shown, data]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  /* Deleted on Etsy since the queue was read: off the queue (and its saved
+     copy) now, rather than counted in what renewing would cost. */
+  const dropGone = id => setQueue(q => {
+    if (!q?.data) return q;
+    const keep = rows => (rows || []).filter(r => r.id !== id);
+    const next = { ...q, data: { ...q.data, expired: keep(q.data.expired), ending: keep(q.data.ending) } };
+    store.set(QUEUE_CACHE, next);
+    return next;
+  });
+
   const renew = async (j, mode) => {
     setOpening(j.row.id);
-    try { await onRenew(j.row, mode); }
+    try {
+      const out = await onRenew(j.row, mode);
+      if (out?.gone) dropGone(j.row.id);
+    }
     catch (e) { showToast?.(`⚠ Couldn't open it: ${e.message}`, 8000); }
     if (alive.current) setOpening("");
   };
