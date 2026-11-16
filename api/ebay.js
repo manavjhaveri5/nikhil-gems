@@ -16,7 +16,11 @@ import { requireUser, cronKeyOk } from "../lib/auth.js";
  *   POST ?action=update_item&item_id=xxx — ReviseItem (price, qty, title)
  */
 
-export const maxDuration = 60; // video upload + processing poll can exceed 30s
+/* A publish uploads every photo, the video, and waits up to 45s for eBay to
+   process the video before AddItem. Sixty seconds wasn't enough for a piece
+   with 11 photos and a video (Rhodochrosite spheres, 16 Nov): Vercel cut the
+   function off and the ERP got its error page instead of an answer. */
+export const maxDuration = 300;
 
 const APP_ID     = process.env.EBAY_APP_ID     || process.env.EBAY_CLIENT_ID   || "";
 const DEV_ID     = process.env.EBAY_DEV_ID     || "";

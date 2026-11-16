@@ -11218,7 +11218,8 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
           ...(existingItemId ? { itemId: existingItemId } : {}),
         }),
       });
-      const d = await r.json();
+      // Vercel answers a function that died or ran out of time with a page, not JSON.
+      const d = await lmJson(r);
       if (!d.ok) throw new Error(d.error || "eBay publish failed");
       if (d.videoWarning) showToast(`⚠ eBay video: ${d.videoWarning}`);
       if (d.variationsWarning && !syncOnly) showToast(`⚠ eBay options: ${d.variationsWarning}`);
