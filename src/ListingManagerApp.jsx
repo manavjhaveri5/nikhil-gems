@@ -68,6 +68,14 @@ const platformUrls = (pkey, ps = {}) => {
 };
 const DEAL_STORES = ["earth", "atyahara"];
 const isLocalMediaUrl = url => typeof url === "string" && (url.startsWith("data:") || url.startsWith("blob:"));
+/* A Shopify order's variants as one entry, each with its count when more
+   than one: { name: "Variants", value: "Clear Quartz, Lapis Lazuli, Pyrite × 2" }. */
+function shopifyVariations(items) {
+  const n = new Map();
+  for (const i of items || []) { const v = String(i?.variant || "").trim(); if (v && v !== "Default Title") n.set(v, (n.get(v) || 0) + (+i.qty || 1)); }
+  if (!n.size) return [];
+  return [{ name: n.size > 1 ? "Variants" : "Variant", value: [...n].map(([v, q]) => q > 1 && n.size > 1 ? `${v} × ${q}` : v).join(", ") }];
+}
 const listingOrderId = () => `NG-LST-${new Date().getFullYear()}-${uid().slice(-6).toUpperCase()}`;
 const ensureListingOrderId = listing => listing.listing_order_id ? listing : { ...listing, listing_order_id: listingOrderId() };
 const listingMarketplaceSku = listing => String(listing?.sku || listing?.listing_order_id || listing?.id || "").trim();
@@ -4404,7 +4412,11 @@ function OrdersView({ hideMoney = false, orders, listings = [], stock = [], show
               listing_sku:       so.sku || so.items?.[0]?.sku || "",
               listing_image:     so.image || "",
               qty:               +so.qty || so.items?.reduce((s, i) => s + (+i.qty || 0), 0) || 1,
-              variations:        (so.items?.[0]?.variant ? [{ name: "Variant", value: so.items[0].variant }] : []),
+              /* Every line's variant, not just the first: ATY-1080 (16 Nov 2026) was five
+                 Mini Ganeshas in five stones and showed as "Clear Quartz" alone.
+                 The same variant on several lines is counted once, "× 2". */
+              variations:        shopifyVariations(so.items),
+              items:             (so.items || []).map(i => ({ title: i.title || "", variant: i.variant || "", qty: +i.qty || 1, price: +i.price || 0, sku: i.sku || "" })),
               buyer_name:        so.buyer || "",
               buyer_email:       so.email || "",
               buyer_country:     so.ship?.country || "",
@@ -4430,7 +4442,9 @@ function OrdersView({ hideMoney = false, orders, listings = [], stock = [], show
               source:            `shopify-${s.store_key}-sync`,
             };
             const prev = prevById.get(id);
-            const merged = { ...norm, ...prev, status: norm.status || prev?.status, cancelled_at: norm.cancelled_at || prev?.cancelled_at, sale_price: norm.sale_price, order_total: norm.order_total, qty: norm.qty, listing_image: norm.listing_image || prev?.listing_image || "" };
+            const merged = { ...norm, ...prev, status: norm.status || prev?.status, cancelled_at: norm.cancelled_at || prev?.cancelled_at, sale_price: norm.sale_price, order_total: norm.order_total, qty: norm.qty, listing_image: norm.listing_image || prev?.listing_image || "",
+              // What was bought comes from Shopify every time, so orders saved with only the first variant are put right.
+              variations: norm.variations, items: norm.items };
             if (!prev || JSON.stringify(prev) !== JSON.stringify(merged)) await upsertItemK(ORDERS_KEY, merged, { prepend: true });
           }
         } catch {}
