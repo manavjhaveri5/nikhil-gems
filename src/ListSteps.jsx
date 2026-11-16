@@ -427,7 +427,11 @@ export default function ListSteps({ form, orders, stock = [], weightKg: weightKg
       ...(p.weight ? { weight: p.weight } : {}),
       ...variantsPatch(), ...costPatch(), ...(rs ? { price_research: rs } : {}),
     };
-    onApply(patch, Object.fromEntries(chosen.map(c => [c.key, true])), { live: live && liveKeys.length > 0, liveKeys: live ? liveKeys : [], etsyNow: !!go?.now });
+    /* A platform it's already on but unticked here ("EarthEditions only",
+       say) is left alone by this save. It used to be synced anyway, because
+       a save updates everywhere the piece is linked. */
+    const skipKeys = CHANNELS.filter(c => !pick[c.key] && linkOf(form, c.key).linked).map(c => c.key);
+    onApply(patch, Object.fromEntries(chosen.map(c => [c.key, true])), { live: live && liveKeys.length > 0, liveKeys: live ? liveKeys : [], skipKeys, etsyNow: !!go?.now });
   };
 
   const money = (field, cur, placeholder) => (

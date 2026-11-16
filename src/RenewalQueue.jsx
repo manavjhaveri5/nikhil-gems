@@ -407,7 +407,15 @@ export default function RenewalQueue({ listings = [], stock = [], getToken, onRe
 
   const allRows = useMemo(() => data ? [...(data.expired || []), ...(data.ending || [])] : [], [data]);
   const rowById = useMemo(() => new Map(allRows.map(r => [r.id, r])), [allRows]);
-  const open = row => !decided.has(row.id) && !doneHere(row);
+  /* Moved to the EarthEditions shop instead of renewed here: the ERP piece
+     has an EE listing (draft, queued or live) and this Atyahara one is not on
+     sale. Renewing it too would put the piece on both shops, so it leaves the
+     list — shown as a count, not written anywhere. */
+  const movedToEE = row => {
+    const e = erpOf(row), ee = e?.platforms?.etsy_ee;
+    return !!(ee?.listing_id && ee.status !== "deleted" && e.platforms?.etsy?.status !== "active");
+  };
+  const open = row => !decided.has(row.id) && !doneHere(row) && !movedToEE(row);
   // Ending ones that renew themselves already need nothing.
   const lists = useMemo(() => ({
     expired: (data?.expired || []).filter(open),
@@ -416,6 +424,7 @@ export default function RenewalQueue({ listings = [], stock = [], getToken, onRe
     renewed: decisions.filter(d => d.decision === "renewed"),
   }), [data, decisions, listings]); // eslint-disable-line react-hooks/exhaustive-deps
   const autoCount = (data?.ending || []).filter(r => r.auto).length;
+  const movedCount = (data?.expired || []).filter(r => !decided.has(r.id) && movedToEE(r)).length;
   useEffect(() => { if (data) onCount?.(lists.expired.length + lists.ending.length); }, [lists, data]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /* Read recently enough. One Etsy couldn't answer for is left a few minutes
@@ -633,7 +642,7 @@ export default function RenewalQueue({ listings = [], stock = [], getToken, onRe
           </div>
           <div style={{ ...small, marginBottom: 12 }}>
             {view === "expired"
-              ? `${plural(data.counts?.expired || 0, "expired listing")} on Etsy · the last ${data.back} days shown`
+              ? `${plural(data.counts?.expired || 0, "expired listing")} on Etsy · the last ${data.back} days shown${movedCount ? ` · ${movedCount} moved to EarthEditions, not shown` : ""}`
               : `${plural(data.counts?.ending || 0, "listing")} ending in ${data.days} days${autoCount ? ` · ${autoCount} already auto-renew` : ""}`}
             {" · "}{missing.length ? `sales read for ${statsRead} of ${work.length}${busy === "stats" ? "…" : ""}` : "sales read for all"}
             {counts.renew ? ` · renewing the ${counts.renew} suggested ≈ $${(counts.renew * RENEW_USD).toFixed(2)}` : ""}

@@ -10748,11 +10748,24 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
     return (Array.isArray(fresh) ? fresh.find(l => l.id === listing.id) : null) || listing;
   };
 
-  const patchListingItem = async (listing, patch) => {
-    const base = await latestListing(listing);
-    const updated = patch(base);
-    await saveListingItem(updated, { prepend: false });
-    return updated;
+  /* One read-change-write per piece at a time. A save syncs every platform
+     at once, and each wrote the whole piece back from the copy it had read:
+     the last to finish wiped what the others had just recorded. On 16 Nov the
+     Atyahara sync of Rhodochrosite spheres finished after the EarthEditions
+     publish and erased the new EE draft's id, so the ERP never knew it. */
+  const listingLocks = useRef(new Map());
+  const patchListingItem = (listing, patch) => {
+    const key = listing.id;
+    const prev = listingLocks.current.get(key) || Promise.resolve();
+    const run = prev.catch(() => {}).then(async () => {
+      const base = await latestListing(listing);
+      const updated = patch(base);
+      await saveListingItem(updated, { prepend: false });
+      return updated;
+    });
+    listingLocks.current.set(key, run);
+    run.finally(() => { if (listingLocks.current.get(key) === run) listingLocks.current.delete(key); }).catch(() => {});
+    return run;
   };
 
   const saveOrderItem = async (order, opts = {}) => {
@@ -10767,7 +10780,8 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
      "live" without them publishes nowhere. On 16 Nov "Publish all live" with
      the Etsy queue picked put Rosetta Jasper on sale on eartheditions.co at
      once: the queue question only ever governed Etsy. */
-  const handleSave = async (listing, publishTo = {}, { live = false, etsyNow = false, liveKeys = [] } = {}) => {
+  // skipKeys: platforms the piece is linked to but unticked in the listing steps — not touched by this save.
+  const handleSave = async (listing, publishTo = {}, { live = false, etsyNow = false, liveKeys = [], skipKeys = [] } = {}) => {
     let savedListing = ensureListingOrderId(listing);
     if ((listing.images || []).some(isLocalMediaUrl) || isLocalMediaUrl(listing.video)) {
       showToast("Uploading listing media...");
@@ -10793,6 +10807,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
       ? PLATFORMS.filter(p => {
           const pd = listing.platforms?.[p.key];
           if (!pd || pd.status === "deleted") return false;
+          if (skipKeys.includes(p.key)) return false;
           // A retired shop (the old Earth Ed. Shopify) is never written to on a
           // save: its login is gone, and every save failed on it.
           if (p.legacy) return false;
@@ -10815,7 +10830,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
     const targets = [...new Set([...liveTargets, ...newTargets])];
     if (ebayHeld) showToast("eBay has no drafts, so saving doesn't list it there. Publish on eBay from the listing's last step when you're ready.", 9000);
     // Trade products that are this piece but weren't published from here.
-    if (exists && !targets.includes("trade")) {
+    if (exists && !targets.includes("trade") && !skipKeys.includes("trade")) {
       refreshTradePhotos(savedListing)
         .then(n => { if (n) showToast(`✓ Photos updated on the trade site`); })
         .catch(e => console.warn("trade photo refresh:", e));
