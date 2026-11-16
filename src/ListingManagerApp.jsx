@@ -11146,6 +11146,31 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
     return { failed };
   };
 
+  /* Post to trade site (the grid's bulk window): each row carries its trade
+     price, how it's sold (kilo / piece / lot, pieces per kilo) and origin, so
+     no question pops up per piece. Saved onto the listing first (the steps
+     read trade_ask and origin next time), then written to the trade site.
+     Three at a time, like Price & post. */
+  const bulkTradePost = async (rows, onStep) => {
+    const failed = []; let done = 0, ok = 0;
+    const one = async ({ l, price, ask }) => {
+      const current = listings.find(x => x.id === l.id) || l;
+      const next = { ...current, ...(price > 0 ? { price_trade: price } : {}), origin: ask.origin || current.origin || "",
+        trade_ask: { unit: ask.unit, pieces: ask.pieces ? String(ask.pieces) : "", pieces_max: ask.pieces_max ? String(ask.pieces_max) : "" },
+        updated_at: new Date().toISOString() };
+      try { await saveListingItem(next); await handlePublish(next, "trade", { tradeAsk: ask }); ok++; }
+      catch (e) { failed.push(`${l.title}: ${e.message}`); }
+      onStep?.(++done);
+    };
+    const queue = rows.filter(r => !tradeRefOnly(r.l));
+    const skipped = rows.length - queue.length;
+    if (skipped) failed.push(`${skipped} piece${skipped === 1 ? " is" : "s are"} connected to a separate trade product — change ${skipped === 1 ? "it" : "them"} on the trade site`);
+    await Promise.all(Array.from({ length: Math.min(3, queue.length) }, async () => { while (queue.length) await one(queue.shift()); }));
+    refreshTradeFacts();
+    showToast(failed.length ? `⚠ ${ok} posted — ${rows.length - ok} not` : `✓ ${ok} on the trade site`);
+    return { failed };
+  };
+
   /* Where a piece sits. Each move is logged on the listing. */
   const setListingLocation = async (listing, place) => {
     const current = listings.find(x => x.id === listing.id) || listing;
@@ -11278,7 +11303,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
     run.finally(() => { if (publishChain.current.get(k) === run) publishChain.current.delete(k); }).catch(() => {});
     return run;
   };
-  const handlePublishNow = async (listing, pkey, { syncOnly = false, allowCreate = !syncOnly, storeOverride = [], forcePhotos = false, goLiveNow = false } = {}) => {
+  const handlePublishNow = async (listing, pkey, { syncOnly = false, allowCreate = !syncOnly, storeOverride = [], forcePhotos = false, goLiveNow = false, tradeAsk = null } = {}) => {
     /* What says "this already exists over there" is the platform's own id, and
        it is written onto the stored listing at the END of this function. Anything
        holding an older copy of the listing — a form opened before the last
@@ -11337,8 +11362,9 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
     if (pkey === "trade") {
       // Straight into the trade site's table — no marketplace API in between.
       // Going onto the site for the first time: ask how it's sold and where it's from.
-      let ask = null;
-      if (!syncOnly) {
+      // The bulk trade window answers the question for every piece up front.
+      let ask = tradeAsk;
+      if (!ask && !syncOnly) {
         const t = (await refreshTradeFacts())[listing.id];
         // Answered already in the listing steps: no need to ask again.
         const given = listing.trade_ask?.unit ? {
@@ -11876,6 +11902,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
                 onBulkDelete={handleBulkDelete}
                 onBulkPrice={bulkPrice}
                 onBulkPricePost={bulkPricePost}
+                onBulkTradePost={bulkTradePost} onDetectOrigin={detectOrigin}
                 renderManage={l => (
                   <ListingCard listing={l} stock={stock} orders={orders} startExpanded
                     onEdit={x => { setEditing(x); setShowForm(true); }}

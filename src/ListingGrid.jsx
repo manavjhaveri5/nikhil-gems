@@ -5,7 +5,7 @@
    calls; this file is the view. */
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, lazy, Suspense } from "react";
 import { C, FI } from "./lmTheme.js";
-import { locationOf, needsLocation, knownLocations, tradeRowOf } from "./listingChannels.js";
+import { locationOf, needsLocation, knownLocations, tradeRowOf, defaultPieces, tradeTitleFor, tradeRefOnly } from "./listingChannels.js";
 import { useStoriesDone, listedAt } from "./storyState.js";
 import { sbThumb } from "./photoUrls.js";
 import { loadK } from "./utils.js";
@@ -456,7 +456,7 @@ function Check({ checked, onChange, label, count, color }) {
   );
 }
 
-export default function ListingGrid({ listings, orders, stock = [], loadStoreFacts, tradeFacts: trade = null, onEdit, onPrice, onLocation, onBulkMove, onSavePhotos, onMarkSold, onDelete, onBulkDelete, renderManage, onBulkPrice, onBulkPricePost }) {
+export default function ListingGrid({ listings, orders, stock = [], loadStoreFacts, tradeFacts: trade = null, onEdit, onPrice, onLocation, onBulkMove, onSavePhotos, onMarkSold, onDelete, onBulkDelete, renderManage, onBulkPrice, onBulkPricePost, onBulkTradePost, onDetectOrigin }) {
   const [q, setQ] = useState("");
   const [status, setStatus] = useState(new Set());   // live | notlive | sold
   const [liveOn, setLiveOn] = useState(new Set());   // platform keys: live on any of these
@@ -477,6 +477,7 @@ export default function ListingGrid({ listings, orders, stock = [], loadStoreFac
   const [store, setStore] = useState(null);
   const [sel, setSel] = useState(new Set());
   const [pricePost, setPricePost] = useState(false);
+  const [tradePost, setTradePost] = useState(false);
   const more = useRef(null);
 
   // Left null when a load fails, so the pills fall back to the listing's own note. The trade
@@ -596,6 +597,7 @@ export default function ListingGrid({ listings, orders, stock = [], loadStoreFac
     <div>
       {pricePost && <PricePost rows={selected} facts={facts} onClose={() => setPricePost(false)}
         onRun={async (rows, post, step) => { const r = await onBulkPricePost(rows, post, step); refreshStore(); return r; }} />}
+      {tradePost && <TradePost rows={selected} trade={trade} onDetect={onDetectOrigin} onClose={() => setTradePost(false)} onRun={onBulkTradePost} />}
       {/* search, sort, layout */}
       <div style={{ position: "sticky", top: 0, zIndex: 20, background: C.bg, padding: "10px 0 12px", marginBottom: 8, borderBottom: `1px solid ${C.border}` }}>
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
@@ -619,6 +621,7 @@ export default function ListingGrid({ listings, orders, stock = [], loadStoreFac
             boxShadow: "0 8px 28px rgba(0,0,0,.18)", fontSize: 12.5, flexWrap: "wrap" }}>
             <b>{selected.length} selected</b>
             {onBulkPricePost && <button onClick={() => setPricePost(true)} style={{ ...chip(true) }}>💲 Edit prices &amp; post…</button>}
+            {onBulkTradePost && <button onClick={() => setTradePost(true)} style={{ ...chip(false), borderColor: "#1F8F4E", color: "#1F8F4E", fontWeight: 750 }}>🤝 Post to trade site…</button>}
             <button onClick={() => onBulkPrice(selected).then(refreshStore)} style={chip(false)}>Change prices by %…</button>
             {onBulkMove && <button onClick={() => onBulkMove(selected)} style={chip(false)}>📍 Move to…</button>}
             <button onClick={() => setSel(new Set(list.map(l => l.id)))} style={chip(false)}>Select all {list.length}</button>
@@ -784,6 +787,141 @@ function PricePost({ rows, facts, onClose, onRun }) {
           <span style={{ fontSize: 11.5, color: C.inkFaint }}>Already live elsewhere? Those just get the new prices.</span>
           <button disabled={!!busy} onClick={run} style={{ background: C.ink, color: "#FAF0DC", border: "none", borderRadius: 8, padding: "9px 16px", fontSize: 13, fontWeight: 750, cursor: busy ? "wait" : "pointer" }}>
             {busy ? `Working… ${stage || `${Math.floor(busy)}/${rows.length}`}` : post.size ? `Save prices & post ${rows.length}` : `Save prices`}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* Post to trade site: the selected pieces in one table with what the trade
+   site needs — trade price, sold per kilo / piece / lot, pieces per kilo,
+   origin — filled from what's known (the trade site's own copy first, then
+   the listing, then the shape's usual count), editable per row or for all
+   at once. One button posts them all; no question pops up per piece. */
+const TP_UNITS = [["kg", "Kilo"], ["piece", "Piece"], ["lot", "Lot"]];
+const countryOf = v => String(v || "").replace(/_{2,}/g, "").trim().split(",").pop().trim();
+function tradeStart(l, t) {
+  const d = String(l.trade_description || l.shopify_description || "");
+  const m = d.match(/Pieces\s*:\s*(?:per\s*kg\s*)?(\d+)\s*(?:[-–]\s*(\d+))?/i) || [];
+  const a = l.trade_ask || {};
+  const unit = t?.unit || a.unit || (l.type === "unique" ? "piece" : "kg");
+  const dp = defaultPieces(l);
+  const pieces = t?.pieces || a.pieces || m[1] || dp?.pieces || "";
+  const pieces_max = t?.pieces ? t.pieces_max || "" : a.pieces ? a.pieces_max || "" : m[1] ? (m[2] !== m[1] && m[2]) || "" : dp?.pieces_max || "";
+  const origin = t?.origin || countryOf((d.match(/Location\s*:\s*(.+)/i) || [])[1]) || countryOf(l.origin);
+  return { price: num(l.price_trade) ?? (t?.price || ""), unit, pieces: String(pieces || ""), pieces_max: String(pieces_max || ""), origin };
+}
+function TradePost({ rows: picked, trade, onDetect, onClose, onRun }) {
+  const rows = picked.filter(l => !tradeRefOnly(l));
+  const linkedOnly = picked.length - rows.length;
+  const tOf = l => tradeRowOf(trade, l);
+  const [vals, setVals] = useState(() => Object.fromEntries(rows.map(l => [l.id, tradeStart(l, tOf(l))])));
+  const [all, setAll] = useState({ price: "", unit: "", origin: "" });
+  const [busy, setBusy] = useState(0);
+  const [ai, setAi] = useState("");
+  const [failed, setFailed] = useState(null);
+  const set = (id, k, v) => setVals(x => ({ ...x, [id]: { ...x[id], [k]: v } }));
+  // Typed in the top row, it goes straight into every row.
+  const fill = (k, v) => { setAll(a => ({ ...a, [k]: v })); if (v === "" || (k === "price" && !(+v > 0))) return; setVals(x => Object.fromEntries(Object.entries(x).map(([id, r]) => [id, { ...r, [k]: v }]))); };
+  const noOrigin = rows.filter(l => !String(vals[l.id].origin || "").trim());
+  const noPrice = rows.filter(l => !(+vals[l.id].price > 0));
+  const detect = async () => {
+    let n = 0;
+    for (const l of noOrigin) {
+      setAi(`Finding ${++n}/${noOrigin.length}…`);
+      try {
+        const r = await onDetect(l);
+        if (r?.country) setVals(x => (String(x[l.id].origin || "").trim() ? x : { ...x, [l.id]: { ...x[l.id], origin: r.country } }));
+      } catch { /* left blank to type in */ }
+    }
+    setAi("");
+  };
+  const run = async () => {
+    if (noPrice.length && !confirm(`${noPrice.length} piece${noPrice.length === 1 ? " has" : "s have"} no trade price and will show "price on request". Post anyway?`)) return;
+    setBusy(0.001); setFailed(null);
+    const n = x => { const k = parseInt(x, 10); return k >= 1 ? k : null; };
+    const list = rows.map(l => {
+      const v = vals[l.id];
+      const lo = n(v.pieces), hi = n(v.pieces_max);
+      return { l, price: +v.price || 0, ask: { unit: v.unit, origin: String(v.origin || "").trim(),
+        pieces: v.unit === "piece" ? null : (lo && hi ? Math.min(lo, hi) : lo || hi),
+        pieces_max: v.unit === "piece" || !(lo && hi) || lo === hi ? null : Math.max(lo, hi) } };
+    });
+    const r = await onRun(list, d => setBusy(d || 0.001));
+    setBusy(0);
+    if (r?.failed?.length) setFailed(r.failed); else if (r) onClose();
+  };
+  const box = (w = 70) => ({ ...FI(), padding: "5px 7px", fontSize: 12.5, width: w });
+  const green = "#1F8F4E";
+  return (
+    <div onClick={() => !busy && onClose()} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.45)", zIndex: 80, display: "grid", placeItems: "center", padding: 16 }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: C.surface, borderRadius: 14, width: "min(1060px, 100%)", maxHeight: "90vh", display: "flex", flexDirection: "column" }}>
+        <div style={{ padding: "14px 18px", borderBottom: `1px solid ${C.border}`, display: "flex", alignItems: "center", gap: 10 }}>
+          <b style={{ fontSize: 16, flex: 1 }}>🤝 Post to trade site · {rows.length} piece{rows.length === 1 ? "" : "s"}</b>
+          <button disabled={!!busy} onClick={onClose} style={{ border: "none", background: "transparent", fontSize: 18, cursor: "pointer", color: C.inkMid }}>×</button>
+        </div>
+        {linkedOnly > 0 && <div style={{ margin: "8px 18px 0", fontSize: 12, color: C.amber }}>{linkedOnly} selected piece{linkedOnly === 1 ? " is" : "s are"} connected to a separate trade product and left out.</div>}
+        <div style={{ overflow: "auto", padding: "8px 18px" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
+            <thead>
+              <tr style={{ color: C.inkFaint, fontSize: 11, textAlign: "left" }}>
+                <th style={{ padding: "6px 4px" }}>Piece</th><th>Now</th><th>Trade $</th><th>Sold per</th><th>Pieces per kilo / lot</th><th>Origin</th>
+              </tr>
+              <tr style={{ background: C.bg }}>
+                <td colSpan={2} style={{ padding: "6px 4px", fontSize: 11.5, color: C.inkMid }}>Same for all →</td>
+                <td style={{ padding: "6px 4px" }}><input inputMode="decimal" value={all.price} onChange={e => fill("price", e.target.value.replace(/[^\d.]/g, ""))} placeholder="$ each" style={box()} /></td>
+                <td style={{ padding: "6px 4px" }}><select value={all.unit} onChange={e => fill("unit", e.target.value)} style={box(84)}><option value="">—</option>{TP_UNITS.map(([k, t]) => <option key={k} value={k}>{t}</option>)}</select></td>
+                <td />
+                <td style={{ padding: "6px 4px" }}>
+                  <div style={{ display: "flex", gap: 6 }}>
+                    <input value={all.origin} onChange={e => fill("origin", e.target.value)} placeholder="e.g. India" style={box(110)} />
+                    {onDetect && noOrigin.length > 0 && <button disabled={!!ai || !!busy} onClick={detect} title="Ask AI for the origin of each piece that has none" style={{ ...box("auto"), cursor: "pointer", whiteSpace: "nowrap" }}>{ai || `✨ Find ${noOrigin.length} missing`}</button>}
+                  </div>
+                </td>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map(l => {
+                const v = vals[l.id], t = tOf(l);
+                const img = (l.images || []).find(u => typeof u === "string");
+                const most = Math.max(+v.pieces || 0, +v.pieces_max || 0);
+                const each = v.unit !== "piece" && +v.price > 0 && most ? `≈ $${(+v.price / most).toFixed(2)}/pc` : "";
+                return (
+                  <tr key={l.id} style={{ borderTop: `1px solid ${C.border}` }}>
+                    <td style={{ padding: "6px 4px", minWidth: 240 }}>
+                      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                        {img && <img src={sbThumb(img, 80)} alt="" style={{ width: 38, height: 38, objectFit: "cover", borderRadius: 6 }} />}
+                        <div style={{ lineHeight: 1.3 }}>
+                          <div>{l.title}</div>
+                          <div style={{ fontSize: 11, color: C.inkFaint }}>as “{t?.title || tradeTitleFor(l, v.unit)}”</div>
+                        </div>
+                      </div>
+                    </td>
+                    <td style={{ whiteSpace: "nowrap", fontSize: 11.5, color: t?.live ? green : C.inkFaint, fontWeight: t?.live ? 700 : 500 }}>{t?.live ? "Live" : t ? "Hidden" : "New"}</td>
+                    <td style={{ padding: "6px 4px" }}><input inputMode="decimal" value={v.price} onChange={e => set(l.id, "price", e.target.value.replace(/[^\d.]/g, ""))} style={{ ...box(), borderColor: +v.price > 0 ? C.border : C.amber }} /></td>
+                    <td style={{ padding: "6px 4px" }}><select value={v.unit} onChange={e => set(l.id, "unit", e.target.value)} style={box(84)}>{TP_UNITS.map(([k, tt]) => <option key={k} value={k}>{tt}</option>)}</select></td>
+                    <td style={{ padding: "6px 4px", whiteSpace: "nowrap" }}>
+                      {v.unit === "piece" ? <span style={{ color: C.inkFaint }}>—</span> : <>
+                        <input inputMode="numeric" value={v.pieces} onChange={e => set(l.id, "pieces", e.target.value.replace(/\D/g, ""))} placeholder="from" style={box(54)} />
+                        <span style={{ color: C.inkFaint, margin: "0 4px" }}>–</span>
+                        <input inputMode="numeric" value={v.pieces_max} onChange={e => set(l.id, "pieces_max", e.target.value.replace(/\D/g, ""))} placeholder="to" style={box(54)} />
+                        {each && <div style={{ fontSize: 11, color: C.inkFaint, marginTop: 2 }}>{each}</div>}
+                      </>}
+                    </td>
+                    <td style={{ padding: "6px 4px" }}><input value={v.origin} onChange={e => set(l.id, "origin", e.target.value)} placeholder="Country" style={{ ...box(130), borderColor: String(v.origin || "").trim() ? C.border : C.amber }} /></td>
+                  </tr>);
+              })}
+            </tbody>
+          </table>
+          {failed && <div style={{ marginTop: 10, padding: 10, background: C.redBg, color: C.red, borderRadius: 8, fontSize: 12.5 }}>{failed.map(f => <div key={f}>⚠ {f}</div>)}</div>}
+        </div>
+        <div style={{ padding: "12px 18px", borderTop: `1px solid ${C.border}`, display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+          <span style={{ fontSize: 11.5, color: C.inkFaint }}>
+            {noPrice.length ? `${noPrice.length} without a price · ` : ""}{noOrigin.length ? `${noOrigin.length} without an origin · ` : ""}Pieces already there take these details and go live.
+          </span>
+          <div style={{ flex: 1 }} />
+          <button disabled={!!busy || !rows.length} onClick={run} style={{ background: green, color: "#fff", border: "none", borderRadius: 8, padding: "9px 16px", fontSize: 13, fontWeight: 750, cursor: busy ? "wait" : "pointer" }}>
+            {busy ? `Posting… ${Math.floor(busy)}/${rows.length}` : `Post ${rows.length} to trade site`}</button>
         </div>
       </div>
     </div>
