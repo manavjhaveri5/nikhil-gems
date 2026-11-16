@@ -134,8 +134,11 @@ export function tradeMatches(l, facts) {
     if (![...w].some(x => TP_SHAPES[sk].some(s => x.startsWith(s)))) return null;
     const stone = [...w].filter(x => !TP_GENERIC.has(x) && !tpIsShape(x));
     const stoneHit = stone.filter(x => lw.has(x)).length;
-    if (!stoneHit || (mw.length && !mw.every(x => w.has(x)))) return null;
-    const extra = stone.length - stoneHit;
+    // One stone word of the listing may be missing from a shorter trade title
+    // ("Arusha Sunstone with Shivalingam" for "…with Iolite Shivalingam"): offered, never picked.
+    const missing = mw.filter(x => !w.has(x)).length;
+    if (!stoneHit || missing > 1) return null;
+    const extra = stone.length - stoneHit + missing;
     // Ties go to the closer title: "Sunstone Round Palmstone" over "Sunstone Palmstone".
     const hit = [...w].filter(x => lw.has(x)).length - [...w].filter(x => !lw.has(x)).length / 10;
     return extra <= 1 ? { t, extra, hit } : null;

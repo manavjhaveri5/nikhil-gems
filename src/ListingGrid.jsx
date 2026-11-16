@@ -865,7 +865,7 @@ function TradePost({ rows: picked, trade, onDetect, onClose, onRun }) {
   const green = "#1F8F4E";
   return (
     <div onClick={() => !busy && onClose()} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.45)", zIndex: 80, display: "grid", placeItems: "center", padding: 16 }}>
-      <div onClick={e => e.stopPropagation()} style={{ background: C.surface, borderRadius: 14, width: "min(1060px, 100%)", maxHeight: "90vh", display: "flex", flexDirection: "column" }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: C.surface, borderRadius: 14, width: "min(1280px, 100%)", maxHeight: "90vh", display: "flex", flexDirection: "column" }}>
         <div style={{ padding: "14px 18px", borderBottom: `1px solid ${C.border}`, display: "flex", alignItems: "center", gap: 10 }}>
           <b style={{ fontSize: 16, flex: 1 }}>🤝 Post to trade site · {rows.length} piece{rows.length === 1 ? "" : "s"}</b>
           <button disabled={!!busy} onClick={onClose} style={{ border: "none", background: "transparent", fontSize: 18, cursor: "pointer", color: C.inkMid }}>×</button>
@@ -904,7 +904,7 @@ function TradePost({ rows: picked, trade, onDetect, onClose, onRun }) {
                 const each = v.unit !== "piece" && +v.price > 0 && most ? `≈ $${(+v.price / most).toFixed(2)}/pc` : "";
                 return (
                   <tr key={l.id} style={{ borderTop: `1px solid ${C.border}` }}>
-                    <td style={{ padding: "6px 4px", minWidth: 240 }}>
+                    <td style={{ padding: "6px 4px", minWidth: 200, maxWidth: 260 }}>
                       <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
                         {img && <img src={sbThumb(img, 80)} alt="" style={{ width: 38, height: 38, objectFit: "cover", borderRadius: 6 }} />}
                         <div style={{ lineHeight: 1.3 }}>
@@ -914,11 +914,11 @@ function TradePost({ rows: picked, trade, onDetect, onClose, onRun }) {
                       </div>
                     </td>
                     <td style={{ whiteSpace: "nowrap", fontSize: 11.5, color: t?.live || lk ? green : C.inkFaint, fontWeight: t?.live || lk ? 700 : 500 }}>{t?.live ? "Live" : t ? "Hidden" : lk ? "Link" : "New"}</td>
-                    <td style={{ padding: "6px 4px", minWidth: 230 }}>
+                    <td style={{ padding: "6px 4px", minWidth: 320 }}>
                       {t ? <span style={{ fontSize: 11.5, color: C.inkFaint }}>Its own trade product</span>
                         : m.length ? <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
                           {lk?.image && <img src={sbThumb(lk.image, 80)} alt="" style={{ width: 34, height: 34, objectFit: "cover", borderRadius: 6, flex: "none" }} />}
-                          <select value={link[l.id] || ""} onChange={e => setLink(x => ({ ...x, [l.id]: e.target.value }))} style={{ ...box(200), borderColor: lk ? green : C.border }}>
+                          <select value={link[l.id] || ""} onChange={e => setLink(x => ({ ...x, [l.id]: e.target.value }))} style={{ ...box(270), borderColor: lk ? green : C.border }}>
                             <option value="">Post as new</option>
                             {m.map(({ t: p, extra }) => <option key={p.id} value={p.id}>{extra ? "Maybe: " : "Link: "}{p.title}{p.price ? ` · $${p.price}/${p.unit === "piece" ? "pc" : p.unit}` : ""}{p.live ? "" : " · hidden"}</option>)}
                           </select>
