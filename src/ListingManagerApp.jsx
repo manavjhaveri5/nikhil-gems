@@ -661,6 +661,35 @@ async function syncEbayOrdersIntoStore({ orders = null, listings = null } = {}) 
   return { synced, addresses };
 }
 
+/* An order with several different lines (a Shopify order of five Mini
+   Ganeshas in five stones, ATY-1081) comes from several stock cards, one per
+   line. Such an order keeps them in order._allocLines, one entry per line:
+   { i, title, variant, qty, stock_id, alloc_qty, alloc_qty2, allocated_at,
+     ng_line_no, ng_line_id }. An order with one line is allocated as before. */
+const orderLineList = o => (Array.isArray(o?.items) ? o.items : []).filter(i => i && (+i.qty || 1) > 0);
+const isMultiLine = o => orderLineList(o).length > 1;
+const lineLabel = l => `${l.variant && l.variant !== "Default Title" ? l.variant : l.title || "Item"}${(+l.qty || 1) > 1 ? ` × ${+l.qty}` : ""}`;
+/* Stock cards likely to be this line: the variant's stone, then the title's
+   shape word ("Ganesha"), then "1 inch" for a mini, in stock first. */
+function suggestLineStock(stock, line, query = "") {
+  const words = s => String(s || "").toLowerCase().split(/[^a-z0-9]+/).filter(w => w.length > 1);
+  const hay = x => `${x.material || ""} ${x.desc || ""} ${x.shape || ""} ${x.sku || ""}`.toLowerCase();
+  const q = words(query);
+  if (q.length) return stock.filter(x => q.every(w => hay(x).includes(w))).sort((a, b) => (+b.qty || 0) - (+a.qty || 0)).slice(0, 8);
+  const stone = words(line.variant && line.variant !== "Default Title" ? line.variant : "");
+  const title = words(line.title).filter(w => !/^(mini|gemstone|natural|crystal|the|and|of)$/.test(w));
+  const mini = /\bmini\b/i.test(line.title || "");
+  return stock.map(x => {
+    const h = hay(x), m = String(x.material || "").toLowerCase();
+    let n = 0;
+    if (stone.length && stone.every(w => m.includes(w))) n += 4; else if (stone.some(w => h.includes(w))) n += 1;
+    n += title.filter(w => h.includes(w.replace(/s$/, ""))).length * 2;
+    if (mini && /1\s*inch|mini/.test(h)) n += 1;
+    if ((+x.qty || 0) > 0) n += 1;
+    return { x, n };
+  }).filter(r => r.n >= 5).sort((a, b) => b.n - a.n || (+b.x.qty || 0) - (+a.x.qty || 0)).slice(0, 5).map(r => r.x);
+}
+
 async function applyOrderStockAllocation({ order, stockItem, qty, qty2 }) {
   const q = Math.max(0, +qty || 0);
   const q2 = Math.max(0, +qty2 || 0);
@@ -4364,6 +4393,9 @@ function OrdersView({ hideMoney = false, orders, listings = [], stock = [], show
   const [openGroups, setOpenGroups] = useState(() => new Set()); // expanded multi-item receipts
   const [allocEdit, setAllocEdit] = useState({}); // per-order: allow editing a saved physical stock allocation
   const [stockModalOrder, setStockModalOrder] = useState(null); // order whose stock-picker modal is open
+  // Several-line orders: orderId → line index → { stock_id, qty, qty2, q (search) } being edited.
+  const [lineDraft, setLineDraft] = useState({});
+  const [lineBusy, setLineBusy] = useState({});
   const [groupBusy, setGroupBusy] = useState({}); // per receipt-group key: "alloc" | "ng" while a group-wide action runs
   const [atInvoices, setAtInvoices] = useState([]); // Atyahara invoices, for matching/linking existing invoices to orders
   const [ngInvoices, setNgInvoices] = useState([]);
@@ -4728,7 +4760,99 @@ const defaultNgDraft = o => ({ qty: String(o._ngAllocatedQty || o._ngDeductedQty
   };
   // Save step-2 choices and apply the physical stock movement immediately. If the
   // allocation is edited later, previous quantities are reversed before new ones apply.
+  const linesOf = order => {
+    const saved = Array.isArray(order._allocLines) ? order._allocLines : [];
+    return orderLineList(order).map((it, i) => {
+      const s0 = saved.find(x => x.i === i) || {};
+      const d = lineDraft[order.id]?.[i] || {};
+      return { i, title: it.title || order.listing_title || "", variant: it.variant || "", qty: +it.qty || 1, price: +it.price || 0, saved: s0,
+        stock_id: d.stock_id ?? s0.stock_id ?? "", use: d.qty ?? (s0.alloc_qty != null ? String(s0.alloc_qty) : String(+it.qty || 1)), use2: d.qty2 ?? (s0.alloc_qty2 ? String(s0.alloc_qty2) : ""), q: d.q || "" };
+    });
+  };
+  const setLine = (order, i, patch) => setLineDraft(s => ({ ...s, [order.id]: { ...(s[order.id] || {}), [i]: { ...(s[order.id]?.[i] || {}), ...patch } } }));
+  /* Every line from its own card, one after another (each reads the stock
+     fresh). A line already saved is reversed first, as an edit is for a
+     one-line order. */
+  const saveLineAllocations = async order => {
+    const lines = linesOf(order);
+    const missing = lines.filter(l => !l.stock_id || !(+l.use > 0 || +l.use2 > 0));
+    if (missing.length) { updNg(order, { error: `Pick a stock card and quantity for: ${missing.map(lineLabel).join(", ")}`, success: "" }); return; }
+    setLineBusy(b => ({ ...b, [order.id]: true }));
+    const out = [];
+    try {
+      for (const l of lines) {
+        const prev = l.saved || {};
+        const same = prev.stock_id === l.stock_id && +prev.alloc_qty === +l.use && +(prev.alloc_qty2 || 0) === +(l.use2 || 0);
+        if (same && prev.allocated_at) { out.push(prev); continue; }
+        const item = stock.find(x => x.id === l.stock_id);
+        if (!item) throw new Error(`${lineLabel(l)}: that stock card no longer exists`);
+        const pseudo = { _ngAllocatedStockId: prev.stock_id || "", _ngAllocatedQty: prev.alloc_qty || 0, _ngAllocatedQty2: prev.alloc_qty2 || 0 };
+        try {
+          const r = await applyOrderStockAllocation({ order: pseudo, stockItem: item, qty: l.use, qty2: l.use2 });
+          out.push({ ...prev, i: l.i, title: l.title, variant: l.variant, qty: l.qty, stock_id: item.id, alloc_qty: r.allocatedQty, alloc_qty2: r.allocatedQty2 || "", allocated_at: now() });
+        } catch (e) { throw new Error(`${lineLabel(l)}: ${e.message}`); }
+      }
+    } catch (e) {
+      // What did go through is kept, so a retry doesn't deduct it twice.
+      if (out.length) await patchOrder(order, { _allocLines: [...out, ...(order._allocLines || []).filter(x => !out.some(o => o.i === x.i))] }).catch(() => {});
+      updNg(order, { error: e.message || "Could not save allocation", success: "" });
+      setLineBusy(b => ({ ...b, [order.id]: false }));
+      return;
+    }
+    const total = out.reduce((n, x) => n + (+x.alloc_qty || 0), 0);
+    await patchOrder(order, { _allocLines: out, linked_stock_id: out[0]?.stock_id || "", _ngAllocatedQty: total, _ngPlanQty: String(total), _ngStockAllocatedAt: now() });
+    setLineDraft(s => { const n = { ...s }; delete n[order.id]; return n; });
+    setLineBusy(b => ({ ...b, [order.id]: false }));
+    setAllocEdit(s => ({ ...s, [order.id]: false }));
+    updNg(order, { error: "", success: `Allocation saved · ${out.length} lines, ${total} pcs deducted` });
+    setStepSel(s => ({ ...s, [order.id]: 2 }));
+  };
+  /* The NG invoice for a several-line order: one invoice line per stock card,
+     all on the same invoice. Each line's value is its share of the order by
+     the prices Shopify charged. */
+  const addLinesToNg = async (order, forcedTargetInvNo = "") => {
+    const lines = (order._allocLines || []).filter(x => x.stock_id && +x.alloc_qty > 0);
+    if (!lines.length || lines.length < orderLineList(order).length) { updNg(order, { error: "Allocate every line in step 2 first." }); return false; }
+    const draft = ngDraft(order);
+    const gross = lines.reduce((n, l) => n + (+orderLineList(order)[l.i]?.price || 0) * (+l.qty || 1), 0);
+    const earned = orderEarnedValue(order), shipping = Math.max(0, +draft.shipCost || +order.ship_cost || 0);
+    let target = String(forcedTargetInvNo || "").trim() || (ngInvoiceMode[order.id] !== "new" ? latestAtyaharaNgDraft(orderDate(order))?.invNo || "" : "");
+    let createNew = !target;
+    updNg(order, { loading: true, error: "", success: "" });
+    const done = [];
+    try {
+      for (const l of lines) {
+        // Already on the invoice — unless the invoice was unlinked to be made again.
+        if (l.ng_line_id && order._ngInvoiceNo) { done.push(l); continue; }
+        const item = stock.find(x => x.id === l.stock_id);
+        if (!item) throw new Error(`${lineLabel(l)}: stock card missing`);
+        const it = orderLineList(order)[l.i] || {};
+        const share = gross > 0 ? (+it.price || 0) * (+l.qty || 1) / gross : 1 / lines.length;
+        const rate = draft.costMode === "stock" ? ngInvoiceRate(order, item, l.alloc_qty, draft)
+          : Number((Math.max(0, earned - shipping) * share / 3 / Math.max(1, +l.alloc_qty)).toFixed(2));
+        const lineOrder = { ...order, listing_title: `${it.title || order.listing_title || ""}${it.variant ? ` — ${it.variant}` : ""}`, listing_shape: order.listing_shape || item.shape || "" };
+        const r = await addOrderToNikhilGemsInvoice({ order: lineOrder, stockItem: item, qty: l.alloc_qty, qty2: l.alloc_qty2, deductStock: false,
+          targetInvNo: target, createNew, productDesc: cleanInvoiceText(`${it.title || ""}${it.variant ? ` (${it.variant})` : ""}`),
+          shapeOverride: lineOrder.listing_shape, rateOverride: rate, customsDescOverride: ngCustomsDesc(lineOrder, item) || "" });
+        target = r.invNo; createNew = false;
+        done.push({ ...l, ng_inv_no: r.invNo, ng_line_no: r.lineNo, ng_line_id: r.lineId, ng_rate: rate });
+      }
+    } catch (e) {
+      if (done.length) await patchOrder(order, { _allocLines: (order._allocLines || []).map(x => done.find(d => d.i === x.i) || x) }).catch(() => {});
+      updNg(order, { loading: false, error: e.message || "Could not add to NG invoice" });
+      return false;
+    }
+    const total = done.reduce((n, x) => n + (+x.alloc_qty || 0), 0);
+    await patchOrder(order, { _allocLines: (order._allocLines || []).map(x => done.find(d => d.i === x.i) || x), _ngInvoiceNo: target, _ngLineNo: done.map(d => d.ng_line_no).join(", "),
+      _ngDeductedQty: total, _ngStockId: done[0]?.stock_id || "", _ngUnit: "pcs", _ngEarnedAtCreate: earned, _ngShippingAtCreate: shipping, _ngCostMode: draft.costMode || "earned", _ngInvoicedAt: now() });
+    updNg(order, { loading: false, success: `Added ${done.length} lines to ${target}` });
+    refreshNgInvoices();
+    showToast?.(`✓ ${target} updated · ${done.length} lines`);
+    return target;
+  };
+
   const saveAllocation = async order => {
+    if (isMultiLine(order)) return saveLineAllocations(order);
     const draft = ngDraft(order);
     const stockItem = stock.find(s => s.id === order.linked_stock_id);
     if (!stockItem) { updNg(order, { error: "Pick a stock item first.", success: "" }); return; }
@@ -4759,6 +4883,7 @@ const defaultNgDraft = o => ({ qty: String(o._ngAllocatedQty || o._ngDeductedQty
   // every item of a multi-item receipt lands on the same invoice). Returns the invoice
   // number on success, false on failure.
   const addOrderToNg = async (order, forcedTargetInvNo = "") => {
+    if (isMultiLine(order)) return addLinesToNg(order, forcedTargetInvNo);
     const draft = ngDraft(order);
     const stockItem = stock.find(s => s.id === order.linked_stock_id);
     if (!stockItem) { updNg(order, { error: "Link a physical stock item first." }); return false; }
@@ -6687,7 +6812,74 @@ const defaultNgDraft = o => ({ qty: String(o._ngAllocatedQty || o._ngDeductedQty
                             </span>
                           )}
                         </div>
-                        {(() => {
+                        {isMultiLine(order) ? (() => {
+                          /* One stock card per line: a several-line order (five Mini
+                             Ganeshas in five stones) comes from several cards. */
+                          const lines = linesOf(order);
+                          const saved = !!order._ngStockAllocatedAt && (order._allocLines || []).length >= lines.length;
+                          const editing = !saved || allocEdit[order.id];
+                          const invoiced = !!order._ngInvoiceNo;
+                          const thumbS = x => x?.photo ? <img src={x.photo} alt="" loading="lazy" style={{ width: 36, height: 36, objectFit: "cover", borderRadius: 6, flexShrink: 0 }} /> : <div style={{ width: 36, height: 36, borderRadius: 6, background: C.card, display: "grid", placeItems: "center", flexShrink: 0 }}>💎</div>;
+                          const cardLine = x => `${x.material || x.desc || "Item"}${x.shape ? ` · ${x.shape}` : ""}`;
+                          return (
+                            <>
+                              <div style={{ fontSize: 12, color: C.inkMid, marginBottom: 8 }}>{lines.length} different pieces in this order. Pick the stock card each one came from.</div>
+                              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                                {lines.map(l => {
+                                  const card = stock.find(x => x.id === l.stock_id);
+                                  const sug = !card && editing ? suggestLineStock(stock, l, l.q) : [];
+                                  return (
+                                    <div key={l.i} style={{ background: C.card, border: `1px solid ${card ? C.green + "66" : C.border}`, borderRadius: 10, padding: 10 }}>
+                                      <div style={{ fontSize: 13, fontWeight: 850, color: C.ink, marginBottom: 6 }}>{lineLabel(l)}{l.saved?.allocated_at && !editing ? <span style={{ marginLeft: 8, fontSize: 11, color: C.green }}>✓ −{l.saved.alloc_qty} {card?.unit || "pcs"}</span> : null}</div>
+                                      {card ? (
+                                        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                                          {thumbS(card)}
+                                          <div style={{ flex: 1, minWidth: 160 }}>
+                                            <div style={{ fontSize: 12.5, fontWeight: 800, color: C.ink }}>{cardLine(card)}</div>
+                                            <div style={{ fontSize: 11, color: C.inkMid }}>{[card.sku, `${card.qty} ${card.unit || "pcs"} available`, card.location && `🗄 ${card.location}`].filter(Boolean).join(" · ")}</div>
+                                          </div>
+                                          {editing && <>
+                                            <input type="number" min={0} step="any" value={l.use} onChange={e => setLine(order, l.i, { qty: e.target.value })} title="Quantity used" style={{ ...FI(), width: 80, fontSize: 13, padding: "7px 9px" }} />
+                                            <span style={{ fontSize: 11, color: C.inkFaint }}>{card.unit || "pcs"}</span>
+                                            {!invoiced && <button onClick={() => setLine(order, l.i, { stock_id: "" })} style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 7, padding: "6px 10px", fontSize: 11, fontWeight: 800, cursor: "pointer" }}>Change</button>}
+                                          </>}
+                                        </div>
+                                      ) : editing ? (
+                                        <>
+                                          <input value={l.q} onChange={e => setLine(order, l.i, { q: e.target.value })} placeholder="Search stock (stone, shape, SKU)…" style={{ ...FI(), width: "100%", fontSize: 12.5, padding: "8px 10px", marginBottom: 6 }} />
+                                          <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+                                            {sug.map(x => (
+                                              <button key={x.id} onClick={() => setLine(order, l.i, { stock_id: x.id, qty: String(l.qty) })} style={{ display: "flex", alignItems: "center", gap: 10, textAlign: "left", background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, padding: 6, cursor: "pointer" }}>
+                                                {thumbS(x)}
+                                                <span style={{ flex: 1, minWidth: 0 }}>
+                                                  <span style={{ display: "block", fontSize: 12, fontWeight: 800, color: C.ink }}>{cardLine(x)}</span>
+                                                  <span style={{ display: "block", fontSize: 10.5, color: C.inkMid }}>{[x.sku, `${x.qty} ${x.unit || "pcs"}`, x.location && `🗄 ${x.location}`].filter(Boolean).join(" · ")}</span>
+                                                </span>
+                                                <span style={{ fontSize: 11, fontWeight: 800, color: C.green }}>Use</span>
+                                              </button>
+                                            ))}
+                                            {!sug.length && <div style={{ fontSize: 11.5, color: C.inkFaint }}>{l.q ? "No stock matches." : "No close match — search above."}</div>}
+                                          </div>
+                                        </>
+                                      ) : <div style={{ fontSize: 11.5, color: C.red }}>No stock card</div>}
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                              <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 12 }}>
+                                {editing
+                                  ? <>
+                                      <button disabled={!!lineBusy[order.id]} onClick={() => saveAllocation(order)} style={{ background: C.green, color: "#fff", border: "none", borderRadius: 8, padding: "10px 18px", fontSize: 13, fontWeight: 850, cursor: lineBusy[order.id] ? "wait" : "pointer", opacity: lineBusy[order.id] ? .6 : 1 }}>{lineBusy[order.id] ? "Saving…" : saved ? "Save adjustment →" : `Save allocation for ${lines.length} pieces →`}</button>
+                                      {saved && <button onClick={() => { setAllocEdit(s => ({ ...s, [order.id]: false })); setLineDraft(s => { const n = { ...s }; delete n[order.id]; return n; }); }} style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, padding: "9px 14px", fontSize: 12, fontWeight: 800, cursor: "pointer" }}>Cancel edit</button>}
+                                    </>
+                                  : !invoiced && <button onClick={() => setAllocEdit(s => ({ ...s, [order.id]: true }))} style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, padding: "9px 14px", fontSize: 12, fontWeight: 800, cursor: "pointer" }}>Edit allocation</button>}
+                              </div>
+                              {editing && <div style={{ marginTop: 7, fontSize: 11, color: C.inkFaint }}>Saving deducts each piece from its own stock card now.</div>}
+                              {ngDraft(order).error && <div style={{ marginTop: 8, fontSize: 12, color: C.red, background: C.redBg, border: `1px solid ${C.red}30`, borderRadius: 8, padding: "7px 9px" }}>{ngDraft(order).error}</div>}
+                              {ngDraft(order).success && <div style={{ marginTop: 8, fontSize: 12, color: C.green, background: C.greenBg, border: `1px solid ${C.green}30`, borderRadius: 8, padding: "7px 9px" }}>{ngDraft(order).success}</div>}
+                            </>
+                          );
+                        })() : (() => {
                           const linked = stock.find(s => s.id === order.linked_stock_id);
                           const invoiceDone = !!order._ngInvoiceNo;
                           const allocationSaved = !!(order._ngStockAllocatedAt || order._ngAllocatedQty || order._ngDeductedQty);
