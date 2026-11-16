@@ -10757,6 +10757,9 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
       ? PLATFORMS.filter(p => {
           const pd = listing.platforms?.[p.key];
           if (!pd || pd.status === "deleted") return false;
+          // A retired shop (the old Earth Ed. Shopify) is never written to on a
+          // save: its login is gone, and every save failed on it.
+          if (p.legacy) return false;
           // Has a real listing ID on the platform
           if (isEtsyKey(p.key) && pd.listing_id) return true;
           if (p.key === "ebay" && pd.item_id) return true;
@@ -10767,7 +10770,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
         }).map(p => p.key)
       : [];
     // A trade product connected for reference is never written to, so it isn't a target.
-    const newTargets  = Object.entries(publishTo).filter(([k, v]) => v && !(k === "trade" && tradeRefOnly(listing))).map(([k]) => k);
+    const newTargets  = Object.entries(publishTo).filter(([k, v]) => v && !(k === "trade" && tradeRefOnly(listing)) && !PLATFORMS.find(p => p.key === k)?.legacy).map(([k]) => k);
     const targets = [...new Set([...liveTargets, ...newTargets])];
     // Trade products that are this piece but weren't published from here.
     if (exists && !targets.includes("trade")) {
