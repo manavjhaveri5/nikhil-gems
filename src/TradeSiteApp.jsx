@@ -305,10 +305,11 @@ function BuyersTab({ showToast, siteUrl, signOff }) {
       };
       const first = String(b.name || "").split(" ")[0];
       const notes = [];
-      if (b.marketing_opt_in) {
-        await omni({ action: "contact_tag", email: b.email, addTags: ["approved", "active", "trade"], firstName: first, lastName: String(b.name || "").split(" ").slice(1).join(" ") })
-          .then(() => notes.push("added to the mailing list")).catch(e => notes.push(`⚠ list: ${e.message}`));
-      }
+      /* Every approved buyer is tagged active (Sir, 16 Nov 2026: Natureka was
+         missing from the active segment because they hadn't opted in). Only
+         an opted-in buyer is subscribed, so campaigns still go only to them. */
+      await omni({ action: "contact_tag", email: b.email, addTags: ["approved", "active", "trade"], subscribe: !!b.marketing_opt_in, firstName: first, lastName: String(b.name || "").split(" ").slice(1).join(" ") })
+        .then(() => notes.push(b.marketing_opt_in ? "added to the mailing list" : "tagged active in Omnisend (not subscribed — no opt-in)")).catch(e => notes.push(`⚠ Omnisend: ${e.message}`));
       // The approval email: sent by the ERP itself through Resend (from
       // eartheditions.co, so it reaches the inbox); until that's set up, the
       // Omnisend automation on wholesale_approved sends it.

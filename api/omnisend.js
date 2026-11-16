@@ -590,7 +590,9 @@ export default async function handler(req, res) {
         const born = [...add];
         for (const t of createTags) if (!born.some(x => x.toLowerCase() === t.toLowerCase())) born.push(t);
         const created = await omni("POST", "/contacts", {
-          identifiers: [{ type: "email", id: email, channels: { email: { status: "subscribed" } } }],
+          /* subscribe: false (a trade buyer who didn't tick "send me emails") puts
+             them in the tag's segment without signing them up for campaigns. */
+          identifiers: [{ type: "email", id: email, channels: { email: { status: body.subscribe === false ? "nonSubscribed" : "subscribed" } } }],
           tags: born.slice(0, 25),
           ...(body.firstName ? { firstName: String(body.firstName).slice(0, 100) } : {}),
           ...(body.lastName ? { lastName: String(body.lastName).slice(0, 100) } : {}),
