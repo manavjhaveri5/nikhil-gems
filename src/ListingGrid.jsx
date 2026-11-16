@@ -5,7 +5,7 @@
    calls; this file is the view. */
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, lazy, Suspense } from "react";
 import { C, FI } from "./lmTheme.js";
-import { locationOf, needsLocation, knownLocations, tradeRowOf, defaultPieces, tradeTitleFor, tradeRefOnly } from "./listingChannels.js";
+import { locationOf, needsLocation, knownLocations, tradeRowOf, defaultPieces, defaultUnit, tradeTitleFor, tradeRefOnly } from "./listingChannels.js";
 import { useStoriesDone, listedAt } from "./storyState.js";
 import { sbThumb } from "./photoUrls.js";
 import { loadK } from "./utils.js";
@@ -804,7 +804,7 @@ function tradeStart(l, t) {
   const d = String(l.trade_description || l.shopify_description || "");
   const m = d.match(/Pieces\s*:\s*(?:per\s*kg\s*)?(\d+)\s*(?:[-–]\s*(\d+))?/i) || [];
   const a = l.trade_ask || {};
-  const unit = t?.unit || a.unit || (l.type === "unique" ? "piece" : "kg");
+  const unit = t?.unit || a.unit || defaultUnit(l);
   const dp = defaultPieces(l);
   const pieces = t?.pieces || a.pieces || m[1] || dp?.pieces || "";
   const pieces_max = t?.pieces ? t.pieces_max || "" : a.pieces ? a.pieces_max || "" : m[1] ? (m[2] !== m[1] && m[2]) || "" : dp?.pieces_max || "";

@@ -108,6 +108,34 @@ const PER_KG = [
   [/\bhearts?\b/i, 20, 30],
   [/\bshiva|\blingams?\b/i, 20, 25],
 ];
+/* The shape a title names, in the form's own words, for when the AI gives
+   none. "2 Inch Sunstone Bowl" → "Bowl - 2 inch". */
+const TITLE_SHAPES = [
+  [/\bmini[\s-]*hearts?\b/i, "Heart"], [/\bhearts?\b/i, "Heart"], [/\bspheres?\b/i, "Sphere"],
+  [/\bpalm[\s-]?stones?\b|\bworry stones?\b/i, "Palmstone"], [/\btowers?\b|\bobelisks?\b/i, "Tower"],
+  [/\btumbled?\b/i, "Tumbled"], [/\bbracelets?\b/i, "Bracelet"], [/\bpendulums?\b/i, "Pendulum"],
+  [/\bpendants?\b|\bnecklaces?\b/i, "Pendant"], [/\beggs?\b/i, "Egg"], [/\bskulls?\b/i, "Skull"],
+  [/\bpyramids?\b/i, "Pyramid"], [/\bchips\b/i, "Chips"], [/\bfree[\s-]?forms?\b/i, "Freeform"],
+  [/\bmalas?\b/i, "Mala"], [/\bwands?\b/i, "Wand"], [/\bpoints?\b/i, "Point"], [/\bslabs?\b|\bslices?\b/i, "Slab"],
+  [/\brough\b|\braw\b/i, "Rough"],
+];
+export function shapeFromTitle(title) {
+  const t = String(title || "");
+  if (/\bbowls?\b/i.test(t)) {
+    const n = +((t.match(/(\d+(?:\.\d+)?)\s*(?:inch|inches|in\b|")/i) || [])[1] || 0);
+    const size = n ? Math.min(7, Math.max(2, Math.round(n))) : 4;
+    return `Bowl - ${size} inch`;
+  }
+  return (TITLE_SHAPES.find(([re]) => re.test(t)) || [])[1] || "";
+}
+/* Bowls, carvings and other single objects go wholesale by the piece; loose
+   shapes (hearts, palmstones, tumbles…) by the kilo. */
+const BY_PIECE = /\bbowls?\b|\bskulls?\b|\btowers?\b|\bobelisks?\b|\bpyramids?\b|\bwands?\b|\bpendulums?\b|\bpendants?\b|\bbracelets?\b|\bmalas?\b|\bidols?\b|\bganesh|\bcarvings?\b|\bstatues?\b|\bstands?\b|\bgeodes?\b|\bclusters?\b|\bslabs?\b/i;
+export function defaultUnit(l) {
+  if (l?.type === "unique") return "piece";
+  if (defaultPieces(l)) return "kg";
+  return BY_PIECE.test(`${l?.shape || ""} ${l?.title || ""}`) ? "piece" : "kg";
+}
 export function defaultPieces(l) {
   for (const text of [`${l?.shape || ""} ${l?.title || ""}`, l?.trade_title, l?.title]) {
     const hit = PER_KG.find(([re]) => re.test(String(text || "")));

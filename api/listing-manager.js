@@ -19,7 +19,7 @@ import { rajSnapshot, rajFallback } from "../lib/raj.js";
 import { rajAudit } from "../lib/raj-audit.js";
 import { draftFixes } from "../lib/raj-fixes.js";
 import { EE_SECTIONS, eeSectionFor } from "../lib/eeSections.js";
-import { ETSY_CATEGORIES } from "../lib/listingCategories.js";
+import { ETSY_CATEGORIES, SHAPES } from "../lib/listingCategories.js";
 import { girtonTick, sirTelegram } from "../lib/girton.js";
 import { decide as girtonDecide } from "../lib/girton-proposals.js";
 
@@ -360,7 +360,10 @@ async function etsyTaxonomyProperties(taxonomyId, hdrs) {
 
 
 /* ── Claude AI helper ──────────────────────────────────────────────────────── */
-const SHAPE_WORDS = "Sphere, Heart, Palmstone, Tower, Tumbled, Bracelet, Pendant, Pendulum, Rough, Mineral, Egg, Skull, Pyramid, Chips, Freeform, Wand, Point, Slab, Other";
+/* The same list the form's Shape picker offers, so the answer always fits it.
+   A bowl answers with its size ("Bowl - 2 inch"); "Mineral" is for a raw
+   specimen or cluster, not a catch-all. */
+const SHAPE_WORDS = SHAPES.join(", ");
 /* A prompt in, the model's JSON out: the same providers aiGenerate uses. */
 async function aiJson(prompt, maxTokens = 3000) {
   let text = "";
@@ -447,7 +450,7 @@ Return JSON with these fields:
   "ee_section": ${JSON.stringify(`the EarthEditions shop section this piece belongs in, exactly as written — one of: ${listing._ee_sections.slice(0, 40).join(" | ")}. A section named for this kind of piece (e.g. Mini Hearts for a small heart) beats a broad one`)},` : ""}
   "suggested_section": "one of: Spheres, Hearts, Palmstones, Bracelets, Towers & Freeforms, Pendants & Pendulums, Tumbled Stones, Mineral Specimens, Rough Stones, Gemstone Bowls and More, Collector's Corner, Wellness",
   "material": "the stone's name, e.g. Ruby in Zoisite — only if the title or description says it, else empty",
-  "shape": "one of: ${SHAPE_WORDS} — the one this piece is, else empty",
+  "shape": "exactly one of: ${SHAPE_WORDS} — the one this piece is (a bowl: the Bowl size nearest its width in inches; Mineral only for a raw specimen or cluster), else empty",
   "origin": "the country it's from — only if the title or description says it, else empty",
   "size": "e.g. 165mm or 3 inch — only if stated, else empty",
   "finish": "e.g. Polished, Natural, Raw, Tumbled — what the surface is, from the title, shape or description (a cluster, geode or specimen is Natural unless it says polished), else empty"

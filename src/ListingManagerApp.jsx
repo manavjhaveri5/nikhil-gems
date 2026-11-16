@@ -39,7 +39,7 @@ import RenewalQueue from "./RenewalQueue.jsx";
 import EtsyQueuePanel, { enqueueEtsy, markQueueLive, chooseEtsyPublish, loadQueueSettings, queuesOnEtsy, whenLabel, QUEUE_KEY as ETSY_QUEUE_KEY } from "./etsyQueue.jsx";
 import { eeBestSection } from "../lib/eeSections.js";
 import { sbThumb } from "./photoUrls.js";
-import { CHANNELS, OTHER_CHANNELS, isEtsyKey, channel, titleFor, descFor, titleSource, linkOf, parseRef, connectPatch, readiness, readyScore, locationOf, needsLocation, knownLocations, withLocationLog, tradeRowOf, tradeRefOnly, defaultPieces, tradeTitleFor, nextLocation, statusShort } from "./listingChannels.js";
+import { CHANNELS, OTHER_CHANNELS, isEtsyKey, channel, titleFor, descFor, titleSource, linkOf, parseRef, connectPatch, readiness, readyScore, locationOf, needsLocation, knownLocations, withLocationLog, tradeRowOf, tradeRefOnly, defaultPieces, defaultUnit, shapeFromTitle, tradeTitleFor, nextLocation, statusShort } from "./listingChannels.js";
 const now   = () => new Date().toISOString();
 
 /* ─── storage keys ───────────────────────────────────────────────────────── */
@@ -2228,7 +2228,15 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
         if (d.ai.etsy_title && blank("etsy_title")) set("etsy_title", d.ai.etsy_title);
         if (d.ai.ebay_title && blank("ebay_title")) set("ebay_title", String(d.ai.ebay_title).slice(0, 80));
         if (d.ai.etsy_description && blank("etsy_description")) set("etsy_description", d.ai.etsy_description);
-        for (const k of ["material", "shape", "origin", "size"]) if (d.ai[k] && blank(k)) set(k, d.ai[k]);
+        for (const k of ["material", "origin", "size"]) if (d.ai[k] && blank(k)) set(k, d.ai[k]);
+        /* A new form starts on "Mineral", which was never replaced, so a 2 inch
+           bowl stayed a Mineral. That starting value counts as empty here, and
+           the title's own shape word fills in when the AI names none. */
+        const shapeNow = String(form.shape || "").trim();
+        if (!shapeNow || shapeNow === "Mineral") {
+          const sh = d.ai.shape && SHAPES.includes(d.ai.shape) ? d.ai.shape : shapeFromTitle(form.title) || d.ai.shape;
+          if (sh && sh !== shapeNow) set("shape", sh);
+        }
         /* The Etsy category and the EarthEditions section, as the AI reads the
            piece — unless picked by hand (a section the picker chose itself can
            be replaced). A category's shape fills only an empty shape. */
@@ -3010,7 +3018,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
   const tradeStep = () => {
     const d = defaultPieces(form);
     const ta = form.trade_ask || {};
-    const unit = ta.unit || "kg";
+    const unit = ta.unit || defaultUnit(form);
     const setTa = patch => set("trade_ask", { unit, pieces: ta.pieces ?? (d ? String(d.pieces) : ""), pieces_max: ta.pieces_max ?? (d ? String(d.pieces_max) : ""), ...ta, ...patch });
     return (
       <Section title="Wholesale" accent="#1F8F4E">
@@ -11378,7 +11386,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
           // No count yet: start from the shape's usual pieces per kilo.
           const d = !t?.pieces && !g.pieces ? defaultPieces(listing) : null;
           ask = await askTrade(listing, {
-            unit: t?.unit || "kg",
+            unit: t?.unit || defaultUnit(listing),
             pieces: t?.pieces ? String(t.pieces) : g.pieces || (d ? String(d.pieces) : ""),
             pieces_max: t?.pieces_max ? String(t.pieces_max) : g.pieces ? g.pieces_max : d ? String(d.pieces_max) : "",
             origin: t?.origin || g.origin,
