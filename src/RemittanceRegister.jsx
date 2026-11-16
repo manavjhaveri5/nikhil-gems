@@ -214,7 +214,24 @@ export default function RemittanceRegister({ aiExtract, isUnclassified = t => !t
   }, [remits, credits]);
   const unentered = credits.filter(t => !ledgerOf.used.has(t.id) && (month === "all" || monthOf(t.date) === month))
     .sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")));
-  const months = [...new Set([...remits.map(r => monthOf(r.date)), ...credits.map(t => monthOf(t.date))].filter(Boolean))].sort().reverse();
+  /* Every month from the first remittance or credit through this one — an
+     empty month too. Only months with an entry were listed, so November 2026
+     (nothing in yet) couldn't be picked to upload or add its first one. */
+  const months = (() => {
+    const seen = [...new Set([...remits.map(r => monthOf(r.date)), ...credits.map(t => monthOf(t.date))].filter(m => /^\d{4}-\d{2}$/.test(m)))].sort();
+    const now = new Date();
+    const cur = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+    const out = [];
+    let [y, m] = (seen[0] || cur).split("-").map(Number);
+    const last = seen.length && seen[seen.length - 1] > cur ? seen[seen.length - 1] : cur;
+    for (let i = 0; i < 240; i++) {
+      const k = `${y}-${String(m).padStart(2, "0")}`;
+      out.push(k);
+      if (k >= last) break;
+      if (++m > 12) { m = 1; y++; }
+    }
+    return out.reverse();
+  })();
   const shown = remits.filter(r => month === "all" || monthOf(r.date) === month)
     .sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")));
 
