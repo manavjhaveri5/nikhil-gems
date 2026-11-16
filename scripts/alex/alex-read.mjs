@@ -13,14 +13,16 @@ const today = istDay();
 // ── atyahara.com orders from Shopify ─────────────────────────────────────────
 const REGION = { Maharashtra: "West", Gujarat: "West", Goa: "West", Rajasthan: "North", Karnataka: "South", Telangana: "South", "Andhra Pradesh": "South", "Tamil Nadu": "South", Kerala: "South", Puducherry: "South", Delhi: "North", Haryana: "North", Punjab: "North", "Uttar Pradesh": "North", Uttarakhand: "North", "Himachal Pradesh": "North", Chandigarh: "North", "Jammu and Kashmir": "North", "Madhya Pradesh": "Central", Chhattisgarh: "Central", "West Bengal": "East", Assam: "East", Odisha: "East", Bihar: "East", Jharkhand: "East" };
 const METRO = c => { c = (c || "").toLowerCase(); return /mumbai|thane|navi mumbai|mymba/.test(c) ? "Mumbai MMR" : /pune/.test(c) ? "Pune" : /bangal|bengal/.test(c) ? "Bengaluru" : /hyderab|rangareddy|secunderabad/.test(c) ? "Hyderabad" : /chennai/.test(c) ? "Chennai" : /delhi|gurg|noida|ghaziabad|faridabad/.test(c) ? "Delhi NCR" : /ahmedabad/.test(c) ? "Ahmedabad" : /kolkata/.test(c) ? "Kolkata" : "Other"; };
-const SOURCE = o => { const l = `${o.landing_site || ""} ${o.referring_site || ""}`; return /utm_medium=paid|utm_source=(fb|facebook|ig)|Facebook_UA|fbclid|paid_soci/i.test(l) ? "Meta ads" : /google/i.test(l) ? "Google" : /instagram/i.test(l) ? "Instagram organic" : /whatsapp|wa\.me/i.test(l) ? "WhatsApp" : o.source_name === "web" ? "Direct" : o.source_name === "shopify_draft_order" ? "Manual order" : "Checkout app (source not recorded)"; };
+// The Shiprocket (fastrr) checkout keeps UTMs in note_attributes, not landing_site (found 15 Nov 2026).
+const NA = o => Object.fromEntries((o.note_attributes || []).map(a => [a.name, a.value]));
+const SOURCE = o => { const na = NA(o); const l = `${o.landing_site || ""} ${o.referring_site || ""} ${na.landing_page_url || ""} utm_medium=${na.utm_medium || ""} utm_source=${na.utm_source || ""}`; return /utm_medium=paid|utm_source=(fb|facebook|ig)|Facebook_UA|fbclid|paid_soci/i.test(l) ? "Meta ads" : /google/i.test(l) ? "Google" : /instagram/i.test(l) ? "Instagram organic" : /whatsapp|wa\.me/i.test(l) ? "WhatsApp" : o.source_name === "web" ? "Direct" : o.source_name === "shopify_draft_order" ? "Manual order" : "Checkout app (source not recorded)"; };
 
 async function shopifyOrders() {
   const { data } = await sb.from("app_data").select("value").eq("key", "ng-shopify-creds-v1").maybeSingle();
   const store = data?.value?.store || "7b7b96-29.myshopify.com", token = data?.value?.token;
   if (!token) throw new Error("no Atyahara Shopify token");
   const out = [];
-  let url = `https://${store}/admin/api/2025-01/orders.json?status=any&limit=250&fields=created_at,total_price,cancelled_at,shipping_address,billing_address,line_items,source_name,referring_site,landing_site,discount_codes`;
+  let url = `https://${store}/admin/api/2025-01/orders.json?status=any&limit=250&fields=created_at,total_price,cancelled_at,shipping_address,billing_address,line_items,source_name,referring_site,landing_site,discount_codes,note_attributes`;
   for (let i = 0; url && i < 20; i++) {
     const r = await fetch(url, { headers: { "X-Shopify-Access-Token": token } });
     if (!r.ok) throw new Error(`Shopify ${r.status}`);

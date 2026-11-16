@@ -20,7 +20,7 @@ import { rajAudit } from "../lib/raj-audit.js";
 import { draftFixes } from "../lib/raj-fixes.js";
 import { EE_SECTIONS, eeSectionFor } from "../lib/eeSections.js";
 import { ETSY_CATEGORIES } from "../lib/listingCategories.js";
-import { girtonTick } from "../lib/girton.js";
+import { girtonTick, sirTelegram } from "../lib/girton.js";
 import { decide as girtonDecide } from "../lib/girton-proposals.js";
 
 const MEDIA_BUCKET = "ng-media";
@@ -2131,6 +2131,13 @@ async function listingHandler(req, res) {
     if (!(await cronKeyOk(req, "raj"))) return res.status(401).json({ error: "Unauthorized" });
     try { return res.json({ ok: true, ...(await girtonTick({ sb: adminClient() })) }); }
     catch (e) { console.error("girton:", e); return res.status(500).json({ error: e.message || String(e) }); }
+  }
+  /* A Telegram line to Sir from the Mac's Raj / ad-desk scripts (raj-push.mjs telegram),
+     sent with the server's bot so the Mac never holds the bot token. 'raj' cron key only. */
+  if (action === "raj_telegram") {
+    if (!(await cronKeyOk(req, "raj"))) return res.status(401).json({ error: "Unauthorized" });
+    const out = await sirTelegram(String(body.text || "").slice(0, 12000));
+    return res.status(out.sent ? 200 : 500).json({ ok: !!out.sent, ...out });
   }
   // Sir's yes/no on a Girton proposal (lib/girton-proposals.js). Admin only.
   if (action === "girton_decide") {

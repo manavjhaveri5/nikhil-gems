@@ -90,7 +90,14 @@ export function redact(s) {
 
 export async function telegram(text) {
   const c = rajConfig();
-  if (!c.telegram_token || !c.telegram_chat_id) return { skipped: "no ~/.raj/config.json telegram_token / telegram_chat_id" };
+  if (!c.telegram_token || !c.telegram_chat_id) {
+    // No bot on this Mac: ask the ERP server to send it with its own bot (listing-manager raj_telegram).
+    const sb = supa(), key = await cronKey(sb);
+    const r = await fetch(`${LIVE}/api/listing-manager`, { method: "POST", headers: { "Content-Type": "application/json", "x-cron-key": key },
+      body: JSON.stringify({ action: "raj_telegram", text: String(text).slice(0, 12000) }) }).catch(e => ({ ok: false, json: async () => ({ error: String(e) }) }));
+    const d = await r.json().catch(() => ({}));
+    return d.sent ? { sent: true, via: "erp" } : { error: d.error || `ERP HTTP ${r.status}` };
+  }
   const r = await fetch(`https://api.telegram.org/bot${c.telegram_token}/sendMessage`, {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ chat_id: c.telegram_chat_id, text: String(text).slice(0, 4000), parse_mode: "Markdown", disable_web_page_preview: true }),

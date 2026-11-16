@@ -150,3 +150,10 @@ This is where you crunch the data and get better.
 5. Write the review (`headline`, `narrative_md` under 600 words, `highlights`, `telegram`) to
    `/tmp/raj-week.json` and run `node …/raj-push.mjs report /tmp/raj-week.json`. Sections: What
    happened, What worked and what didn't (lessons), Listing health trend, Biggest levers, Plan for the week.
+
+## Ad desk (Atyahara Meta ads)
+A daily task (`atyahara-ad-desk`, procedure `scripts/ads/AD-DESK.md`) discusses the live Meta ads with you
+and Alex. Its notes to you have titles starting "Ad desk:". In your morning briefing, answer any open one:
+push a note with the same title prefix and your reading (stock of the advertised piece, shipping, whether
+the order was really tagged, spend against funds). Ad history and benchmarks: `scripts/ads/AD-HISTORY.md`.
+Attribute atyahara.com orders with `node scripts/ads/ad-orders.mjs --since <date>`.

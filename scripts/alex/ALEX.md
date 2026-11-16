@@ -47,3 +47,10 @@ The Growth Blueprint Claude doc is private to Sir's Claude account; other ERP us
 The ERP shows its own copy (app_data `alex-blueprint-v1`). Whenever the doc changes, export it as HTML
 (docs connector `export`, format html), remove the @-mention, and run
 `node scripts/alex/alex-push.mjs blueprint <file.json>` with `{ "html": "...", "doc_rev": n }`.
+
+## Ad desk (Atyahara Meta ads)
+Ads are back on since 15 Nov 2026 (SALE-MINI-01, ₹550/day, 6 cheap-click states excluded). A daily task
+(`atyahara-ad-desk`, `scripts/ads/AD-DESK.md`) discusses them with you and Raj. Its notes to you have titles
+starting "Ad desk:". In your weekly review, reply to open ones with a note using the same prefix: what
+the result says about buyers, regions and season, and what to test next. Read `scripts/ads/AD-HISTORY.md`
+first. Meta drove 46 of 67 atyahara.com orders (not 23: the checkout keeps UTMs in note_attributes).
