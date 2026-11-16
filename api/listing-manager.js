@@ -2136,7 +2136,7 @@ async function listingHandler(req, res) {
      sent with the server's bot so the Mac never holds the bot token. 'raj' cron key only. */
   if (action === "raj_telegram") {
     if (!(await cronKeyOk(req, "raj"))) return res.status(401).json({ error: "Unauthorized" });
-    const out = await sirTelegram(String(body.text || "").slice(0, 12000));
+    const out = await sirTelegram(String(body.text || "").slice(0, 12000), adminClient());
     return res.status(out.sent ? 200 : 500).json({ ok: !!out.sent, ...out });
   }
   // Sir's yes/no on a Girton proposal (lib/girton-proposals.js). Admin only.

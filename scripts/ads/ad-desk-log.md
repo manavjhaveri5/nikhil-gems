@@ -25,3 +25,21 @@ FIRST SALE SINCE RESTART: 16 Nov, ₹2,850, Delhi, 5 × Mini Gemstone Ganesha, t
 Funds ₹2,724.23 (read), so ₹579.76 spent since the restart (15 Nov ₹253.77 plus about ₹326 on 16 Nov so far). Meta hadn't yet counted the purchase in the 15 Nov view.
 Chair: About ₹580 per tagged sale so far, under the ₹718 lifetime figure, from a sample of 1. Delhi is a kept state. Interesting, but one order proves nothing yet: judge on 22 Nov.
 Telegram: still not configured (~/.raj/config.json missing), so Sir has had no alerts.
+
+### 2026-11-16 ~12:00 IST critical review (manual, Sir asked)
+Since restart (15–16 Nov): ₹497.85 spend (plus 18% GST = ₹587 billed), 1,388 impressions, reach 1,173, freq 1.18, CPM ₹359, 62 link clicks, CPC ₹8.03, CTR 4.47%, 56 LPV, 1 purchase (Meta 1, Shopify 1: ₹2,850 Delhi, 5 pcs).
+Day 1 vs day 2 so far: CPC ₹6.34 → ₹11.09, CTR 5.1% → 3.6%, CPM ₹326 → ₹401.
+Regions (₹, link clicks): MH 167/12 (CPC ₹13.9), KA 88/13, TN 82/12, TS 64/2 (CPC ₹31.8, CTR 1.35%), DL 28/8 (CPC ₹3.5, the sale), KL 17/5, AP 15/4, HR 14/2; tail states ≈ ₹15. Excluded states show no delivery.
+Age/gender: women 73% of spend; 25–44 = 68%. M35–44 weak (CTR 2.0%, CPC ₹17.7). Women 45+ have CPMs of ₹826–1,399.
+Chair: 1 order is no proof. Day 2 is worse. MH and TS are eating spend at poor CPC. Only one creative is running, so nothing to compare. Hold ₹550 until 3 tagged orders, and get a second creative live now.
+
+### 2026-11-16 13:00 IST check (manual)
+16 Nov to 13:00: ₹292.90, reach 674, 27 link clicks, CPC ₹10.85, CTR 3.56%, 25 LPV, 1 purchase (the Delhi ₹2,850 order).
+Since restart: ₹546.67 (₹645 with GST), 67 link clicks (CPC ₹8.16), 61 LPV, 1 tagged order. Spend is on pace for the full ₹550 today.
+Chair: Day 2 clicks are 71% dearer than day 1 (₹10.85 vs ₹6.34), and the CTR is down from 5.1% to 3.6%. Still 1 order. Hold the budget; the second creative is the priority.
+
+### 2026-11-16 afternoon (manual, Sir reported "one more fb order")
+SECOND SALE: 16 Nov 14:30, ₹2,850, Gurugram (Haryana), Instagram placement, ad [18/8]mix4_02.
+Both of today's orders are the **full 5-stone set** (Pyrite, Clear Quartz, Lapis, Amethyst, Rose Quartz at ₹799 each) with code **BGANESHA5** (₹1,145 off, so ₹3,995 → ₹2,850), paid via Razorpay. They're 2 different buyers, both in Delhi NCR, both from Instagram.
+Since the restart: 2 tagged orders, ₹5,700, on roughly ₹600–700 spent (read funds on the next run).
+Chair: Interesting. The 5-stone bundle with BGANESHA5 is what's converting, not single pieces. Under Sir's rule this is a scale signal: recommend ₹550 → about ₹700/day plus a top-up. Check that Mini Ganesha stock covers 5-piece sets.

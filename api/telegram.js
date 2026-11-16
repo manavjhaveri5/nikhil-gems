@@ -2658,6 +2658,15 @@ export default async function handler(req, res) {
         return;
       }
 
+      // /raj: this chat becomes where Raj, the ad desk and Alex message Sir
+      // (lib/girton.js sirTelegram reads app_data raj-telegram-chat-v1).
+      if (/^\/raj(@\w+)?\s*$/i.test(text)) {
+        const bot = _ctx.memory.startsWith("at-") ? "at" : "ng";
+        await saveK("raj-telegram-chat-v1", { chat_id: String(chatId), bot, type: message.chat?.type || "", set_at: new Date().toISOString() }, { quiet: true });
+        await tg("sendMessage", { chat_id: chatId, text: "✅ Raj, Alex and the ad desk will message you here from now on." }, _ctx.token);
+        return;
+      }
+
       // Load session — single read
       const session = await getSession(chatId);
 

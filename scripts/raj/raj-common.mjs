@@ -96,7 +96,7 @@ export async function telegram(text) {
     const r = await fetch(`${LIVE}/api/listing-manager`, { method: "POST", headers: { "Content-Type": "application/json", "x-cron-key": key },
       body: JSON.stringify({ action: "raj_telegram", text: String(text).slice(0, 12000) }) }).catch(e => ({ ok: false, json: async () => ({ error: String(e) }) }));
     const d = await r.json().catch(() => ({}));
-    return d.sent ? { sent: true, via: "erp" } : { error: d.error || `ERP HTTP ${r.status}` };
+    return d.sent ? { sent: true, via: "erp", to: d.to } : { error: d.error || `ERP HTTP ${r.status}` };
   }
   const r = await fetch(`https://api.telegram.org/bot${c.telegram_token}/sendMessage`, {
     method: "POST", headers: { "Content-Type": "application/json" },
