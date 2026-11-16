@@ -5,7 +5,7 @@
    calls; this file is the view. */
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, lazy, Suspense } from "react";
 import { C, FI } from "./lmTheme.js";
-import { locationOf, needsLocation, knownLocations, tradeRowOf, defaultPieces, defaultUnit, tradeTitleFor, tradeRefOnly } from "./listingChannels.js";
+import { locationOf, needsLocation, knownLocations, tradeRowOf, defaultPieces, defaultUnit, tradeTitleFor, tradeRefOnly, tradeMatches } from "./listingChannels.js";
 import { useStoriesDone, listedAt } from "./storyState.js";
 import { sbThumb } from "./photoUrls.js";
 import { loadK } from "./utils.js";
@@ -816,6 +816,14 @@ function TradePost({ rows: picked, trade, onDetect, onClose, onRun }) {
   const linkedOnly = picked.length - rows.length;
   const tOf = l => tradeRowOf(trade, l);
   const [vals, setVals] = useState(() => Object.fromEntries(rows.map(l => [l.id, tradeStart(l, tOf(l))])));
+  /* Pieces with no trade product of their own: what's already on the site
+     under another name, and which one to link (exact matches picked). */
+  const products = useMemo(() => Object.entries(trade || {}).filter(([k]) => k.startsWith("#")).map(([, r]) => r), [trade]);
+  const found = useMemo(() => Object.fromEntries(rows.filter(l => !tOf(l)).map(l => [l.id, tradeMatches(l, products)]).filter(([, m]) => m.length)), [products]); // eslint-disable-line react-hooks/exhaustive-deps
+  const [link, setLink] = useState(() => Object.fromEntries(Object.entries(found).filter(([, m]) => m[0].extra === 0).map(([id, m]) => [id, m[0].t.id])));
+  const linkOf = id => (found[id] || []).find(m => m.t.id === link[id])?.t || null;
+  const nLink = rows.filter(l => linkOf(l.id)).length;
+  const posting = rows.filter(l => !linkOf(l.id));
   const [all, setAll] = useState({ price: "", unit: "", origin: "" });
   const [busy, setBusy] = useState(0);
   const [ai, setAi] = useState("");
@@ -823,8 +831,8 @@ function TradePost({ rows: picked, trade, onDetect, onClose, onRun }) {
   const set = (id, k, v) => setVals(x => ({ ...x, [id]: { ...x[id], [k]: v } }));
   // Typed in the top row, it goes straight into every row.
   const fill = (k, v) => { setAll(a => ({ ...a, [k]: v })); if (v === "" || (k === "price" && !(+v > 0))) return; setVals(x => Object.fromEntries(Object.entries(x).map(([id, r]) => [id, { ...r, [k]: v }]))); };
-  const noOrigin = rows.filter(l => !String(vals[l.id].origin || "").trim());
-  const noPrice = rows.filter(l => !(+vals[l.id].price > 0));
+  const noOrigin = posting.filter(l => !String(vals[l.id].origin || "").trim());
+  const noPrice = posting.filter(l => !(+vals[l.id].price > 0));
   const detect = async () => {
     let n = 0;
     for (const l of noOrigin) {
@@ -843,6 +851,8 @@ function TradePost({ rows: picked, trade, onDetect, onClose, onRun }) {
     const list = rows.map(l => {
       const v = vals[l.id];
       const lo = n(v.pieces), hi = n(v.pieces_max);
+      const t = linkOf(l.id);
+      if (t) return { l, link: t };
       return { l, price: +v.price || 0, ask: { unit: v.unit, origin: String(v.origin || "").trim(),
         pieces: v.unit === "piece" ? null : (lo && hi ? Math.min(lo, hi) : lo || hi),
         pieces_max: v.unit === "piece" || !(lo && hi) || lo === hi ? null : Math.max(lo, hi) } };
@@ -865,10 +875,16 @@ function TradePost({ rows: picked, trade, onDetect, onClose, onRun }) {
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
             <thead>
               <tr style={{ color: C.inkFaint, fontSize: 11, textAlign: "left" }}>
-                <th style={{ padding: "6px 4px" }}>Piece</th><th>Now</th><th>Trade $</th><th>Sold per</th><th>Pieces per kilo / lot</th><th>Origin</th>
+                <th style={{ padding: "6px 4px" }}>Piece</th><th>Now</th><th>Already on the trade site?</th><th>Trade $</th><th>Sold per</th><th>Pieces per kilo / lot</th><th>Origin</th>
               </tr>
               <tr style={{ background: C.bg }}>
                 <td colSpan={2} style={{ padding: "6px 4px", fontSize: 11.5, color: C.inkMid }}>Same for all →</td>
+                <td style={{ padding: "6px 4px", fontSize: 11.5 }}>
+                  {Object.keys(found).length ? <>
+                    <button onClick={() => setLink(Object.fromEntries(Object.entries(found).map(([id, m]) => [id, m[0].t.id])))} style={{ ...box("auto"), cursor: "pointer" }}>Link all {Object.keys(found).length} found</button>
+                    <button onClick={() => setLink({})} style={{ ...box("auto"), cursor: "pointer", marginLeft: 4 }}>Post all as new</button>
+                  </> : <span style={{ color: C.inkFaint }}>None found</span>}
+                </td>
                 <td style={{ padding: "6px 4px" }}><input inputMode="decimal" value={all.price} onChange={e => fill("price", e.target.value.replace(/[^\d.]/g, ""))} placeholder="$ each" style={box()} /></td>
                 <td style={{ padding: "6px 4px" }}><select value={all.unit} onChange={e => fill("unit", e.target.value)} style={box(84)}><option value="">—</option>{TP_UNITS.map(([k, t]) => <option key={k} value={k}>{t}</option>)}</select></td>
                 <td />
@@ -882,7 +898,7 @@ function TradePost({ rows: picked, trade, onDetect, onClose, onRun }) {
             </thead>
             <tbody>
               {rows.map(l => {
-                const v = vals[l.id], t = tOf(l);
+                const v = vals[l.id], t = tOf(l), m = found[l.id] || [], lk = linkOf(l.id);
                 const img = (l.images || []).find(u => typeof u === "string");
                 const most = Math.max(+v.pieces || 0, +v.pieces_max || 0);
                 const each = v.unit !== "piece" && +v.price > 0 && most ? `≈ $${(+v.price / most).toFixed(2)}/pc` : "";
@@ -897,10 +913,21 @@ function TradePost({ rows: picked, trade, onDetect, onClose, onRun }) {
                         </div>
                       </div>
                     </td>
-                    <td style={{ whiteSpace: "nowrap", fontSize: 11.5, color: t?.live ? green : C.inkFaint, fontWeight: t?.live ? 700 : 500 }}>{t?.live ? "Live" : t ? "Hidden" : "New"}</td>
-                    <td style={{ padding: "6px 4px" }}><input inputMode="decimal" value={v.price} onChange={e => set(l.id, "price", e.target.value.replace(/[^\d.]/g, ""))} style={{ ...box(), borderColor: +v.price > 0 ? C.border : C.amber }} /></td>
-                    <td style={{ padding: "6px 4px" }}><select value={v.unit} onChange={e => set(l.id, "unit", e.target.value)} style={box(84)}>{TP_UNITS.map(([k, tt]) => <option key={k} value={k}>{tt}</option>)}</select></td>
-                    <td style={{ padding: "6px 4px", whiteSpace: "nowrap" }}>
+                    <td style={{ whiteSpace: "nowrap", fontSize: 11.5, color: t?.live || lk ? green : C.inkFaint, fontWeight: t?.live || lk ? 700 : 500 }}>{t?.live ? "Live" : t ? "Hidden" : lk ? "Link" : "New"}</td>
+                    <td style={{ padding: "6px 4px", minWidth: 230 }}>
+                      {t ? <span style={{ fontSize: 11.5, color: C.inkFaint }}>Its own trade product</span>
+                        : m.length ? <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                          {lk?.image && <img src={sbThumb(lk.image, 80)} alt="" style={{ width: 34, height: 34, objectFit: "cover", borderRadius: 6, flex: "none" }} />}
+                          <select value={link[l.id] || ""} onChange={e => setLink(x => ({ ...x, [l.id]: e.target.value }))} style={{ ...box(200), borderColor: lk ? green : C.border }}>
+                            <option value="">Post as new</option>
+                            {m.map(({ t: p, extra }) => <option key={p.id} value={p.id}>{extra ? "Maybe: " : "Link: "}{p.title}{p.price ? ` · $${p.price}/${p.unit === "piece" ? "pc" : p.unit}` : ""}{p.live ? "" : " · hidden"}</option>)}
+                          </select>
+                        </div>
+                        : <span style={{ fontSize: 11.5, color: C.inkFaint }}>Not found</span>}
+                    </td>
+                    <td style={{ padding: "6px 4px", opacity: lk ? .35 : 1, pointerEvents: lk ? "none" : "auto" }}><input inputMode="decimal" value={v.price} onChange={e => set(l.id, "price", e.target.value.replace(/[^\d.]/g, ""))} style={{ ...box(), borderColor: +v.price > 0 ? C.border : C.amber }} /></td>
+                    <td style={{ padding: "6px 4px", opacity: lk ? .35 : 1, pointerEvents: lk ? "none" : "auto" }}><select value={v.unit} onChange={e => set(l.id, "unit", e.target.value)} style={box(84)}>{TP_UNITS.map(([k, tt]) => <option key={k} value={k}>{tt}</option>)}</select></td>
+                    <td style={{ padding: "6px 4px", whiteSpace: "nowrap", opacity: lk ? .35 : 1, pointerEvents: lk ? "none" : "auto" }}>
                       {v.unit === "piece" ? <span style={{ color: C.inkFaint }}>—</span> : <>
                         <input inputMode="numeric" value={v.pieces} onChange={e => set(l.id, "pieces", e.target.value.replace(/\D/g, ""))} placeholder="from" style={box(54)} />
                         <span style={{ color: C.inkFaint, margin: "0 4px" }}>–</span>
@@ -908,7 +935,7 @@ function TradePost({ rows: picked, trade, onDetect, onClose, onRun }) {
                         {each && <div style={{ fontSize: 11, color: C.inkFaint, marginTop: 2 }}>{each}</div>}
                       </>}
                     </td>
-                    <td style={{ padding: "6px 4px" }}><input value={v.origin} onChange={e => set(l.id, "origin", e.target.value)} placeholder="Country" style={{ ...box(130), borderColor: String(v.origin || "").trim() ? C.border : C.amber }} /></td>
+                    <td style={{ padding: "6px 4px", opacity: lk ? .35 : 1, pointerEvents: lk ? "none" : "auto" }}><input value={v.origin} onChange={e => set(l.id, "origin", e.target.value)} placeholder="Country" style={{ ...box(130), borderColor: String(v.origin || "").trim() ? C.border : C.amber }} /></td>
                   </tr>);
               })}
             </tbody>
@@ -917,11 +944,11 @@ function TradePost({ rows: picked, trade, onDetect, onClose, onRun }) {
         </div>
         <div style={{ padding: "12px 18px", borderTop: `1px solid ${C.border}`, display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
           <span style={{ fontSize: 11.5, color: C.inkFaint }}>
-            {noPrice.length ? `${noPrice.length} without a price · ` : ""}{noOrigin.length ? `${noOrigin.length} without an origin · ` : ""}Pieces already there take these details and go live.
+            {nLink ? `${nLink} link to what's already there (nothing changes on the site) · ` : ""}{noPrice.length ? `${noPrice.length} without a price · ` : ""}{noOrigin.length ? `${noOrigin.length} without an origin · ` : ""}Pieces already there take these details and go live.
           </span>
           <div style={{ flex: 1 }} />
           <button disabled={!!busy || !rows.length} onClick={run} style={{ background: green, color: "#fff", border: "none", borderRadius: 8, padding: "9px 16px", fontSize: 13, fontWeight: 750, cursor: busy ? "wait" : "pointer" }}>
-            {busy ? `Posting… ${Math.floor(busy)}/${rows.length}` : `Post ${rows.length} to trade site`}</button>
+            {busy ? `Working… ${Math.floor(busy)}/${rows.length}` : nLink && posting.length ? `Link ${nLink} · post ${posting.length}` : nLink ? `Link ${nLink} to the trade site` : `Post ${rows.length} to trade site`}</button>
         </div>
       </div>
     </div>

@@ -11161,8 +11161,18 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
      Three at a time, like Price & post. */
   const bulkTradePost = async (rows, onStep) => {
     const failed = []; let done = 0, ok = 0;
-    const one = async ({ l, price, ask }) => {
+    const one = async ({ l, price, ask, link }) => {
       const current = listings.find(x => x.id === l.id) || l;
+      /* Already on the trade site as another product (a per-kilo lot made on
+         the site): connect it the way "Connect" on the listing does. The
+         listing never writes to it. */
+      if (link) {
+        try {
+          await saveListingItem({ ...current, platforms: { ...(current.platforms || {}), trade: { product_id: link.id, status: link.live ? "active" : "draft", url: `https://trade.eartheditions.co/p/${link.id}`, linked_only: true, connected_at: new Date().toISOString() } }, updated_at: new Date().toISOString() });
+          ok++;
+        } catch (e) { failed.push(`${l.title}: ${e.message}`); }
+        onStep?.(++done); return;
+      }
       const next = { ...current, ...(price > 0 ? { price_trade: price } : {}), origin: ask.origin || current.origin || "",
         trade_ask: { unit: ask.unit, pieces: ask.pieces ? String(ask.pieces) : "", pieces_max: ask.pieces_max ? String(ask.pieces_max) : "" },
         updated_at: new Date().toISOString() };
@@ -11175,7 +11185,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
     if (skipped) failed.push(`${skipped} piece${skipped === 1 ? " is" : "s are"} connected to a separate trade product — change ${skipped === 1 ? "it" : "them"} on the trade site`);
     await Promise.all(Array.from({ length: Math.min(3, queue.length) }, async () => { while (queue.length) await one(queue.shift()); }));
     refreshTradeFacts();
-    showToast(failed.length ? `⚠ ${ok} posted — ${rows.length - ok} not` : `✓ ${ok} on the trade site`);
+    showToast(failed.length ? `⚠ ${ok} done — ${rows.length - ok} not` : `✓ ${ok} on the trade site`);
     return { failed };
   };
 

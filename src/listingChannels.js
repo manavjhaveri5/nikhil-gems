@@ -108,6 +108,40 @@ const PER_KG = [
   [/\bhearts?\b/i, 20, 30],
   [/\bshiva|\blingams?\b/i, 20, 25],
 ];
+/* Already on the trade site? Most trade products were made on the site
+   itself (a per-kilo lot: "Arusha Sunstone with Iolite Palmstones (1KG)"),
+   so nothing ties them to the listing. A product is a match when it names
+   the same shape and the same stone — every word of the listing's stone is
+   in its title, and at most one stone word of its title isn't in the
+   listing. Exact ones (no extra word) are picked to link; the rest are
+   offered. Checked against the real catalogue on 16 Nov 2026: ~100 exact. */
+const TP_STOP = new Set("and the with from crystal crystals natural stone stones gemstone gemstones grade aaa kg 1kg lot bulk pcs pc".split(" "));
+const TP_GENERIC = new Set("mini small medium large big polished tumble tumbled wholesale bulk set mix pack piece size round".split(" "));
+const TP_SHAPES = { palmstone: ["palmstone", "palm", "flatstone"], heart: ["heart"], sphere: ["sphere"], tower: ["tower", "obelisk"], tumbled: ["tumble"],
+  egg: ["egg"], pyramid: ["pyramid"], skull: ["skull"], point: ["point"], wand: ["wand"], freeform: ["freeform"], bracelet: ["bracelet"],
+  pendant: ["pendant"], pendulum: ["pendulum", "pendant"], chip: ["chip"], rough: ["rough", "raw"], lingam: ["shivalingam", "lingam"], bowl: ["bowl"] };
+const tpWords = s => new Set(String(s || "").toLowerCase().replace(/palm[\s-]*stones?/g, "palmstone").replace(/[äà]/g, "a")
+  .split(/[^a-z0-9]+/).filter(w => w.length > 2 && !TP_STOP.has(w)).map(w => (w.length > 3 && w.endsWith("s") && !w.endsWith("ss") ? w.slice(0, -1) : w)));
+const tpIsShape = x => Object.values(TP_SHAPES).some(ss => ss.some(s => x.startsWith(s)));
+const tpShapeOf = s => { const w = [...tpWords(s)]; return Object.keys(TP_SHAPES).find(k => w.some(x => TP_SHAPES[k].some(p => x.startsWith(p)))) || null; };
+export function tradeMatches(l, facts) {
+  const sk = tpShapeOf(l.title) || tpShapeOf(l.shape);
+  if (!sk || !facts?.length) return [];
+  const lw = tpWords(`${l.title || ""} ${l.material || ""} ${l.shape || ""}`);
+  const mw = [...tpWords(l.material)].filter(w => !TP_GENERIC.has(w));
+  return facts.map(t => {
+    const w = tpWords(t.title);
+    if (![...w].some(x => TP_SHAPES[sk].some(s => x.startsWith(s)))) return null;
+    const stone = [...w].filter(x => !TP_GENERIC.has(x) && !tpIsShape(x));
+    const stoneHit = stone.filter(x => lw.has(x)).length;
+    if (!stoneHit || (mw.length && !mw.every(x => w.has(x)))) return null;
+    const extra = stone.length - stoneHit;
+    // Ties go to the closer title: "Sunstone Round Palmstone" over "Sunstone Palmstone".
+    const hit = [...w].filter(x => lw.has(x)).length - [...w].filter(x => !lw.has(x)).length / 10;
+    return extra <= 1 ? { t, extra, hit } : null;
+  }).filter(Boolean).sort((a, b) => a.extra - b.extra || b.hit - a.hit || b.t.live - a.t.live).slice(0, 4);
+}
+
 /* The shape a title names, in the form's own words, for when the AI gives
    none. "2 Inch Sunstone Bowl" → "Bowl - 2 inch". */
 const TITLE_SHAPES = [
