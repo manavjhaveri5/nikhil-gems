@@ -520,7 +520,8 @@ export default function RenewalQueue({ listings = [], stock = [], getToken, onRe
     setBusy(job.kind);
     const done = () => { flight.current = false; if (alive.current) setBusy(""); };
     if (job.kind === "stats") {
-      etsyFetch(`/api/etsy?action=renewal_stats&ids=${job.rows.map(r => r.id).join(",")}&_=${Date.now()}`)
+      // Expired ones are named, so the server may hand back another screen's week-old read of them.
+      etsyFetch(`/api/etsy?action=renewal_stats&ids=${job.rows.map(r => r.id).join(",")}&exp=${job.rows.filter(r => r.state === "expired").map(r => r.id).join(",")}&_=${Date.now()}`)
         .then(d => {
           if (!alive.current) return;
           const at = Date.now();

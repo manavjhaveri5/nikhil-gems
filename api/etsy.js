@@ -1,7 +1,40 @@
-import { requireUser, hasStoreSecret, cronKeyOk } from "../lib/auth.js";
+import { requireUser, hasStoreSecret, cronKeyOk, adminClient } from "../lib/auth.js";
 import { getEtsyAccessToken, etsyAuthHandler, etsyShop, etsyApiKey, withEtsyShop, shopKeyOf } from "../lib/etsy-auth.js";
 
 export const maxDuration = 45; // Vercel Pro: allow up to 45s for multi-page listing fetches
+
+/* ── Shared answers ─────────────────────────────────────────────────────────
+   Etsy allows each shop's app 5,000 calls a day. The home page's sales and
+   listings numbers and the Renew tab's per-listing sales were each read by
+   every device and tab on its own clock — the home page alone, left open,
+   cost ~1,500 calls a day per screen — and on 16 Nov the allowance ran out by
+   mid-afternoon, so orders couldn't be marked shipped. An answer is now kept
+   in Supabase and handed to every screen until it is stale, so Etsy is asked
+   once, not once per device. A failure to read or keep it never blocks the
+   live answer. */
+const sharedKey = name => `etsy-shared:${etsyShop().key}:${name}`;
+async function sharedGet(name) {
+  try {
+    const { data } = await adminClient().from("app_data").select("value").eq("key", sharedKey(name)).maybeSingle();
+    const v = typeof data?.value === "string" ? JSON.parse(data.value) : data?.value;
+    return v && v.at ? v : null;
+  } catch { return null; }
+}
+async function sharedPut(name, value) {
+  try { await adminClient().from("app_data").upsert({ key: sharedKey(name), value: { ...value, at: Date.now() } }); } catch {}
+}
+// Per-listing answers (the Renew tab's sales), one app_rows row per listing.
+const STATS_ROWS = "etsy-renewal-stats";
+async function sharedStats(ids) {
+  try {
+    const { data } = await adminClient().from("app_rows").select("data").eq("key", `${STATS_ROWS}:${etsyShop().key}`).eq("deleted", false).in("id", ids);
+    return new Map((data || []).map(r => [String(r.data?.id), r.data]));
+  } catch { return new Map(); }
+}
+async function keepStats(items) {
+  if (!items.length) return;
+  try { await adminClient().rpc("app_rows_apply", { p_key: `${STATS_ROWS}:${etsyShop().key}`, p_items: items, p_deletes: [] }); } catch {}
+}
 
 // Every request is for one Etsy shop (?shop= / X-Etsy-Shop); Atyahara unless it says otherwise.
 export default function handler(req, res) {
@@ -216,6 +249,10 @@ async function etsyHandler(req, res) {
       const from = Math.max(nowS - 400 * 86400, parseInt(req.query.from, 10) || nowS - 62 * 86400);
       const adsFrom = Math.max(nowS - 93 * 86400, parseInt(req.query.ads_from, 10) || nowS - 62 * 86400);
       const money = m => m && m.amount != null ? (+m.amount || 0) / (+m.divisor || 100) : 0;
+      // Shared for 15 minutes (2 when someone presses refresh), if it reaches back far enough.
+      const kept = await sharedGet("pulse");
+      if (kept?.body && kept.body.from <= from && kept.body.adsFrom <= adsFrom && Date.now() - kept.at < (req.query.fresh ? 2 : 15) * 60000)
+        return res.json({ ...kept.body, shared_at: Math.floor(kept.at / 1000) });
 
       const { getJson, allPages } = etsyQueue(authHeaders);
 
@@ -293,14 +330,16 @@ async function etsyHandler(req, res) {
         ads.push({ ts: +e.created_timestamp || +e.create_date || 0, kind, amt: Number((-(+e.amount || 0) / 100).toFixed(2)) });
       }
 
-      return res.json({
+      const body = {
         ok: true,
         currency: receipts.find(r => r.cur)?.cur || "",
         from, adsFrom, at: nowS,
         receipts,
         ads,
         ...(ledgerResult.error ? { adsError: ledgerResult.error } : {}),
-      });
+      };
+      if (!ledgerResult.error) await sharedPut("pulse", { body });
+      return res.json(body);
     }
 
     // ── listing_pulse: the shop's listings in numbers, for the home page ───────
@@ -319,6 +358,10 @@ async function etsyHandler(req, res) {
       const nowS = Math.floor(Date.now() / 1000);
       const from = Math.max(nowS - 400 * 86400, parseInt(req.query.from, 10) || nowS - 62 * 86400);
       const soon = nowS + 30 * 86400, lately = nowS - 30 * 86400;
+      // Shared for 30 minutes (2 when someone presses refresh), if it reaches back far enough.
+      const keptL = await sharedGet("listing_pulse");
+      if (keptL?.body && keptL.body.from <= from && Date.now() - keptL.at < (req.query.fresh ? 2 : 30) * 60000)
+        return res.json({ ...keptL.body, shared_at: Math.floor(keptL.at / 1000) });
       const { getJson, allPages, pagesWhile } = etsyQueue(authHeaders);
       const url = (state, offset, order = "desc", limit = 100) =>
         `https://openapi.etsy.com/v3/application/shops/${sid}/listings?${new URLSearchParams({ state, limit: String(limit), offset: String(offset), sort_on: "created", sort_order: order })}`;
@@ -354,12 +397,14 @@ async function etsyHandler(req, res) {
       }));
       const expiredLately = expired.rows.filter(l => +l.ending_timestamp >= lately).map(l => ({ ends: +l.ending_timestamp }));
 
-      return res.json({
+      const bodyL = {
         ok: true, from, at: nowS,
         counts: { active: active.count, sold_out: soldOut.count, inactive: inactive.count, expired: expired.count, draft: +draft.count || 0 },
         added, expiring, expiredLately,
         ...pub, recent,
-      });
+      };
+      await sharedPut("listing_pulse", { body: bodyL });
+      return res.json(bodyL);
     }
 
     // ── published: new listings between ?from and ?to (unix s), by listing fee ──
@@ -637,7 +682,17 @@ async function etsyHandler(req, res) {
       const { getJson } = etsyQueue(authHeaders);
       const page = (id, offset) => getJson(`https://openapi.etsy.com/v3/application/shops/${sid}/listings/${id}/transactions?limit=100&offset=${offset}`);
       const stats = {};
-      await Promise.all(ids.map(async id => {
+      /* Another screen read these lately: an expired listing's sales don't
+         change (?exp= lists those, kept a week), an active one's are kept
+         12 hours. Only the rest are asked of Etsy. */
+      const expIds = new Set(String(req.query.exp || "").split(",").map(x => x.trim()));
+      const have = await sharedStats(ids);
+      const ask = [];
+      for (const id of ids) {
+        const h = have.get(id);
+        if (h?.s && Date.now() - (h.at || 0) < (expIds.has(id) ? 7 * 86400000 : 12 * 3600000)) stats[id] = h.s; else ask.push(id);
+      }
+      await Promise.all(ask.map(async id => {
         try {
           const first = await page(id, 0);
           const txns = [...(first.results || [])];
@@ -664,7 +719,8 @@ async function etsyHandler(req, res) {
           stats[id] = s;
         } catch (e) { stats[id] = { error: e.message }; }
       }));
-      return res.json({ ok: true, at: nowS, stats });
+      await keepStats(ask.filter(id => stats[id] && !stats[id].error).map(id => ({ id, at: Date.now(), s: stats[id] })));
+      return res.json({ ok: true, at: nowS, stats, asked: ask.length });
     }
 
     // ── renewal_ledger: what Etsy charged, per listing and per sale ──────────────

@@ -942,10 +942,10 @@ export default function EtsyPulse({ onEnter, rates }) {
     const now = new Date();
     if (force || stale(CACHE_KEY, FRESH_MS)) {
       const from = Math.floor(+monthStart(now, -5) / 1000), adsFrom = Math.floor(+monthStart(now, -1) / 1000);
-      await fetchInto(`/api/etsy?action=pulse&from=${from}&ads_from=${adsFrom}&_=${Date.now()}`, CACHE_KEY, setCache, setLoading, setErr);
+      await fetchInto(`/api/etsy?action=pulse&from=${from}&ads_from=${adsFrom}${force ? "&fresh=1" : ""}&_=${Date.now()}`, CACHE_KEY, setCache, setLoading, setErr);
     }
     if (force || stale(LIST_CACHE_KEY, LIST_FRESH_MS)) {
-      await fetchInto(`/api/etsy?action=listing_pulse&from=${Math.floor(+monthStart(now, -1) / 1000)}&_=${Date.now()}`, LIST_CACHE_KEY, setLcache, setLloading, setLerr);
+      await fetchInto(`/api/etsy?action=listing_pulse&from=${Math.floor(+monthStart(now, -1) / 1000)}${force ? "&fresh=1" : ""}&_=${Date.now()}`, LIST_CACHE_KEY, setLcache, setLloading, setLerr);
     }
     busy.current = false;
   };
