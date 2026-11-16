@@ -627,6 +627,20 @@ export async function publishEbayListing(body = {}) {
   `;
   const { ok, xml } = await trading(vars ? "AddFixedPriceItem" : "AddItem", `<Item>${itemXml}</Item>`);
   if (!ok) {
+    /* 21919067: eBay's duplicate-listing rule — this account already has a
+       live listing of the same item (often one made by an earlier publish
+       whose answer never reached the ERP). Its parameters carry that
+       listing's title and item number; the item number is handed back so the
+       ERP links the existing listing instead of failing. */
+    const dup = String(xml || "").match(/<Errors>(?:(?!<\/Errors>)[\s\S])*?<ErrorCode>21919067<\/ErrorCode>[\s\S]*?<\/Errors>/);
+    if (dup) {
+      const vals = [...dup[0].matchAll(/<Value>([\s\S]*?)<\/Value>/g)].map(x => x[1].trim());
+      const existing = vals.find(v => /^\d{9,14}$/.test(v)) || "";
+      const title = vals.find(v => !/^\d+$/.test(v)) || "";
+      return { ok: false, status: 409, duplicateOf: existing,
+        error: existing ? `Already live on eBay as item ${existing}${title ? ` ("${title.slice(0, 60)}")` : ""}`
+          : `eBay already has a live listing like this one${title ? `: "${title.slice(0, 80)}"` : ""}. Find it in Seller Hub and link it with Link existing.` };
+    }
     return { ok: false, status: 500, error: ebayErrors(xml) || "AddItem failed" };
   }
   const newItemId = xmlTag("ItemID", xml);
@@ -929,7 +943,7 @@ async function handleEbay(req, res) {
   // ── publish_listing — AddItem (new) or ReviseItem (existing) ────────────
   if (action === "publish_listing" && req.method === "POST") {
     const out = await publishEbayListing(req.body || {});
-    if (!out.ok) return res.status(out.status || 500).json({ error: out.error });
+    if (!out.ok) return res.status(out.status || 500).json({ error: out.error, ...(out.duplicateOf ? { duplicateOf: out.duplicateOf } : {}) });
     return res.json(out);
   }
 

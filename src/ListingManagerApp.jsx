@@ -11411,7 +11411,14 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
         }),
       });
       // Vercel answers a function that died or ran out of time with a page, not JSON.
-      const d = await lmJson(r);
+      let d = await lmJson(r);
+      /* eBay refused a second listing of the same piece and named the live one
+         (an earlier publish made it, but its answer never reached the ERP):
+         that listing is this piece's, so it's linked rather than failing. */
+      if (!d.ok && d.duplicateOf) {
+        showToast(`eBay already had this piece live as item ${d.duplicateOf} — linked it to this listing`, 9000);
+        d = { ok: true, itemId: d.duplicateOf, url: `https://www.ebay.com/itm/${d.duplicateOf}`, linkedExisting: true };
+      }
       if (!d.ok) throw new Error(d.error || "eBay publish failed");
       if (d.videoWarning) showToast(`⚠ eBay video: ${d.videoWarning}`);
       if (d.variationsWarning && !syncOnly) showToast(`⚠ eBay options: ${d.variationsWarning}`);
