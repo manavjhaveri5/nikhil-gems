@@ -1865,7 +1865,7 @@ async function listingHandler(req, res) {
   if (req.method === "OPTIONS") return res.status(200).end();
   // store_sold is the retail store's webhook and checks its own secret below.
   const bodyAction = (() => { let b = req.body; if (typeof b === "string") { try { b = JSON.parse(b); } catch {} } return b?.action; })();
-  const storeAction = req.method === "POST" && (bodyAction === "store_sold" || bodyAction === "etsy_active_ids" || bodyAction === "etsy_states" || bodyAction === "etsy_queue_tick" || bodyAction === "ee_sections_sync" || bodyAction === "raj_snapshot" || bodyAction === "raj_fallback" || bodyAction === "raj_audit" || bodyAction === "girton_tick");
+  const storeAction = req.method === "POST" && (bodyAction === "store_sold" || bodyAction === "etsy_active_ids" || bodyAction === "etsy_states" || bodyAction === "etsy_queue_tick" || bodyAction === "ee_sections_sync" || bodyAction === "raj_snapshot" || bodyAction === "raj_fallback" || bodyAction === "raj_audit" || bodyAction === "girton_tick" || bodyAction === "raj_telegram");
   const user = storeAction ? null : await requireUser(req, res);
   if (!storeAction && !user) return;
 
