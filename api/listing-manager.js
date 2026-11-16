@@ -1751,7 +1751,7 @@ async function shopifyProductHasVideo(store, token, productId) {
   return !!video.mediaId && ["UPLOADED", "PROCESSING", "READY"].includes(String(video.videoStatus || "").toUpperCase());
 }
 
-async function publishShopify(store, token, listing, ai) {
+async function publishShopify(store, token, listing, ai, { activate = true } = {}) {
   const { title, qty = 0, type = "repeatable", price_shopify, productType, material, images = [] } = listing;
 
   const shopTitle = ai?.shopify_title || title;
@@ -1770,7 +1770,7 @@ async function publishShopify(store, token, listing, ai) {
         body_html: bodyHtml,
         product_type: productType || "Crystal",
         tags,
-        status: "active",
+        status: activate ? "active" : "draft",
         ...(variantBundle
           ? { options: variantBundle.options, variants: variantBundle.variants }
           : { variants: [{
@@ -1815,7 +1815,7 @@ async function publishShopify(store, token, listing, ai) {
     product_id: product.id,
     url: `https://${store}/admin/products/${product.id}`,
     storefront_url: `https://${store.replace(".myshopify.com", "")}.com/products/${product.handle}`,
-    status: "active",
+    status: activate ? "active" : "draft",
     images_uploaded: imageSync.uploaded,
     videoQueued,
     videoErr,
@@ -2466,7 +2466,8 @@ async function listingHandler(req, res) {
           return res.status(409).json({ ok: false, error: `Skipped ${platformKey} sync: no existing product_id` });
         }
         const priceField = store_key === "atyahara" ? "price_shopify_aty" : "price_shopify_earth";
-        result = await publishShopify(store, token, { ...listing, price_shopify: listing[priceField] || listing.price_shopify }, ai);
+        // Made by a save (sync): a draft. Only an explicit publish puts it on sale.
+        result = await publishShopify(store, token, { ...listing, price_shopify: listing[priceField] || listing.price_shopify }, ai, { activate: !syncOnly });
       }
       result = await cleanupReadyVideo(listing, result, platformKey);
       return res.json({ ok: true, platform: store_key, result });

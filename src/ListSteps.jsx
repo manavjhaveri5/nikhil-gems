@@ -378,6 +378,12 @@ export default function ListSteps({ form, orders, stock = [], weightKg: weightKg
 
   // One platform at a time from the last step: publish it, then link to it live.
   const [one, setOne] = useState({});   // key → { busy, url, error }
+  /* Publish sheet: every platform that would go on sale is ticked by hand,
+     one by one, and starts unticked. "Publish all live" used to put every
+     picked platform on sale at once, and the Etsy queue question it asked
+     governed Etsy alone — so choosing "Add to the queue" put the piece on
+     sale on eartheditions.co there and then (Rosetta Jasper, 16 Nov). */
+  const [pubSheet, setPubSheet] = useState(null);   // null | { key → true }
   /* A piece not yet on sale asks instead: into the Etsy queue, or live now
      (a renewal just asks whether to). Resolves { now } to go ahead, null to stop. */
   const etsyGo = async key => {
@@ -407,9 +413,10 @@ export default function ListSteps({ form, orders, stock = [], weightKg: weightKg
       stock_exception: stockException(),
       ...variantsPatch(), ...costPatch(), ...(rs ? { price_research: rs } : {}),
   });
-  const apply = async live => {
+  const apply = async (live, liveKeys = []) => {
     let go = null;
-    const ek = pick.etsy ? "etsy" : pick.etsy_ee ? "etsy_ee" : null;
+    // Only an Etsy shop ticked to go live is asked about (queue or now).
+    const ek = ["etsy", "etsy_ee"].find(k => pick[k] && liveKeys.includes(k)) || null;
     if (live && ek && !(go = await etsyGo(ek))) return;
     const patch = {
       stock_exception: stockException(),
@@ -420,7 +427,7 @@ export default function ListSteps({ form, orders, stock = [], weightKg: weightKg
       ...(p.weight ? { weight: p.weight } : {}),
       ...variantsPatch(), ...costPatch(), ...(rs ? { price_research: rs } : {}),
     };
-    onApply(patch, Object.fromEntries(chosen.map(c => [c.key, true])), { live, etsyNow: !!go?.now });
+    onApply(patch, Object.fromEntries(chosen.map(c => [c.key, true])), { live: live && liveKeys.length > 0, liveKeys: live ? liveKeys : [], etsyNow: !!go?.now });
   };
 
   const money = (field, cur, placeholder) => (
@@ -976,8 +983,8 @@ export default function ListSteps({ form, orders, stock = [], weightKg: weightKg
                 here is the difference between trusting the button and checking
                 the shop afterwards to see what it did. */}
             <div style={{ fontSize: 12, color: C.inkFaint }}>
-              Publish each one on its own and check it live, or all at once with Publish all live.
-              Save as drafts keeps it off sale.
+              Publish each one on its own and check it live, or tick the ones to put on sale under Publish….
+              Save as drafts keeps it off sale everywhere (eBay has no drafts, so it isn't listed there).
               {anyLinked ? " Anywhere it is already listed is updated in place, not listed again." : ""}
             </div>
           </>}
@@ -999,10 +1006,54 @@ export default function ListSteps({ form, orders, stock = [], weightKg: weightKg
                 style={{ padding: "13px 30px", borderRadius: 10, border: "none", background: C.green, color: "#fff", fontWeight: 800, fontSize: 15, cursor: "pointer" }}>✓ Done</button>
             : <>
                 <button type="button" disabled={!chosen.length} onClick={() => apply(false)} style={{ padding: "13px 16px", borderRadius: 10, border: `1px solid ${C.border}`, background: C.surface, color: C.ink, fontWeight: 700, fontSize: 14, cursor: "pointer" }}>Save as drafts</button>
-                <button type="button" disabled={!chosen.length || pieceMissing.length > 0} onClick={() => apply(true)} style={{ padding: "13px 22px", borderRadius: 10, border: "none", background: C.ink, color: "#FAF0DC", fontWeight: 800, fontSize: 15, cursor: "pointer", opacity: chosen.length && !pieceMissing.length ? 1 : .4 }}>Publish all live</button>
+                <button type="button" disabled={!chosen.length || pieceMissing.length > 0} onClick={() => setPubSheet({})} style={{ padding: "13px 22px", borderRadius: 10, border: "none", background: C.ink, color: "#FAF0DC", fontWeight: 800, fontSize: 15, cursor: "pointer", opacity: chosen.length && !pieceMissing.length ? 1 : .4 }}>Publish…</button>
               </>}
         </div>
       </div>
+      {pubSheet && (() => {
+        /* What each tick does, said before it's done. A platform where it is
+           already on sale is updated in place, so it needs no tick; one
+           connected for reference only is never written to. */
+        const rows = chosen.filter(c => !(c.key === "trade" && tradeRefOnly(form))).map(c => {
+          const l = linkOf(form, c.key);
+          const onSale = l.linked && l.status === "active";
+          const what = onSale ? "Already on sale there — saving updates it"
+            : isEtsyKey(c.key) ? `Uploads it to ${c.label}; next you choose the queue or live now ($0.20 fee)`
+            : c.key === "store" ? `On sale on eartheditions.co now${storeInr ? ` at ${inr(storeInr)}` : ""}${storeUsd ? ` / ${usd(storeUsd)}` : ""}`
+            : c.key === "ebay" ? `Listed on eBay now${ebayUsd ? ` at ${usd(ebayUsd)}` : ""}`
+            : c.key === "trade" ? "Live on trade.eartheditions.co now"
+            : `Live on ${c.label} now`;
+          return { c, onSale, what };
+        });
+        const ticked = rows.filter(r => !r.onSale && pubSheet[r.c.key]).map(r => r.c.key);
+        return (
+          <div onMouseDown={e => e.target === e.currentTarget && setPubSheet(null)} style={{ position: "fixed", inset: 0, zIndex: 4000, background: "rgba(20,15,8,.5)", display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
+            <div style={{ background: C.bg, borderRadius: 14, padding: 18, width: "100%", maxWidth: 440, boxShadow: "0 18px 50px rgba(0,0,0,.25)" }}>
+              <div style={{ fontFamily: serif, fontSize: 24, color: C.ink }}>Where should it go on sale?</div>
+              <div style={{ fontSize: 12, color: C.inkMid, marginTop: 4 }}>Tick each one to publish now. Anything left unticked is saved as a draft, or not listed at all on eBay.</div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 14 }}>
+                {rows.map(({ c, onSale, what }) => (
+                  <label key={c.key} style={{ display: "flex", gap: 10, alignItems: "flex-start", background: C.surface, border: `1.5px solid ${pubSheet[c.key] && !onSale ? c.color : C.border}`, borderRadius: 10, padding: "10px 12px", cursor: onSale ? "default" : "pointer" }}>
+                    <input type="checkbox" disabled={onSale} checked={onSale || !!pubSheet[c.key]} onChange={e => setPubSheet(x => ({ ...x, [c.key]: e.target.checked }))}
+                      style={{ accentColor: c.color, width: 16, height: 16, margin: "2px 0 0" }} />
+                    <span style={{ flex: 1 }}>
+                      <span style={{ display: "block", fontSize: 13.5, fontWeight: 800, color: C.ink }}>{c.label}</span>
+                      <span style={{ display: "block", fontSize: 11.5, color: C.inkMid, marginTop: 2 }}>{what}</span>
+                    </span>
+                  </label>
+                ))}
+              </div>
+              <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
+                <button type="button" onClick={() => setPubSheet(null)} style={{ padding: "11px 16px", borderRadius: 10, border: `1px solid ${C.border}`, background: C.surface, color: C.ink, fontWeight: 700, fontSize: 14, cursor: "pointer" }}>Cancel</button>
+                <div style={{ flex: 1 }} />
+                <button type="button" disabled={!ticked.length} onClick={() => { setPubSheet(null); apply(true, ticked); }}
+                  style={{ padding: "11px 18px", borderRadius: 10, border: "none", background: C.ink, color: "#FAF0DC", fontWeight: 800, fontSize: 14, cursor: ticked.length ? "pointer" : "not-allowed", opacity: ticked.length ? 1 : .4 }}>
+                  {ticked.length ? `Publish on ${ticked.length === 1 ? rows.find(r => r.c.key === ticked[0]).c.label : `${ticked.length} platforms`}` : "Tick where to publish"}</button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }

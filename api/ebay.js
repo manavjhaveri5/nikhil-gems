@@ -584,7 +584,8 @@ export async function publishEbayListing(body = {}) {
       if (errCode !== "17" && errCode !== "291") {
         return { ok: false, status: 500, error: ebayErrors(xml) || "ReviseItem failed" };
       }
-      if (syncOnly && !allowCreate) {
+      // eBay has no drafts: a sync never makes a new item, whatever the caller asked.
+      if (syncOnly) {
         return { ok: false, status: 409, error: xmlTag("LongMessage", xml) || "Skipped eBay sync: existing item could not be revised" };
       }
     } else {
@@ -592,8 +593,11 @@ export async function publishEbayListing(body = {}) {
     }
   }
 
-  if (syncOnly && !allowCreate) {
-    return { ok: false, status: 409, error: "Skipped eBay sync: no existing eBay item ID" };
+  /* AddItem puts the piece on sale — eBay has no drafts — so only an explicit
+     publish (syncOnly false) may reach it. allow_create on a sync used to, and
+     a plain Save with eBay ticked listed the piece live. */
+  if (syncOnly) {
+    return { ok: false, status: 409, error: allowCreate ? "eBay has no drafts, so a save doesn't list it there. Publish on eBay when you're ready." : "Skipped eBay sync: no existing eBay item ID" };
   }
 
   // AddItem — create new listing

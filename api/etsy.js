@@ -704,6 +704,28 @@ async function etsyHandler(req, res) {
       return res.json({ ok: true, listing });
     }
 
+    // ── link_check: is listing ?listing_id this shop's own? ───────────────────
+    // "Link existing" pastes any Etsy link. The listing is read with this
+    // shop's own login, so a draft (state "draft", which only its owner can
+    // see) reads back as well as a live one, and its shop_id says whether it
+    // is this shop's — an Atyahara listing linked as EarthEditions would have
+    // every later save write to the wrong shop.
+    if (action === "link_check") {
+      res.setHeader("Cache-Control", "no-store, max-age=0");
+      if (!token) return res.status(401).json({ error: `Not signed in to Etsy (${etsyShop().name})`, fix: "Visit /api/etsy-auth?action=start" });
+      const id = String(req.query.listing_id || "").replace(/\D/g, "");
+      if (!id) return res.status(400).json({ error: "listing_id required" });
+      const r = await fetch(`https://openapi.etsy.com/v3/application/listings/${id}`, { headers: authHeaders });
+      const d = await r.json().catch(() => ({}));
+      // A draft of another shop is hidden from this one: Etsy answers 403 or 404.
+      if (r.status === 404 || r.status === 403) return res.json({ ok: false, found: false, listing_id: id, error: `${etsyShop().name} has no listing ${id} on Etsy (another shop's draft, or deleted)` });
+      if (!r.ok) return res.status(r.status).json({ ok: false, error: etsyMessage(d) });
+      const mine = String(d.shop_id || "") === String(sid);
+      return res.json({ ok: mine, found: true, mine, listing_id: id, shop_id: d.shop_id, shop: etsyShop().name,
+        state: d.state || "", title: String(d.title || "").slice(0, 140), url: d.url || `https://www.etsy.com/listing/${id}`,
+        ...(mine ? {} : { error: `Listing ${id} belongs to another Etsy shop, not ${etsyShop().name}` }) });
+    }
+
     // ── receipt: single receipt by ID (requires OAuth) ─────────────────────────
     if (action === "receipt") {
       if (!receipt_id) return res.status(400).json({ error: "receipt_id required" });
@@ -1329,7 +1351,7 @@ async function etsyHandler(req, res) {
       return res.json(putData);
     }
 
-    return res.status(400).json({ error: "Unknown action. Use: ping, shop, orders, pulse, listing_pulse, published, listing_brief, renewal_queue, renewal_stats, renewal_ledger, renewal_listing, receipt, complete_order, add_tracking, listings, listings_all, listing_images, listing, upload_listing_image, upload_listing_video, delete_listing_image, update_listing, update_inventory" });
+    return res.status(400).json({ error: "Unknown action. Use: ping, shop, orders, pulse, listing_pulse, published, listing_brief, renewal_queue, renewal_stats, renewal_ledger, renewal_listing, link_check, receipt, complete_order, add_tracking, listings, listings_all, listing_images, listing, upload_listing_image, upload_listing_video, delete_listing_image, update_listing, update_inventory" });
   } catch (e) {
     return res.status(500).json({ error: e.message });
   }

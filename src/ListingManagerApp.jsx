@@ -762,6 +762,22 @@ async function persistListingMedia(listing) {
   return { ...listing, images: nextImages, video };
 }
 
+/* "Link existing" on Etsy: the pasted id is checked with the shop it is
+   being linked to before anything is recorded — that it is that shop's
+   listing (an Atyahara id on EarthEditions would send every save to the
+   wrong shop), and what state it is in, so a draft is linked as a draft
+   rather than marked live. Resolves the platform patch; throws why not. */
+async function checkEtsyLink(key, id) {
+  const ee = key === "etsy_ee";
+  const tok = ee ? null : await getEtsyToken();
+  const r = await fetch(`/api/etsy?action=link_check&listing_id=${encodeURIComponent(id)}${ee ? "&shop=earth" : ""}&_=${Date.now()}`,
+    { headers: tok ? { "X-Etsy-Token": tok } : {}, cache: "no-store" });
+  const d = await r.json().catch(() => ({}));
+  if (!d.ok) throw new Error(d.error || `Etsy didn't answer (${r.status})`);
+  const state = String(d.state || "").toLowerCase();
+  return { ...connectPatch(key, id), status: state === "active" ? "active" : state || "draft", etsy_state: state, title_on_etsy: d.title || "" };
+}
+
 /* ─── Etsy token (shared) ─────────────────────────────────────────────────────
    Etsy access tokens expire hourly. Always resolve a FRESH token before calling
    /api/etsy: use the local token only if still valid, else refresh it, else pull
@@ -2020,6 +2036,13 @@ function ListingForm({ initial, stock = [], listings = [], orders = [], sold = f
   const [eeSettings, setEeSettings] = useState({ ship: [], ret: [], ready: [] });
   const [tab, setTab] = useState(startTab);
   const [connectDraft, setConnectDraft] = useState({});
+  // An Etsy id being checked with its shop before it is linked: key → { busy, error }.
+  const [etsyCheck, setEtsyCheck] = useState({});
+  const etsyLinkThen = async (key, id, then) => {
+    setEtsyCheck(x => ({ ...x, [key]: { busy: true } }));
+    try { const pd = await checkEtsyLink(key, id); setEtsyCheck(x => ({ ...x, [key]: {} })); then(pd); }
+    catch (e) { setEtsyCheck(x => ({ ...x, [key]: { error: e.message || "Couldn't check it with Etsy" } })); }
+  };
   const sheetRef = useRef(null), bodyRef = useRef(null);
   const tradeFactsMap = useTradeFacts();
   // A new tab starts at its top, whichever element is doing the scrolling.
@@ -2565,7 +2588,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
                   style={{ accentColor: c.color, width: 16, height: 16, margin: 0 }} />
                 <span style={{ flex: 1 }}>
                   <span style={{ fontSize: 13, fontWeight: 700, color: C.ink }}>Add to {c.label} when I save</span>
-                  <span style={{ display: "block", fontSize: 11, color: C.inkFaint }}>{hasPrice ? "Goes up as a draft. Publish it from Manage when you're ready." : `Set the ${c.label} price first.`}</span>
+                  <span style={{ display: "block", fontSize: 11, color: C.inkFaint }}>{!hasPrice ? `Set the ${c.label} price first.` : c.key === "ebay" ? "eBay has no drafts, so saving doesn't list it. Publish on eBay when you're ready." : "Goes up as a draft. Publish it from Manage when you're ready."}</span>
                 </span>
               </label>
               {c.key === "trade" && tradePicker()}
@@ -2573,15 +2596,19 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
                 <div>
                   <div style={{ fontSize: 11, color: C.inkFaint, marginBottom: 4 }}>Already on {c.label}? Paste its link to connect it instead of making a new one.</div>
                   <div style={{ display: "flex", gap: 6 }}>
-                    <input value={connectDraftFor(c.key)} onChange={e => setConnectDraft(d => ({ ...d, [c.key]: e.target.value }))}
+                    <input value={connectDraftFor(c.key)} onChange={e => { setConnectDraft(d => ({ ...d, [c.key]: e.target.value })); setEtsyCheck(x => ({ ...x, [c.key]: {} })); }}
                       placeholder={isEtsyKey(c.key) ? "https://www.etsy.com/listing/1234567890/…" : "https://www.ebay.com/itm/1234567890"} style={{ ...FI(), fontSize: 12 }} />
-                    <button type="button" disabled={!refId} onClick={() => {
-                      setForm(f => ({ ...f, platforms: { ...(f.platforms || {}), [c.key]: { ...(f.platforms?.[c.key] || {}), ...connectPatch(c.key, refId) } } }));
-                      setPublishTo(pt => ({ ...pt, [c.key]: false }));
-                      setConnectDraft(d => ({ ...d, [c.key]: "" }));
-                    }} style={{ background: refId ? c.color : C.card, color: refId ? "#fff" : C.inkFaint, border: "none", borderRadius: 7, padding: "0 14px", fontSize: 12, fontWeight: 800, cursor: refId ? "pointer" : "not-allowed", whiteSpace: "nowrap" }}>Connect</button>
+                    <button type="button" disabled={!refId || etsyCheck[c.key]?.busy} onClick={() => {
+                      const apply = pd => {
+                        setForm(f => ({ ...f, platforms: { ...(f.platforms || {}), [c.key]: { ...(f.platforms?.[c.key] || {}), ...pd } } }));
+                        setPublishTo(pt => ({ ...pt, [c.key]: false }));
+                        setConnectDraft(d => ({ ...d, [c.key]: "" }));
+                      };
+                      if (isEtsyKey(c.key)) etsyLinkThen(c.key, refId, apply); else apply(connectPatch(c.key, refId));
+                    }} style={{ background: refId ? c.color : C.card, color: refId ? "#fff" : C.inkFaint, border: "none", borderRadius: 7, padding: "0 14px", fontSize: 12, fontWeight: 800, cursor: refId ? "pointer" : "not-allowed", whiteSpace: "nowrap" }}>{etsyCheck[c.key]?.busy ? "Checking…" : "Connect"}</button>
                   </div>
                   {connectDraftFor(c.key) && !refId && <div style={{ fontSize: 11, color: C.red, marginTop: 3 }}>That doesn't look like a {c.label} listing link.</div>}
+                  {refId && etsyCheck[c.key]?.error && <div style={{ fontSize: 11, color: C.red, marginTop: 3 }}>{etsyCheck[c.key].error}</div>}
                 </div>
               )}
             </>
@@ -2640,12 +2667,16 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
       const id = parseRef(key, linkQ);
       body = <>
         <div style={{ display: "flex", gap: 6 }}>
-          <input autoFocus value={linkQ} onChange={e => setLinkQ(e.target.value)}
-            placeholder={isEtsyKey(key) ? "Etsy listing link or number" : "eBay item link or number"} style={{ ...FI(), fontSize: 13 }} />
-          <button type="button" disabled={!id} onClick={() => { linkTo(key, connectPatch(key, id)); done(); }}
-            style={{ background: id ? c.color : C.card, color: id ? "#fff" : C.inkFaint, border: "none", borderRadius: 8, padding: "0 16px", fontSize: 13, fontWeight: 800, cursor: id ? "pointer" : "not-allowed" }}>Link</button>
+          <input autoFocus value={linkQ} onChange={e => { setLinkQ(e.target.value); setEtsyCheck(x => ({ ...x, [key]: {} })); }}
+            placeholder={isEtsyKey(key) ? "Etsy listing link, editor link or number" : "eBay item link or number"} style={{ ...FI(), fontSize: 13 }} />
+          <button type="button" disabled={!id || etsyCheck[key]?.busy} onClick={() => {
+            if (!isEtsyKey(key)) { linkTo(key, connectPatch(key, id)); done(); return; }
+            etsyLinkThen(key, id, pd => { linkTo(key, pd); done(); });
+          }}
+            style={{ background: id ? c.color : C.card, color: id ? "#fff" : C.inkFaint, border: "none", borderRadius: 8, padding: "0 16px", fontSize: 13, fontWeight: 800, cursor: id ? "pointer" : "not-allowed" }}>{etsyCheck[key]?.busy ? "Checking…" : "Link"}</button>
         </div>
         {linkQ && !id && <div style={{ fontSize: 11.5, color: C.red, marginTop: 4 }}>That doesn't look like a {c.label} listing link.</div>}
+        {id && etsyCheck[key]?.error && <div style={{ fontSize: 11.5, color: C.red, marginTop: 4 }}>{etsyCheck[key].error}</div>}
       </>;
     } else if (key === "trade") {
       const rows = Object.entries(tradeFactsMap || {}).filter(([k]) => k.startsWith("#")).map(([, r]) => r);
@@ -10731,7 +10762,12 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
   };
 
   /* save */
-  const handleSave = async (listing, publishTo = {}, { live = false, etsyNow = false } = {}) => {
+  /* liveKeys: the platforms Sir ticked, one by one, to go on sale now in the
+     listing steps' Publish sheet. Nothing else ever goes live from a save —
+     "live" without them publishes nowhere. On 16 Nov "Publish all live" with
+     the Etsy queue picked put Rosetta Jasper on sale on eartheditions.co at
+     once: the queue question only ever governed Etsy. */
+  const handleSave = async (listing, publishTo = {}, { live = false, etsyNow = false, liveKeys = [] } = {}) => {
     let savedListing = ensureListingOrderId(listing);
     if ((listing.images || []).some(isLocalMediaUrl) || isLocalMediaUrl(listing.video)) {
       showToast("Uploading listing media...");
@@ -10770,8 +10806,14 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
         }).map(p => p.key)
       : [];
     // A trade product connected for reference is never written to, so it isn't a target.
-    const newTargets  = Object.entries(publishTo).filter(([k, v]) => v && !(k === "trade" && tradeRefOnly(listing)) && !PLATFORMS.find(p => p.key === k)?.legacy).map(([k]) => k);
+    const goLive = k => live && liveKeys.includes(k);
+    /* eBay has no drafts: making the item there IS listing it. So a save
+       never makes one — only Publish on eBay does. */
+    const ebayHeld = Object.entries(publishTo).some(([k, v]) => v && k === "ebay" && !goLive("ebay") && !listing.platforms?.ebay?.item_id);
+    const newTargets  = Object.entries(publishTo).filter(([k, v]) => v && !(k === "trade" && tradeRefOnly(listing)) && !PLATFORMS.find(p => p.key === k)?.legacy
+      && !(k === "ebay" && ebayHeld)).map(([k]) => k);
     const targets = [...new Set([...liveTargets, ...newTargets])];
+    if (ebayHeld) showToast("eBay has no drafts, so saving doesn't list it there. Publish on eBay from the listing's last step when you're ready.", 9000);
     // Trade products that are this piece but weren't published from here.
     if (exists && !targets.includes("trade")) {
       refreshTradePhotos(savedListing)
@@ -10779,27 +10821,29 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
         .catch(e => console.warn("trade photo refresh:", e));
     }
     if (targets.length === 0) return;
-    showToast(`${live ? "Listing on" : "Syncing to"} ${targets.map(k => PLATFORMS.find(p => p.key === k)?.label).join(", ")}…`);
-    // A save only syncs, never activates — except "List live" from the listing
-    // steps, which publishes on the platforms picked there.
+    const liveNow = targets.filter(k => goLive(k) && newTargets.includes(k));
+    showToast(liveNow.length ? `Listing on ${liveNow.map(k => PLATFORMS.find(p => p.key === k)?.label).join(", ")}…` : `Syncing to ${targets.map(k => PLATFORMS.find(p => p.key === k)?.label).join(", ")}…`);
+    // A save only syncs, never activates — except the platforms ticked one by
+    // one in the listing steps' Publish sheet.
     const results = await Promise.allSettled(targets.map(pkey =>
-      live && newTargets.includes(pkey)
+      goLive(pkey) && newTargets.includes(pkey)
         ? handlePublish(savedListing, pkey, { syncOnly: false, allowCreate: true, goLiveNow: etsyNow })
         : handlePublish(savedListing, pkey, { syncOnly: true, allowCreate: newTargets.includes(pkey) })
     ));
     const failed = results.filter(r => r.status === "rejected");
     // Published from the listing steps: show where it went, with a link to each.
-    if (live) {
+    if (liveNow.length) {
       const fresh = (await loadKFresh(LIST_KEY).catch(() => null) || []).find(x => x.id === savedListing.id) || savedListing;
       setLiveSheet({ title: savedListing.title, image: (savedListing.images || [])[0],
         rows: targets.map((k, i) => {
           const q = results[i].status === "fulfilled" && results[i].value?.queued;
           return { key: k, ok: results[i].status === "fulfilled", error: results[i].reason?.message || "", url: q ? "" : linkOf(fresh, k).live || "",
             queued: q ? (results[i].value.goes_live ? whenLabel(results[i].value.goes_live) : "from the queue") : "" };
-        }) });
+        }).filter(r => liveNow.includes(r.key)) });
     }
     if (failed.length === 0) {
-      showToast(`✓ ${live ? "Live on" : "Synced to"} ${targets.map(k => PLATFORMS.find(p => p.key === k)?.label).join(", ")}`);
+      showToast(liveNow.length ? `✓ Published on ${liveNow.map(k => PLATFORMS.find(p => p.key === k)?.label).join(", ")}${targets.length > liveNow.length ? ` · drafts/updates on the rest` : ""}`
+        : `✓ Synced to ${targets.map(k => PLATFORMS.find(p => p.key === k)?.label).join(", ")}`);
     } else {
       const errMsg = failed.map(r => r.reason?.message || "unknown error").join("; ");
       showToast(`⚠ ${errMsg}`, 8000);
@@ -11120,7 +11164,8 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
     } else if (pkey === "ebay") {
       // eBay — call ebay.js directly
       const existingItemId = listing.platforms?.ebay?.item_id;
-      if (syncOnly && !allowCreate && !existingItemId) throw new Error("Skipped eBay sync: no existing eBay item ID");
+      // eBay has no drafts — creating the item puts it on sale — so only a publish makes one.
+      if (syncOnly && !existingItemId) throw new Error(allowCreate ? "eBay has no drafts, so it isn't listed there from a save. Use Publish on eBay when you're ready." : "Skipped eBay sync: no existing eBay item ID");
       const r = await fetch("/api/ebay?action=publish_listing", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

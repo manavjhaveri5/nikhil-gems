@@ -121,7 +121,13 @@ export function defaultPieces(l) {
 export function parseRef(key, text) {
   const t = String(text || "").trim();
   if (!t) return "";
-  if (isEtsyKey(key)) return (t.match(/listing\/(\d{6,})/) || t.match(/^(\d{6,})$/) || [])[1] || "";
+  /* Every link Etsy hands out for one listing: the shop page
+     (/listing/<id>/…), the listing editor (/your/shops/me/listing-editor/edit/<id>,
+     what a draft's own page is), the listings manager
+     (/your/shops/me/tools/listings/<id>), and the bare number. Only
+     "listing-editor/edit/" matched none of them, so a draft couldn't be linked. */
+  if (isEtsyKey(key)) return (t.match(/\/listing\/(\d{6,})/) || t.match(/\/listing-editor\/edit\/(\d{6,})/)
+    || t.match(/\/tools\/listings\/(?:[^/?#]+\/)*?(\d{6,})(?:[/?#]|$)/) || t.match(/[?&]listing_id=(\d{6,})/) || t.match(/^#?(\d{6,})$/) || [])[1] || "";
   if (key === "ebay") return (t.match(/\/itm\/(?:[^/?#]+\/)?(\d{9,})/) || t.match(/[?&]item=(\d{9,})/) || t.match(/^(\d{9,})$/) || [])[1] || "";
   return "";
 }
