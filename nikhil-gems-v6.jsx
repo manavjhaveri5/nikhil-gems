@@ -44,6 +44,7 @@ const RajApp            = React.lazy(() => import("./src/RajApp.jsx"));
 const GirtonApp         = React.lazy(() => import("./src/GirtonApp.jsx"));
 const SoniyaApp         = React.lazy(() => import("./src/SoniyaApp.jsx"));
 const AlexApp           = React.lazy(() => import("./src/AlexApp.jsx"));
+const OutreachApp        = React.lazy(() => import("./src/OutreachApp.jsx"));
 const BillsReceipts     = React.lazy(() => import("./src/BillsReceipts.jsx"));
 const RajCard           = React.lazy(() => import("./src/RajCard.jsx"));
 const InboxCard         = React.lazy(() => import("./src/InboxCard.jsx"));
@@ -741,6 +742,7 @@ const MODS=[
   {id:"misc",icon:"🗂️",title:"Miscellaneous",desc:"Purchase bill maker, utilities",group:"admin",ready:true},
   {id:"omnisend",icon:"📣",title:"Omnisend",desc:"Email campaigns, subscribers and mailing lists",group:"marketing",ready:true},
   {id:"trade",icon:"🤝",title:"Trade Site",desc:"Wholesale buyers, WhatsApp carts, trade.eartheditions.co",group:"selling",ready:true},
+  {id:"outreach",icon:"📨",title:"Wholesale Outreach",desc:"Crystal shops abroad to contact — drafts, follow-ups, replies",group:"selling",ready:true},
   {id:"store",icon:"🛒",title:"Store",desc:"eartheditions.co — orders, products, shipping",group:"selling",ready:true},
   {id:"social",icon:"📱",title:"Social",desc:"Instagram, TikTok, YouTube, Pinterest, Threads, X, journal, Reddit",group:"marketing",ready:true},
   {id:"labels",icon:"🏷",title:"Make Labels",desc:"Name cards for shows and shelves — edit, print, PDF",group:"marketing",ready:true},
@@ -26690,6 +26692,7 @@ export default function Root({onSignOut}){
     else if(mod==="girton")content=<React.Suspense fallback={null}><GirtonApp onHome={goHome}/></React.Suspense>;
     else if(mod==="soniya")content=<React.Suspense fallback={null}><SoniyaApp onHome={goHome}/></React.Suspense>;
     else if(mod==="alex")content=<React.Suspense fallback={null}><AlexApp onHome={goHome}/></React.Suspense>;
+    else if(mod==="outreach")content=<React.Suspense fallback={null}><OutreachApp onHome={goHome}/></React.Suspense>;
     else if(mod==="ai")content=<AIAssistantApp onHome={goHome}/>;
     else if(mod==="users"&&isAdmin)content=<UsersApp onHome={goHome}/>;
     else if(mod==="datasets"&&isAdmin)content=<React.Suspense fallback={<div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",color:"#8C7E66",fontSize:13}}>Loading…</div>}><DatasetsApp onHome={goHome}/></React.Suspense>;

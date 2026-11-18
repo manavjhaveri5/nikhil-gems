@@ -1,0 +1,148 @@
+#!/usr/bin/env node
+/* Merges enriched candidates, drops existing trade buyers and duplicates, scores and tiers
+   each shop and writes its email, Instagram DM and two follow-ups.
+   node scripts/outreach/build-leads.mjs out.json in1.json [in2.json ...]
+   Facts used in drafts are the ones Earth Editions can stand behind: family workshop in Mumbai,
+   no minimum order (trade_settings.min_order = 0), photos/video of the actual lot before
+   payment, tracking on the day it ships, trade prices at trade.eartheditions.co after approval.
+   No prices, discounts or delivery times: those are Sir's call. */
+import { readFileSync, writeFileSync } from "node:fs";
+import { supa } from "../raj/raj-common.mjs";
+const [out, ...ins] = process.argv.slice(2);
+const sb = supa();
+const { data: buyers } = await sb.from("trade_buyers").select("email,company");
+const host = u => { try { return new URL(/^https?:/.test(u) ? u : `https://${u}`).hostname.replace(/^www\./, "").toLowerCase(); } catch { return ""; } };
+const FREE = /^(gmail|yahoo|hotmail|outlook|icloud|live|aol|me|msn|proton(mail)?|googlemail)\./;
+const known = new Set();
+for (const b of buyers || []) { const e = String(b.email || "").toLowerCase(); if (e) { known.add(e); const d = e.split("@")[1]; if (d && !FREE.test(d)) known.add(d); } }
+
+const WA = "+91 96192 48797", SITE = "https://trade.eartheditions.co";
+const NO_COLD_EMAIL = new Set(["DE", "AT"]); // UWG: B2B cold email needs presumed consent
+const PROD = {
+  spheres: "spheres (aquamarine, blue lace agate, kunzite, variscite, cavansite in matrix)",
+  palm: "palm stones (gem lepidolite, blue moonstone, ruby in fuchsite)",
+  hearts: "hearts (gel rhodonite, lepidolite, pink tourmaline in quartz)",
+  tumbled: "tumbles by the kilo (rose quartz, Indian ruby and more)",
+  himalayan: "Himalayan quartz points, spheres and palm stones from the Kullu Valley",
+  zeolite: "Indian zeolites (apophyllite, stilbite, cavansite) from the Deccan mines",
+  towers: "towers and points",
+};
+const NICE = { spheres: "spheres", palm: "palm stones", hearts: "hearts", tumbled: "tumbles", himalayan: "Himalayan quartz", zeolite: "zeolites", towers: "towers" };
+const shapesFrom = l => {
+  const t = `${l.signals?.join(" ") || ""} ${l.title || ""} ${l.title_tag || ""} ${l.desc || ""} ${l.blurb || ""}`.toLowerCase();
+  const s = new Set(l.signals || []);
+  if (/sphere/.test(t)) s.add("spheres"); if (/palm|worry/.test(t)) s.add("palm"); if (/heart/.test(t)) s.add("hearts"); if (/tumble/.test(t)) s.add("tumbled");
+  if (/himalaya/.test(t)) s.add("himalayan"); if (/apophyllite|zeolite|cavansite|stilbite/.test(t)) s.add("zeolite"); if (/tower|point/.test(t)) s.add("towers");
+  return ["spheres", "palm", "hearts", "tumbled", "himalayan", "zeolite", "towers"].filter(k => s.has(k));
+};
+const list = a => a.length < 2 ? a.join("") : `${a.slice(0, -1).join(", ")} and ${a[a.length - 1]}`;
+const cleanName = n => String(n || "").replace(/&amp;/g, "&").replace(/([a-z])([A-Z])/g, "$1 $2").replace(/\s+/g, " ").trim();
+
+function drafts(l, shapes) {
+  const name = l.display || cleanName(l.name);
+  const offer = (shapes.length ? shapes : ["spheres", "palm", "tumbled"]).filter(k => k !== "towers").slice(0, 3);
+  const offerTxt = offer.length ? offer.map(k => PROD[k]) : [PROD.spheres, PROD.palm, PROD.tumbled];
+  const liked = shapes.filter(k => NICE[k]).slice(0, 2).map(k => NICE[k]);
+  if (l.country === "JP") {
+    return {
+      language: "ja",
+      draft: { subject: "インドの天然石工房より卸のご案内（Earth Editions）", body:
+`${name} ご担当者様
+
+突然のご連絡失礼いたします。インド・ムンバイで天然石の研磨工房を営んでおります、Earth Editions（Nikhil Gems）のセジャルと申します。
+
+貴店のウェブサイトを拝見し、石のセレクションの素晴らしさに惹かれ、ご連絡いたしました。
+
+弊社では自社工房で研磨したスフィア、パームストーン、ハート、タンブル、ヒマラヤ水晶などを、1点からキロ単位まで卸売りしております。
+・最低注文数はございません
+・ご購入前に、実際のロットの写真や動画をお送りいたします
+・発送当日に追跡番号をお知らせいたします
+
+卸価格は、こちらでご登録いただいた後にご覧いただけます：${SITE}
+やり取りは英語が中心となりますが、日本語のメールも翻訳して拝読いたします。
+
+よく売れる石の種類をお知らせいただければ、在庫の写真をお送りいたします。
+今後このようなご案内が不要でしたら、その旨ご返信ください。以後ご連絡はいたしません。
+
+何卒よろしくお願い申し上げます。
+
+セジャル
+Earth Editions / Nikhil Gems（インド・ムンバイ）
+WhatsApp: ${WA}` },
+      dm: `はじめまして。インド・ムンバイの天然石工房 Earth Editions のセジャルと申します。素敵な石のセレクションですね。弊社はスフィアやパームストーン、タンブルなどを1点からキロ単位で卸売りしており、ご購入前に実際のロットの動画をお送りしています。よろしければ、在庫の写真をお送りしてもよろしいでしょうか？`,
+      followups: [
+        { day: 4, body: `${name} ご担当者様\n\n先日はご案内をお送りし、失礼いたしました。もしご興味がございましたら、現在の在庫（スフィア・パームストーンなど）の短い動画をお送りいたします。\n\nセジャル / Earth Editions` },
+        { day: 10, body: `${name} ご担当者様\n\nこちらが最後のご連絡となります。今後、インドからの仕入れをご検討の際は ${SITE} からいつでもご登録いただけます。WhatsApp（${WA}）でも承ります。\n\n貴店のますますのご発展をお祈り申し上げます。\nセジャル / Earth Editions` },
+      ],
+    };
+  }
+  const where = l.segment === "etsy_reseller" ? "your Etsy shop" : l.segment === "physical_shop" && l.city ? `your shop in ${l.city}` : "your shop";
+  const hook = liked.length ? `I came across ${where} and loved your ${list(liked)}.` : `I came across ${where} and really liked your selection.`;
+  const live = (l.signals || []).includes("live");
+  const subject = l.segment === "etsy_reseller" ? `Crystals by the kilo for ${name}, from our workshop in India` : `Wholesale crystals for ${name}, from our workshop in India`;
+  const body =
+`Hi there,
+
+${hook}
+
+I'm Sejal from Earth Editions, a family crystal workshop in Mumbai. We cut and polish here and supply shops by the kilo or by the piece: ${list(offerTxt)}.${live ? " We also put together mixed kilo lots that work well for live sales." : ""}
+
+A few things shops like about buying from us:
+- no minimum order
+- we send photos or a video of the exact lot before you pay
+- you get tracking the same day it ships
+
+You can see the trade catalogue at ${SITE.replace("https://", "")}: apply once and the trade prices open up. Or just reply with what sells best for you, and I'll send a few photos of matching stock.
+
+Warmly,
+Sejal
+Earth Editions · Nikhil Gems, Mumbai
+WhatsApp ${WA}
+
+P.S. If this isn't for you, reply "no thanks" and I won't write again.`;
+  const dm = `Hi! ${liked.length ? `Love your ${list(liked)} 💎` : "Love your crystals 💎"} I'm Sejal from @eartheditions_, a family crystal workshop in Mumbai. We supply shops by the kilo (${offer.map(k => NICE[k]).join(", ") || "spheres, palm stones, tumbles"}), with no minimum, and we send a video of the exact lot before you pay. Would it be OK if I sent you a few photos of what we have right now?`;
+  const first = NICE[offer[0]] || "spheres";
+  return {
+    language: "en", draft: { subject, body }, dm,
+    followups: [
+      { day: 4, body: `Hi again, just bringing this back to the top of your inbox. If it helps, I can send a short video of the ${first} lots we have right now, so you can see the quality before anything else.\n\nSejal` },
+      { day: 10, body: `Last note from me! If buying direct from India is ever useful, ${SITE.replace("https://", "")} is always open, and you can WhatsApp me on ${WA}. Wishing ${name} a great season.\n\nSejal` },
+    ],
+  };
+}
+
+const seen = new Set(), outL = [];
+let dropped = { known: 0, dup: 0, nocontact: 0 };
+for (const f of ins) for (const l of JSON.parse(readFileSync(f, "utf8"))) {
+  if (l.drop) continue;
+  const h = host(l.website), em = String(l.email || "").toLowerCase();
+  if ((em && known.has(em)) || (h && known.has(h)) || (em && known.has(em.split("@")[1]))) { dropped.known++; continue; }
+  const k = h || (l.instagram || "").toLowerCase() || l.etsy_url || l.name.toLowerCase();
+  if (seen.has(k) || (l.instagram && seen.has(l.instagram.toLowerCase()))) { dropped.dup++; continue; }
+  seen.add(k); if (l.instagram) seen.add(l.instagram.toLowerCase());
+  const shapes = shapesFrom(l);
+  const segment = l.segment || (l.source === "etsy" ? "etsy_reseller" : l.source === "web" ? "physical_shop" : "online_shop");
+  const contact = !!(l.email || l.instagram);
+  // Score: fit (shapes we make), size (sales/favourites), reachability.
+  let score = shapes.length * 12 + (l.hits || 0) * 4 + (contact ? 25 : 0) + (l.email ? 10 : 0);
+  if (l.sold) score += Math.min(30, Math.round(Math.log10(l.sold) * 9));
+  if ((l.signals || []).includes("wholesale")) score -= 8; // may already be a supplier
+  if ((l.signals || []).includes("live")) score += 8;
+  const tier = !contact ? "C" : score >= 70 ? "A" : "B";
+  const d = drafts({ ...l, segment }, shapes);
+  const channel = NO_COLD_EMAIL.has(l.country) || !l.email ? "instagram" : "email";
+  const why = [
+    segment === "etsy_reseller" ? `Etsy shop, ${l.sold?.toLocaleString() || "?"} sales since ${l.since || "?"}, ${l.listings || "?"} listings` : SEG_WHY(segment, l),
+    shapes.length ? `sells ${shapes.map(k => NICE[k]).join(", ")}` : "",
+    (l.signals || []).includes("wholesale") ? "mentions wholesale (may buy in bulk already, or be a supplier)" : "",
+    !contact ? "no email or Instagram found: look them up on Instagram first" : "",
+    NO_COLD_EMAIL.has(l.country) ? "Germany/Austria: DM only, no cold email" : "",
+  ].filter(Boolean).join(" · ");
+  outL.push({ name: l.display || cleanName(l.name), country: l.country, city: l.city || "", segment, tier, score, channel, website: l.website || "", email: channel === "email" ? l.email : (l.email || ""),
+    instagram: l.instagram || "", etsy_url: l.etsy_url || "", sold: l.sold || null, signals: shapes, platform: l.platform || "", why, ...d, source: l.source });
+}
+function SEG_WHY(seg, l) { return seg === "physical_shop" ? `Walk-in crystal shop${l.city ? ` in ${l.city}` : ""}` : seg === "live_seller" ? "Live seller" : "Online crystal shop"; }
+outL.sort((a, b) => a.tier.localeCompare(b.tier) || b.score - a.score);
+writeFileSync(out, JSON.stringify(outL, null, 1));
+const by = {}; for (const l of outL) by[`${l.country}-${l.tier}`] = (by[`${l.country}-${l.tier}`] || 0) + 1;
+console.log(outL.length, JSON.stringify(dropped), JSON.stringify(by));
