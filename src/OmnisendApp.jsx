@@ -161,7 +161,7 @@ export default function OmnisendApp({ onHome }) {
         )}
         {configured === null && <div style={{ color: C.inkFaint, fontSize: 13, padding: 20 }}>Checking connection…</div>}
         {configured && tab === "campaigns" && <CampaignsTab showToast={showToast} />}
-        {configured && tab === "approvals" && <ApprovalsTab showToast={showToast} />}
+        {configured && tab === "approvals" && <TradeApprovalsMoved showToast={showToast} />}
         {configured && tab === "subscribers" && <SubscribersTab showToast={showToast} />}
       </div>
 
@@ -606,6 +606,29 @@ function TagEditor({ email, tags, onClose, onSaved, showToast }) {
   );
 }
 
+/* Trade buyers apply on trade.eartheditions.co and are approved in the Trade
+   Site module, which tags them approved/active/trade here and fires
+   wholesale_approved. The Shopify list below read the Earth Editions Shopify
+   store, whose token Shopify now refuses — an empty table under an API error
+   (18 Nov 2026). Kept, unused, until that store is confirmed gone for good. */
+function TradeApprovalsMoved({ showToast }) {
+  const [tplOpen, setTplOpen] = useState(false);
+  return (
+    <div style={{ ...card, padding: "18px 20px", fontSize: 13, lineHeight: 1.65, color: C.inkMid }}>
+      {tplOpen && <WelcomeTemplate onClose={() => setTplOpen(false)} showToast={showToast} />}
+      <div style={{ fontSize: 15, fontWeight: 700, color: C.ink, marginBottom: 6 }}>Trade buyers are approved in Trade Site</div>
+      Buyers apply on trade.eartheditions.co and wait under <strong>Trade Site → Buyers</strong>. Approving there opens their account,
+      tags them <code>approved</code>, <code>active</code> and <code>trade</code> in Omnisend (subscribed only if they ticked “send me emails”),
+      and fires <code>wholesale_approved</code> so the <em>Welcome No.2</em> automation sends the set-up email.
+      <div style={{ display: "flex", gap: 8, marginTop: 14, flexWrap: "wrap" }}>
+        <a href="/?m=trade" style={{ ...btn(C.ink, "#FAF0DC"), textDecoration: "none" }}>Open Trade Site →</a>
+        <button onClick={() => setTplOpen(true)} style={btn()} title="Author the email the approval automation sends">✉ Welcome email</button>
+      </div>
+    </div>
+  );
+}
+
+// eslint-disable-next-line no-unused-vars
 function ApprovalsTab({ showToast }) {
   const [creds, setCreds] = useState(undefined);   // undefined = loading, null = missing
   const [rows, setRows] = useState([]);
