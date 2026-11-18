@@ -2269,6 +2269,8 @@ async function listingHandler(req, res) {
     const [orders, listings] = await Promise.all([readKey("ng-orders-v1"), readKey("ng-listings-v1")]);
     const rows = storeOrderRows(order, listings);
     const results = [];
+    // Raj tells Sir on Telegram the first time an order arrives (a re-sent order is already in Orders).
+    const fresh = rows.length && !rows.some(r => orders.some(o => o.id === r.id));
     for (const [i, line] of (order.lines || []).entries()) {
       const L = listings.find(x => x.id === line.listing_id);
       if (!orders.some(o => o.id === rows[i].id)) await upsert("ng-orders-v1", rows[i]);
@@ -2278,6 +2280,19 @@ async function listingHandler(req, res) {
         await upsert("ng-listings-v1", { ...L, platforms: { ...(L.platforms || {}), store: { ...(L.platforms?.store || {}), status: "sold" } }, updated_at: new Date().toISOString() }, false);
         results.push({ listing: L.id });
       }
+    }
+    if (fresh) {
+      const inr = String(order.currency || "").toLowerCase() === "inr";
+      const amt = n => inr ? `₹${Math.round(+n || 0).toLocaleString("en-IN")}` : `$${(+n || 0).toFixed(2).replace(/\.00$/, "")}`;
+      const a = order.shipping || {};
+      const text = [`🛒 New Earth Editions order ${order.number || ""}, Sir — ${amt(order.total)} via ${order.gateway === "razorpay" ? "Razorpay" : "Stripe"}`,
+        `${order.name || order.email || "Buyer"} · ${[a.city, a.country].filter(Boolean).join(", ")}`,
+        ...(order.lines || []).map(l => `• ${l.title}${(+l.qty || 1) > 1 ? ` × ${l.qty}` : ""} — ${amt(l.price)}`),
+        ...(+order.discount ? [`Code ${order.discount_code || ""} took ${amt(order.discount)} off`] : []),
+        ...(String(order.notes || "").startsWith("⚠") ? [order.notes] : []),
+        "Ship it from Listing Manager → Orders."].join("\n");
+      const t = await sirTelegram(text, sb).catch(e => ({ error: e.message }));
+      if (t?.error) console.error("raj order ping", t.error);
     }
     return res.json({ ok: true, results });
   }
