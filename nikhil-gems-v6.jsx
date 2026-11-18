@@ -9810,13 +9810,13 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
                   <input ref={videoRef} type="file" accept="video/*" style={{display:"none"}} onChange={async e=>{
                     const file=e.target.files[0];if(!file)return;
                     const mb=(file.size/1024/1024).toFixed(1);
-                    if(file.size>490*1024*1024){showToast(`⚠ Video too large (${mb} MB, max 490 MB)`);return;}
+                    if(file.size>2048*1024*1024){showToast(`⚠ Video too large (${mb} MB) — trim it shorter first`);return;}
                     const itemId=form.id; // capture now — form may close before upload finishes
                     const localUrl=URL.createObjectURL(file);
                     setForm(f=>({...f,video:localUrl,_videoUploading:true,_videoProgress:0}));
                     try{
-                      const{xhr,promise}=startStockVideoUpload(itemId,file,null,(pct)=>{
-                        setForm(f=>f?({...f,_videoProgress:pct}):f);
+                      const{xhr,promise}=startStockVideoUpload(itemId,file,null,(pct,stage)=>{
+                        setForm(f=>f?({...f,_videoProgress:pct,_videoStage:stage}):f);
                       });
                       videoXhrRef.current=xhr;
                       const url=await promise;
@@ -9829,13 +9829,13 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
                         saveStockK(stock.map(s=>s.id===itemId?{...s,video:url,updatedAt:videoTs}:s)).catch(e=>console.warn("video stock save failed:",e));
                         showToast("✓ Video uploaded & saved to stock");
                       }else{
-                        setForm(f=>f?({...f,video:url,_videoUploading:false,_videoProgress:null}):f);
+                        setForm(f=>f?({...f,video:url,_videoUploading:false,_videoProgress:null,_videoStage:null}):f);
                         showToast("✓ Video uploaded");
                       }
                     }catch(err){
                       videoXhrRef.current=null;
                       pendingVideoSaveRef.current=null;
-                      setForm(f=>f?({...f,video:"",_videoUploading:false,_videoProgress:null}):f);
+                      setForm(f=>f?({...f,video:"",_videoUploading:false,_videoProgress:null,_videoStage:null}):f);
                       if(err.message!=="cancelled") showToast("⚠ Video upload failed: "+err.message);
                     }
                   }}/>
@@ -9843,7 +9843,7 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
                     ?<div style={{position:"relative"}}>
                         <video src={form.video} controls muted style={{width:"100%",borderRadius:6,maxHeight:140}} playsInline/>
                         {form._videoUploading&&<div style={{position:"absolute",inset:0,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",background:"rgba(0,0,0,.55)",borderRadius:6,gap:8}}>
-                          <div style={{fontSize:12,color:"#fff",fontWeight:600}}>{form._videoProgress!=null?`Uploading… ${form._videoProgress}%`:"Uploading…"}</div>
+                          <div style={{fontSize:12,color:"#fff",fontWeight:600}}>{form._videoProgress!=null?`${form._videoStage||"Uploading"}… ${form._videoProgress}%`:"Uploading…"}</div>
                           <div style={{width:"72%",height:5,background:"rgba(255,255,255,.25)",borderRadius:4,overflow:"hidden"}}>
                             <div style={{height:"100%",width:`${form._videoProgress||0}%`,background:"#fff",borderRadius:4,transition:"width .3s ease"}}/>
                           </div>
@@ -9851,7 +9851,7 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
                             e.stopPropagation();
                             videoXhrRef.current?.abort();
                             videoXhrRef.current=null;
-                            setForm(f=>({...f,video:"",_videoUploading:false,_videoProgress:null}));
+                            setForm(f=>({...f,video:"",_videoUploading:false,_videoProgress:null,_videoStage:null}));
                             showToast("Upload cancelled");
                           }} style={{marginTop:4,fontSize:11,padding:"3px 14px",borderRadius:4,border:"1px solid rgba(255,255,255,.5)",background:"rgba(255,255,255,.15)",color:"#fff",cursor:"pointer"}}>Cancel</button>
                         </div>}
@@ -9963,30 +9963,36 @@ async function uploadJournalPhoto(entryId,file){
   const pathname=`journal/${entryId}-${uid()}.${ext}`;
   return await supabaseUpload(pathname,file);
 }
-// Supabase Storage upload with simulated progress (blob-upload endpoint retired)
+// Storage caps each file at 50 MB, so a bigger clip (any few seconds of 4K) is first
+// brought down to a 1080p copy under the cap — same as Listing Manager and Social do.
+// Progress: the conversion fills the first half of the bar, the upload the rest.
 function startStockVideoUpload(itemId,file,_unused,onProgress){
-  const ext=(file.name||"").split(".").pop().toLowerCase()||"mp4";
-  const pathname=`stock/${itemId}-video.${ext}`;
+  const ctrl=new AbortController();
   let cancelled=false;
-  let fakeProgress=0;
-  const ticker=setInterval(()=>{
-    if(cancelled){clearInterval(ticker);return;}
-    fakeProgress=Math.min(fakeProgress+Math.random()*7,90);
-    if(onProgress)onProgress(Math.round(fakeProgress));
-  },400);
+  const report=(pct,stage)=>{if(!cancelled&&onProgress)onProgress(Math.round(pct),stage);};
   const promise=(async()=>{
+    let up=file;
+    const{fitVideoForStorage,STORAGE_MAX_BYTES}=await import("./src/videoLab.js");
+    const needsFit=file.size>44*1024*1024;
+    if(needsFit){
+      report(0,"Making a 1080p copy");
+      up=await fitVideoForStorage(file,{onProgress:p=>report(p*50,"Making a 1080p copy")});
+      if(cancelled)throw new Error("cancelled");
+    }
+    if(up.size>STORAGE_MAX_BYTES)throw new Error(`Video is ${(up.size/1048576).toFixed(0)} MB — storage takes up to 50 MB. Trim it shorter and try again.`);
+    const ext=up===file?((file.name||"").split(".").pop().toLowerCase()||"mp4"):"mp4";
+    const pathname=`stock/${itemId}-video.${ext}`;
+    const base=needsFit?50:0;
     try{
-      const url=await supabaseUpload(pathname,file);
-      clearInterval(ticker);
-      if(cancelled)throw new Error("Cancelled");
-      if(onProgress)onProgress(100);
+      const url=await supabaseUpload(pathname,up,{signal:ctrl.signal,onProgress:f=>report(base+f*(100-base),"Uploading")});
+      if(cancelled)throw new Error("cancelled");
       return url;
     }catch(err){
-      clearInterval(ticker);
+      if(cancelled)throw new Error("cancelled");
       throw err;
     }
   })();
-  return{xhr:{abort:()=>{cancelled=true;clearInterval(ticker);}},promise};
+  return{xhr:{abort:()=>{cancelled=true;ctrl.abort();}},promise};
 }
 
 async function uploadVendorFile(vendorId,fileId,dataUrl,fileName){
