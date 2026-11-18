@@ -4692,7 +4692,11 @@ function AccountingFinanceLedger({showToast,onViewBill,isAdmin=false,onOpenModul
   };
   const unclassifySelected=async()=>{
     if(!selected||selected.type==="conversion"||isUnclassified(selected))return;
-    if(!window.confirm("Unclassify this payment? The payment and attachments stay, but it will move back to Not classified."))return;
+    // Files pulled in from the bill when it was classified (Image/Document from bill N) go with
+    // the classification; anything uploaded on the payment itself stays (Sir, 18 Nov 2026).
+    const ownAtts=txnAttachments(selected).filter(a=>!a?.sourceBillId&&a?.source!=="purchase-bill");
+    const billAttCount=txnAttachments(selected).length-ownAtts.length;
+    if(!window.confirm(`Unclassify this payment? It moves back to Not classified${billAttCount?` and the ${billAttCount} file${billAttCount>1?"s":""} attached from the bill ${billAttCount>1?"are":"is"} unlinked (they stay on the bill)`:""}. The payment${ownAtts.length?" and its own attachments":""} stay${ownAtts.length?"":"s"}.`))return;
     const wasVendorBill=selected.classifiedAs==="vendor_bill"&&!selected.classifiedRef?.interCo;
     const wasCustomerReceipt=selected.classifiedAs==="customer_receipt";
     const prevBillIds=wasVendorBill?(selected.classifiedRef?.billIds||(selected.classifiedRef?.billId?[selected.classifiedRef.billId]:[])):[];
@@ -4720,6 +4724,7 @@ function AccountingFinanceLedger({showToast,onViewBill,isAdmin=false,onOpenModul
       classifiedAt:null,
       classifiedBy:null,
       classifiedSnapshot:null,
+      ...(billAttCount?{attachments:ownAtts,attachmentUrl:ownAtts[0]?.url||null,attachmentName:ownAtts[0]?.name||null}:{}),
     };
     await patchTxn(selected.id,patch);
     if(wasCustomerReceipt&&prevInvoiceIds.length){
@@ -4759,7 +4764,7 @@ function AccountingFinanceLedger({showToast,onViewBill,isAdmin=false,onOpenModul
       setExpenses(next);
       await saveK(keys.expenses,next);
     }
-    showToast?.("Payment moved back to Not classified");
+    showToast?.(`Payment moved back to Not classified${billAttCount?` · ${billAttCount} bill file${billAttCount>1?"s":""} unlinked`:""}`);
   };
   // Silent ambient auto-fill: when a confidently-seen unclassified txn is selected,
   // quietly apply the learned cleaned payee/notes (with Undo). One patchTxn, run once.
