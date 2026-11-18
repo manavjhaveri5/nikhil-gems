@@ -2327,6 +2327,19 @@ async function listingHandler(req, res) {
          the ERP knew nothing about — and the next Publish made a second one.
          That is how one piece came to have two Etsy listings. Finding it by SKU
          makes publishing the same piece twice land on the same listing. */
+      /* A listing deleted on Etsy (from the ERP, by hand on Etsy, or removed by
+         Etsy) can't be updated — "Resource not found" — or put back on sale:
+         Etsy answers "not publishable because it's frozen". Its old id stayed
+         on the piece (a failed publish wrote it back), so every Publish aimed
+         at the dead listing (440mm Bumblebee Jasper Tower, 18 Nov 2026). Etsy
+         is asked whether the stored listing still exists; a gone one is
+         forgotten and the piece gets a new listing below. */
+      if (listing.platforms?.etsy?.listing_id) {
+        const gone = await etsyFetch(`https://openapi.etsy.com/v3/application/listings/${listing.platforms.etsy.listing_id}`, { headers: await etsyHeaders(false) })
+          .then(r => r.status === 404).catch(() => false);
+        if (gone) listing = { ...listing, platforms: { ...(listing.platforms || {}), etsy: { status: "deleted" } } };
+      }
+
       if (!listing.platforms?.etsy?.listing_id && listingSku(listing)) {
         const sku = listingSku(listing).slice(0, 32).toLowerCase();   // as written to Etsy
         const hdrs = await etsyHeaders(false);
