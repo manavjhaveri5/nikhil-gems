@@ -873,6 +873,7 @@ function SettingsTab({ settings, reload, showToast }) {
         ))}
         <div><button onClick={() => setF(x => ({ ...x, regions: [...x.regions, { name: "", countries: "", rate: 0, free_over: 0 }] }))} style={btn()}>＋ Region</button></div>
       </div>
+      <DiscountCodes settings={settings} showToast={showToast} />
       <div style={{ ...card, padding: 18, display: "grid", gap: 10 }}>
         <div style={{ fontWeight: 700 }}>India (Razorpay, in rupees)</div>
         <div style={{ fontSize: 11.5, color: C.inkFaint }}>Indian buyers see the Etsy sale price in ₹ and pay with UPI, cards or netbanking.</div>
@@ -966,6 +967,103 @@ function SettingsTab({ settings, reload, showToast }) {
         <div><span style={lab}>Returns policy (blank = 14-day "we'll make it right" wording)</span><textarea value={f.returns_note} onChange={e => setF(x => ({ ...x, returns_note: e.target.value }))} style={FI({ minHeight: 90, resize: "vertical" })} /></div>
       </div>
       <div><button onClick={save} disabled={busy} style={btn(C.ink, "#FAF0DC")}>{busy ? "Saving…" : "Save settings"}</button></div>
+    </div>
+  );
+}
+
+/* ── Discount codes ─────────────────────────────────────────────────────────
+   Codes buyers type in the cart, kept in store_settings.discount_codes (buyers
+   can't read it). The store checks every limit at checkout and puts the
+   discount on Stripe as a coupon of the same name, so it shows on Stripe's
+   payment page and in the Stripe dashboard; free shipping just makes the
+   shipping nothing. Indian orders (Razorpay) use the ₹ figures. Saved on its
+   own button, apart from the rest of the settings. */
+const KINDS = [["percent", "% off"], ["amount", "Amount off"], ["free_shipping", "Free shipping"]];
+const blankCode = () => ({ code: "", kind: "percent", percent: 10, usd: "", inr: "", min_usd: "", min_inr: "", first_order: false, expires: "", max_uses: "", active: true, _new: true });
+function DiscountCodes({ settings, showToast }) {
+  const fx = +settings.fx_inr_per_usd || 84;
+  const [codes, setCodes] = useState(() => {
+    const saved = Array.isArray(settings.discount_codes) ? settings.discount_codes : [];
+    // WELCOME10 is built into the store (it's on the parcel card); shown here so it can be changed or switched off.
+    return saved.some(c => c.code === "WELCOME10") ? saved : [{ code: "WELCOME10", kind: "percent", percent: 10, first_order: true, active: true, _builtIn: true }, ...saved];
+  });
+  const [uses, setUses] = useState({});
+  const [busy, setBusy] = useState(false);
+  const [dirty, setDirty] = useState(false);
+  useEffect(() => {
+    supabase.from("store_orders").select("discount_code,status").not("discount_code", "is", null).limit(5000)
+      .then(({ data }) => setUses((data || []).filter(o => !["pending", "cancelled"].includes(o.status)).reduce((m, o) => ({ ...m, [o.discount_code]: (m[o.discount_code] || 0) + 1 }), {})));
+  }, []);
+  const set = (i, patch) => { setCodes(cs => cs.map((c, j) => j === i ? { ...c, ...patch } : c)); setDirty(true); };
+  const num = v => String(v).replace(/[^\d.]/g, "");
+  const lab = { fontSize: 11, fontWeight: 700, color: C.inkMid, display: "block", marginBottom: 4 };
+  const save = async () => {
+    const out = [], seen = new Set();
+    for (const c of codes) {
+      const code = String(c.code || "").replace(/\s+/g, "").toUpperCase().slice(0, 40);
+      if (!code) continue;
+      if (!/^[A-Z0-9_-]+$/.test(code)) return showToast(`⚠ ${code}: letters, numbers, - and _ only`);
+      if (seen.has(code)) return showToast(`⚠ ${code} is there twice`);
+      seen.add(code);
+      const r = { code, kind: c.kind, active: c.active !== false, first_order: !!c.first_order };
+      if (c.kind === "percent") { r.percent = Math.round(+c.percent); if (!(r.percent > 0 && r.percent <= 90)) return showToast(`⚠ ${code}: the % must be 1–90`); }
+      if (c.kind === "amount") {
+        r.usd = Math.round((+c.usd || 0) * 100) / 100;
+        r.inr = Math.round(+c.inr || r.usd * fx);
+        if (!(r.usd > 0)) return showToast(`⚠ ${code}: put the $ amount off`);
+      }
+      if (+c.min_usd > 0) { r.min_usd = +c.min_usd; r.min_inr = Math.round(+c.min_inr || r.min_usd * fx); }
+      else if (+c.min_inr > 0) r.min_inr = Math.round(+c.min_inr);
+      if (c.expires) r.expires = c.expires;
+      if (+c.max_uses > 0) r.max_uses = Math.round(+c.max_uses);
+      out.push(r);
+    }
+    setBusy(true);
+    try {
+      await q(supabase.from("store_settings").upsert([{ key: "discount_codes", value: out }], { onConflict: "key" }));
+      setCodes(out.length ? out : codes.filter(c => c._builtIn)); setDirty(false);
+      showToast("Discount codes saved — the store picks them up within a minute");
+    } catch (e) { showToast("⚠ " + e.message); }
+    setBusy(false);
+  };
+  const today = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
+  return (
+    <div style={{ ...card, padding: 18, display: "grid", gap: 12 }}>
+      <div style={{ fontWeight: 700 }}>Discount codes</div>
+      <div style={{ fontSize: 11.5, color: C.inkFaint, lineHeight: 1.5 }}>Buyers type these in the cart. Each one is checked at checkout and applied on Stripe as a coupon with the same name, so it shows on the payment page and in Stripe. Indian orders use the ₹ figures (left blank, they're the $ figure × {fx}). Leave a limit empty for none.</div>
+      {codes.map((c, i) => {
+        const expired = c.expires && today > c.expires;
+        const used = uses[String(c.code).toUpperCase()] || 0;
+        return (
+          <div key={i} style={{ border: `1px solid ${C.border}`, borderRadius: 10, padding: 12, display: "grid", gap: 10, opacity: c.active === false || expired ? .6 : 1 }}>
+            <div style={{ display: "grid", gridTemplateColumns: mob() ? "1fr 1fr" : "1.3fr 1fr 1fr 1fr", gap: 8, alignItems: "end" }}>
+              <div><span style={lab}>Code</span><input value={c.code} onChange={e => set(i, { code: e.target.value.toUpperCase().replace(/\s+/g, "") })} placeholder="SPRING15" style={FI({ fontFamily: "ui-monospace,monospace" })} /></div>
+              <div><span style={lab}>Type</span><select value={c.kind} onChange={e => set(i, { kind: e.target.value })} style={FI()}>{KINDS.map(([k, l]) => <option key={k} value={k}>{l}</option>)}</select></div>
+              {c.kind === "percent" && <div><span style={lab}>% off</span><input value={c.percent ?? ""} onChange={e => set(i, { percent: num(e.target.value) })} style={FI()} /></div>}
+              {c.kind === "amount" && <div><span style={lab}>$ off</span><input value={c.usd ?? ""} onChange={e => set(i, { usd: num(e.target.value) })} style={FI()} /></div>}
+              {c.kind === "amount" && <div><span style={lab}>₹ off (India)</span><input value={c.inr ?? ""} onChange={e => set(i, { inr: num(e.target.value) })} placeholder={c.usd ? String(Math.round(+c.usd * fx)) : ""} style={FI()} /></div>}
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: mob() ? "1fr 1fr" : "1fr 1fr 1fr 1fr", gap: 8, alignItems: "end" }}>
+              <div><span style={lab}>Min. order $</span><input value={c.min_usd ?? ""} onChange={e => set(i, { min_usd: num(e.target.value) })} style={FI()} /></div>
+              <div><span style={lab}>Min. order ₹</span><input value={c.min_inr ?? ""} onChange={e => set(i, { min_inr: num(e.target.value) })} placeholder={c.min_usd ? String(Math.round(+c.min_usd * fx)) : ""} style={FI()} /></div>
+              <div><span style={lab}>Last day</span><input type="date" value={c.expires || ""} onChange={e => set(i, { expires: e.target.value })} style={FI()} /></div>
+              <div><span style={lab}>Max uses</span><input value={c.max_uses ?? ""} onChange={e => set(i, { max_uses: num(e.target.value).replace(".", "") })} style={FI()} /></div>
+            </div>
+            <div style={{ display: "flex", gap: 14, alignItems: "center", flexWrap: "wrap", fontSize: 12.5 }}>
+              <label style={{ display: "flex", gap: 6, alignItems: "center", cursor: "pointer" }}><input type="checkbox" checked={c.active !== false} onChange={e => set(i, { active: e.target.checked })} /> On</label>
+              <label style={{ display: "flex", gap: 6, alignItems: "center", cursor: "pointer" }}><input type="checkbox" checked={!!c.first_order} onChange={e => set(i, { first_order: e.target.checked })} /> First order only</label>
+              <span style={{ color: C.inkFaint }}>Used on {used} order{used === 1 ? "" : "s"}{+c.max_uses ? ` of ${c.max_uses}` : ""}{expired ? " · expired" : ""}</span>
+              <div style={{ flex: 1 }} />
+              <button onClick={() => { if (c.code === "WELCOME10") { set(i, { active: false }); showToast("WELCOME10 is built into the store, so it's switched off instead — press Save"); return; } if (window.confirm(`Delete ${c.code || "this code"}? Buyers won't be able to use it.`)) { setCodes(cs => cs.filter((_, j) => j !== i)); setDirty(true); } }} style={{ ...btn(), color: C.red }}>Delete</button>
+            </div>
+          </div>
+        );
+      })}
+      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+        <button onClick={() => { setCodes(cs => [...cs, blankCode()]); setDirty(true); }} style={btn()}>＋ New code</button>
+        <button onClick={save} disabled={busy || !dirty} style={{ ...btn(C.ink, "#FAF0DC"), opacity: busy || !dirty ? .5 : 1 }}>{busy ? "Saving…" : "Save discount codes"}</button>
+        {dirty && <span style={{ fontSize: 11.5, color: C.amber }}>Not saved yet</span>}
+      </div>
     </div>
   );
 }

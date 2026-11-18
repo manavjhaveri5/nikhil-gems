@@ -140,7 +140,7 @@ async function shipStoreOrder(req, res) {
   if (!number) return res.status(400).json({ error: "Missing order number" });
   if (!tracking) return res.status(400).json({ error: "Add a tracking number first" });
   const db = adminClient();
-  const { data: o, error } = await db.from("store_orders").select("id,number,name,email,lines,status,tracking,notes").eq("number", number).maybeSingle();
+  const { data: o, error } = await db.from("store_orders").select("id,number,name,email,lines,status,tracking,notes,shipping").eq("number", number).maybeSingle();
   if (error) return res.status(500).json({ error: error.message });
   if (!o) return res.status(404).json({ error: `${number} isn't in the store's orders` });
   if (!["paid", "packed", "shipped", "delivered"].includes(o.status)) return res.status(409).json({ error: `${number} is ${o.status}, so it can't be shipped` });
@@ -152,13 +152,15 @@ async function shipStoreOrder(req, res) {
   const { error: uerr } = await db.from("store_orders").update({ status, tracking, updated_at: new Date().toISOString() }).eq("id", o.id);
   if (uerr) return res.status(500).json({ error: uerr.message });
 
+  // Parcels abroad go Delivered Duty Paid; an order within India has no customs to mention.
+  const ddp = String(o.shipping?.country || "").toUpperCase() !== "IN";
   const key = process.env.RESEND_API_KEY;
   const to = String(o.email || "").trim();
   if (already) return res.json({ ok: true, emailed: false, already: true, to, tracking_url: url, notes });
-  if (!key) return res.json({ ok: true, emailed: false, notConfigured: true, to, tracking_url: url, notes });
+  if (!key) return res.json({ ok: true, emailed: false, notConfigured: true, to, tracking_url: url, ddp, notes });
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to)) return res.json({ ok: true, emailed: false, error: "The order has no valid buyer email", tracking_url: url, notes });
   const pieces = (o.lines || []).map(l => `${l.title}${(+l.qty || 1) > 1 ? ` × ${l.qty}` : ""}`);
-  const mail = orderShipped({ name: o.name, number: o.number, pieces, carrier, tracking, trackingUrl: url, note: String(b.note || "").slice(0, 300), siteUrl: STORE, logoUrl: process.env.MAIL_LOGO_URL || `${STORE}/logo.png` });
+  const mail = orderShipped({ name: o.name, number: o.number, pieces, ddp, carrier, tracking, trackingUrl: url, note: String(b.note || "").slice(0, 300), siteUrl: STORE, logoUrl: process.env.MAIL_LOGO_URL || `${STORE}/logo.png` });
   const r = await fetch("https://api.resend.com/emails", {
     method: "POST",
     headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },

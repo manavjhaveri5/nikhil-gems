@@ -5283,10 +5283,12 @@ const defaultNgDraft = o => ({ qty: String(o._ngAllocatedQty || o._ngDeductedQty
     if (!number) { updateTrackingDraft(o, { error: "Missing store order number.", success: "" }); return false; }
     if (!tracking) { updateTrackingDraft(o, { error: "Add a tracking number first.", success: "" }); return false; }
     if (!carrier || carrier === "other") { updateTrackingDraft(o, { error: "Pick the carrier, so the buyer's tracking link works.", success: "" }); return false; }
+    const trackingUrl = String(draft.tracking_url || "").trim();
+    if (!/^https:\/\/\S+\.\S+/i.test(trackingUrl)) { updateTrackingDraft(o, { error: "Paste the tracking link (https://…) the buyer should open.", success: "" }); return false; }
     updateTrackingDraft(o, { loading: true, error: "", success: "" });
     try {
       const r = await fetch("/api/mail", { method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ template: "order_shipped", number, tracking, carrier, tracking_url: draft.tracking_url || "", note: draft.note_to_buyer || "" }) });
+        body: JSON.stringify({ template: "order_shipped", number, tracking, carrier, tracking_url: trackingUrl, note: draft.note_to_buyer || "" }) });
       const d = await r.json().catch(() => ({}));
       if (!r.ok || !d.ok) throw new Error(d.error || `Could not ship (${r.status})`);
       const nowIso = new Date().toISOString();
@@ -5307,7 +5309,8 @@ const defaultNgDraft = o => ({ qty: String(o._ngAllocatedQty || o._ngDeductedQty
         const pieces = rows.map(x => x.listing_title).filter(Boolean).join(", ");
         const body = [`Hello${first ? ` ${first}` : ""},`, "", `Your order ${number} has been packed and shipped from our studio in India.`, pieces ? `In the parcel: ${pieces}.` : "",
           `Carrier: ${carrier}. Tracking number: ${tracking}. Tracking can take a day or two to show the first scan.`, d.tracking_url ? `Track your parcel: ${d.tracking_url}` : "",
-          draft.note_to_buyer || "", "", "If you have any question about your order, just reply to this email.", "", "Earth Editions", "eartheditions.co"].filter((l, i, a) => l !== "" || a[i - 1] !== "").join("\n");
+          d.ddp ? "It ships DDP (Delivered Duty Paid): customs duties and import taxes are already paid, so there is nothing to pay when it reaches you." : "",
+          draft.note_to_buyer || "", "", "For any questions, please feel free to email us, or WhatsApp me personally on +91 96192 48797.", "", "Earth Editions", "eartheditions.co"].filter((l, i, a) => l !== "" || a[i - 1] !== "").join("\n");
         window.location.href = `mailto:${d.to || o.buyer_email}?subject=${encodeURIComponent(`Your Earth Editions order ${number} has shipped`)}&body=${encodeURIComponent(body)}`;
       }
       const msg = d.emailed ? `Shipped · email sent to ${d.to}`
@@ -6583,7 +6586,7 @@ const defaultNgDraft = o => ({ qty: String(o._ngAllocatedQty || o._ngDeductedQty
                               <div style={{ fontSize: 15, fontWeight: 850, color: C.ink }}>{done ? "Shipped" : "Ship this eartheditions.co order"}</div>
                               <div style={{ fontSize: 12, color: C.inkMid, marginTop: 3, lineHeight: 1.4 }}>
                                 {done ? `${order.carrier_name || ""} ${order.tracking_code || order.tracking_number}${order.buyer_notified_at ? ` · buyer emailed ${new Date(order.buyer_notified_at).toLocaleDateString("en-GB")}` : " · buyer not emailed yet"}`
-                                  : `Add the carrier and tracking number. Every piece of ${order.platform_order_id} is marked shipped and ${order.buyer_email || "the buyer"} gets a shipped email with a tracking link.`}
+                                  : `Add the carrier, tracking number and tracking link. Every piece of ${order.platform_order_id} is marked shipped and ${order.buyer_email || "the buyer"} gets a shipped email with that link.`}
                               </div>
                             </div>
                             <div style={{ fontSize: 11, color: C.inkFaint, fontWeight: 700, whiteSpace: "nowrap" }}>{order.platform_order_id}</div>
@@ -6597,6 +6600,9 @@ const defaultNgDraft = o => ({ qty: String(o._ngAllocatedQty || o._ngDeductedQty
                             </label>
                             <label style={lbl}>Tracking number
                               <input value={d.tracking_code} onChange={e => updateTrackingDraft(order, { tracking_code: e.target.value })} placeholder="e.g. LX123456789IN" style={inp} />
+                            </label>
+                            <label style={{ ...lbl, flex: 2 }}>Tracking link
+                              <input value={d.tracking_url || ""} onChange={e => updateTrackingDraft(order, { tracking_url: e.target.value })} placeholder="https://… (the page the buyer opens)" style={inp} />
                             </label>
                             <label style={{ ...lbl, flex: 2 }}>Note to buyer <span style={{ fontWeight: 500 }}>(optional)</span>
                               <input value={d.note_to_buyer || ""} onChange={e => updateTrackingDraft(order, { note_to_buyer: e.target.value })} placeholder="A short line for the email" style={inp} />
