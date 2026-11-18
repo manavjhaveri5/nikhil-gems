@@ -31,6 +31,7 @@ import { loadLearnMemory, recordDecision, matchLearned, matchRecurring, loadEmbM
 const FinanceApp        = React.lazy(() => import("./src/FinanceApp.jsx"));
 const AccountingApp     = React.lazy(() => import("./src/AccountingApp.jsx"));
 const ListingManagerApp = React.lazy(() => import("./src/ListingManagerApp.jsx"));
+const EarthEditionsInvoices = React.lazy(() => import("./src/EarthEditionsInvoices.jsx"));
 const DatasetsApp       = React.lazy(() => import("./src/DatasetsApp.jsx"));
 const ImageLibraryApp   = React.lazy(() => import("./src/ImageLibraryApp.jsx"));
 const ExportReconciliationApp = React.lazy(() => import("./src/ExportReconciliationApp.jsx"));
@@ -12643,7 +12644,27 @@ function InvoiceStats({invs,all,buyers,rates,fy,mob}){
   </div>;
 }
 
-function InvoicesApp({onHome,startDraft,startInvoiceId,onInvoiceIdConsumed}){
+/* Invoicing's three companies: Nikhil Gems and Atyahara share InvoicesApp;
+   Earth Editions (a US business, billed in dollars) has its own module. */
+function InvoicingHub(props){
+  const [ee,setEe]=useState(()=>localStorage.getItem("ng-invoicing-ee")==="1");
+  useEffect(()=>{if(props.startInvoiceId?.company==="ee")setEe(true);},[props.startInvoiceId]);
+  const pick=id=>{localStorage.setItem("ng-invoicing-ee",id==="ee"?"1":"");if(id!=="ee")localStorage.setItem("ng-vendors-company",id);setEe(id==="ee");};
+  if(!ee)return <InvoicesApp {...props} onPickCompany={pick}/>;
+  const switcher=<div style={{display:"flex",gap:3,background:C.card,borderRadius:7,padding:3,border:`1px solid ${C.border}`}}>
+    {[["ng","Nikhil Gems"],["at","Atyahara"],["ee","Earth Editions"]].map(([id,label])=>(
+      <button key={id} onClick={()=>pick(id)} style={{padding:"5px 11px",borderRadius:5,fontSize:12,fontWeight:id==="ee"?800:600,border:"none",cursor:"pointer",background:id==="ee"?"#1F5E4B":"transparent",color:id==="ee"?"#fff":C.inkMid}}>{label}</button>
+    ))}
+  </div>;
+  const openId=props.startInvoiceId?.company==="ee"?(props.startInvoiceId.id||props.startInvoiceId.invNo):null;
+  return <Shell title="Invoicing" onHome={props.onHome} onBack={props.onHome} actions={switcher}>
+    <React.Suspense fallback={<div style={{color:C.inkFaint,fontSize:13}}>Loading…</div>}>
+      <EarthEditionsInvoices openId={openId} onOpened={props.onInvoiceIdConsumed}/>
+    </React.Suspense>
+  </Shell>;
+}
+
+function InvoicesApp({onHome,startDraft,startInvoiceId,onInvoiceIdConsumed,onPickCompany}){
   const t=useT();
   // Company-scoped: Nikhil Gems and Atyahara keep separate invoices / buyers / acc-stock.
   const [company,setCompany]=useState(()=>localStorage.getItem("ng-vendors-company")||"ng");
@@ -13333,8 +13354,8 @@ Extract all line items. Currency from invoice (USD/JPY/EUR/INR). If buyer=consig
   const invBack=view!=="list"?()=>{setView("list");setDraft(null);}:onHome;
   const companySwitcher=(
     <div style={{display:"flex",gap:3,background:C.card,borderRadius:7,padding:3,border:`1px solid ${C.border}`}}>
-      {[["ng","Nikhil Gems"],["at","Atyahara"]].map(([id,label])=>(
-        <button key={id} onClick={()=>setCompany(id)} style={{padding:"5px 11px",borderRadius:5,fontSize:12,fontWeight:company===id?800:600,border:"none",cursor:"pointer",background:company===id?(id==="at"?"#6B3FA0":C.gold):"transparent",color:company===id?"#fff":C.inkMid}}>{label}</button>
+      {[["ng","Nikhil Gems"],["at","Atyahara"],["ee","Earth Editions"]].map(([id,label])=>(
+        <button key={id} onClick={()=>id==="ee"?onPickCompany?.("ee"):setCompany(id)} style={{padding:"5px 11px",borderRadius:5,fontSize:12,fontWeight:company===id?800:600,border:"none",cursor:"pointer",background:company===id?(id==="at"?"#6B3FA0":C.gold):"transparent",color:company===id?"#fff":C.inkMid}}>{label}</button>
       ))}
     </div>
   );
@@ -26586,8 +26607,9 @@ export default function Root({onSignOut}){
   );
   const goHome=()=>{setScreen("welcome");forgetMod();};
   const openInvoiceModuleTarget=target=>{
-    const company=target?.company==="at"?"at":"ng";
-    localStorage.setItem("ng-vendors-company",company);
+    const company=target?.company==="ee"?"ee":target?.company==="at"?"at":"ng";
+    localStorage.setItem("ng-invoicing-ee",company==="ee"?"1":"");
+    if(company!=="ee")localStorage.setItem("ng-vendors-company",company);
     setStartInvoiceDraft(null);
     setStartInvoiceId({...target,company,id:target?.id||target?.invNo||"",requestId:Date.now()});
     setMod("invoices");
@@ -26644,7 +26666,7 @@ export default function Root({onSignOut}){
     else if(mod==="shows")content=<ShowsApp onHome={goHome} isAdmin={isAdmin}/>;
     else if(mod==="calendar")content=<CalendarApp onHome={goHome}/>;
     else if(mod==="recon")content=<ExportReconShell onHome={goHome} onCreateInvoiceFromSb={(draft,coKey)=>{localStorage.setItem("ng-vendors-company",(coKey==="nikhil"||coKey==="ng")?"ng":"at");setStartInvoiceDraft(draft);setMod("invoices");setScreen("app");}}/>;
-    else if(mod==="invoices")content=<InvoicesApp onHome={()=>{goHome();setStartInvoiceDraft(null);setStartInvoiceId(null);}} startDraft={startInvoiceDraft} startInvoiceId={startInvoiceId} onInvoiceIdConsumed={()=>setStartInvoiceId(null)}/>;
+    else if(mod==="invoices")content=<InvoicingHub onHome={()=>{goHome();setStartInvoiceDraft(null);setStartInvoiceId(null);}} startDraft={startInvoiceDraft} startInvoiceId={startInvoiceId} onInvoiceIdConsumed={()=>setStartInvoiceId(null)}/>;
     else if(mod==="finance"&&(isAdmin||allowedMods.some(m=>m.id==="finance")))content=<React.Suspense fallback={<div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",color:"#8C7E66",fontSize:13}}>Loading…</div>}><FinanceApp onHome={goHome}/></React.Suspense>;
     else if(mod==="jobwork")content=<JobWorkApp onHome={goHome}/>;
     else if(mod==="etsy")content=<React.Suspense fallback={<div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",color:"#8C7E66",fontSize:13}}>Loading…</div>}><ListingManagerApp currentUser={currentUser} onHome={goHome} startTab={startView==="renew"?"renew":undefined} onOpenInvoice={openInvoiceModuleTarget} onViewInvoicePdf={viewInvoicePdfTarget}/></React.Suspense>;

@@ -38,6 +38,7 @@ import ListSteps from "./ListSteps.jsx";
 import RenewalQueue from "./RenewalQueue.jsx";
 import EtsyQueuePanel, { enqueueEtsy, markQueueLive, chooseEtsyPublish, loadQueueSettings, queuesOnEtsy, whenLabel, QUEUE_KEY as ETSY_QUEUE_KEY } from "./etsyQueue.jsx";
 import { eeBestSection } from "../lib/eeSections.js";
+import { createEeInvoiceFromOrder } from "./EarthEditionsInvoices.jsx";
 import { sbThumb } from "./photoUrls.js";
 import { CHANNELS, OTHER_CHANNELS, isEtsyKey, channel, titleFor, descFor, titleSource, linkOf, parseRef, connectPatch, readiness, readyScore, locationOf, needsLocation, knownLocations, withLocationLog, tradeRowOf, tradeRefOnly, defaultPieces, defaultUnit, shapeFromTitle, tradeTitleFor, nextLocation, statusShort } from "./listingChannels.js";
 const now   = () => new Date().toISOString();
@@ -6611,6 +6612,15 @@ const defaultNgDraft = o => ({ qty: String(o._ngAllocatedQty || o._ngDeductedQty
                               style={{ background: C.ink, color: "#fff", border: "none", borderRadius: 8, padding: "10px 16px", fontSize: 12.5, fontWeight: 850, cursor: d.loading ? "wait" : "pointer", opacity: d.loading ? .7 : 1, whiteSpace: "nowrap" }}>
                               {d.loading ? "Sending…" : done ? "Update & re-email" : "Ship & email buyer"}
                             </button>
+                          </div>
+                          <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 10, flexWrap: "wrap" }}>
+                            <button onClick={async () => {
+                              try {
+                                const { invoice, existed } = await createEeInvoiceFromOrder(String(order.platform_order_id || "").trim());
+                                showToast?.(existed ? `${invoice.invNo} already exists — opening it` : `Earth Editions invoice ${invoice.invNo} created`);
+                                onOpenInvoice?.({ company: "ee", id: invoice.id, invNo: invoice.invNo });
+                              } catch (e) { showToast?.("⚠ " + (e.message || "Couldn't make the invoice")); }
+                            }} style={{ background: C.surface, color: C.ink, border: `1px solid ${C.border}`, borderRadius: 8, padding: "8px 12px", fontSize: 12, fontWeight: 800, cursor: "pointer", whiteSpace: "nowrap" }}>📄 Create invoice (Earth Editions, USD)</button>
                           </div>
                           {d.error && <div style={{ marginTop: 10, fontSize: 12, color: C.red, background: C.redBg, border: `1px solid ${C.red}30`, borderRadius: 7, padding: "8px 10px" }}>{d.error}</div>}
                           {d.success && <div style={{ marginTop: 10, fontSize: 12, color: C.green, background: C.greenBg, border: `1px solid ${C.green}30`, borderRadius: 7, padding: "8px 10px" }}>✓ {d.success}</div>}
