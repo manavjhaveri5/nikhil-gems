@@ -237,11 +237,12 @@ function buildEditorialHtml({
     return `
       <td width="${cols === 1 ? "100%" : "50%"}" align="center" valign="top" style="padding:0 ${cols === 1 ? 0 : 8}px 30px;font-family:${F.body};">
         ${link ? `<a href="${link}" style="text-decoration:none;">${img}</a>` : img}
-        <div style="font-size:12.5px;color:${INK};padding-top:12px;line-height:1.5;">${esc(p.title)}</div>
+        ${p.isLot ? `<div style="font-size:9.5px;letter-spacing:1.5px;color:${A};padding-top:12px;">LOT</div>` : ""}
+        <div style="font-size:12.5px;color:${INK};padding-top:${p.isLot ? 3 : 12}px;line-height:1.5;">${esc(p.title)}</div>
         ${showMeta && p.meta ? `<div style="font-size:12px;color:${MUTED};padding-top:5px;">${esc(p.meta)}</div>` : ""}
         ${showPrice && p.price ? `<div style="font-size:12.5px;color:${INK};padding-top:5px;white-space:nowrap;">${esc(p.price)}${priceSuffix ? ` ${esc(priceSuffix)}` : ""}</div>` : ""}
-        ${showCta && link ? `<div style="padding-top:12px;">
-          <a href="${link}" style="display:inline-block;border:1px solid ${INK};color:${INK};text-decoration:none;font-size:10px;letter-spacing:.5px;padding:7px 15px;">${esc(ctaLabel)}</a>
+        ${(showCta || p.video) && link ? `<div style="padding-top:12px;">
+          <a href="${link}" style="display:inline-block;border:1px solid ${INK};color:${INK};text-decoration:none;font-size:10px;letter-spacing:.5px;padding:7px 15px;">${p.video ? "&#9654; WATCH THE VIDEO" : esc(ctaLabel)}</a>
         </div>` : ""}
       </td>`;
   };
@@ -388,7 +389,7 @@ function buildCampaignHtml({
         <div style="font-size:${cols === 1 ? 18 : 15}px;font-weight:700;color:${INK};margin:10px 0 2px;line-height:1.3;">${wrap(esc(p.title))}</div>
         ${showMeta && p.meta ? `<div style="font-size:12px;color:#8a7f6d;margin-bottom:4px;">${esc(p.meta)}</div>` : ""}
         ${showPrice && p.price ? `<div style="font-size:14px;font-weight:700;color:${A};">${esc(p.price)}</div>` : ""}
-        ${showCta && link ? `<div style="margin-top:8px;"><a href="${link}" style="${cta}${ctaPad}text-decoration:${ctaStyle === "link" ? "underline" : "none"};font-size:12px;font-weight:700;">${esc(ctaLabel)}</a></div>` : ""}
+        ${(showCta || p.video) && link ? `<div style="margin-top:8px;"><a href="${link}" style="${cta}${ctaPad}text-decoration:${ctaStyle === "link" ? "underline" : "none"};font-size:12px;font-weight:700;">${p.video ? "&#9654; Watch the video" : esc(ctaLabel)}</a></div>` : ""}
       </td>`;
   };
 

@@ -4,6 +4,7 @@ import { loadK, loadKFresh, upsertItemK, upsertVersionedItemK } from "./utils.js
 import { EARTH_LOGO_URL, KEYS } from "./constants.js";
 import { loadLiveTrade, setTradePrice, TRADE_SITE } from "./TradeSiteApp.jsx";
 import { loadStoreFacts, loadStoreProduct, publishListingToStore } from "./StoreApp.jsx";
+import LotsPanel, { loadLots, saveLots, lotToProduct } from "./CampaignLots.jsx";
 
 const STORE_SITE = "https://eartheditions.co";
 
@@ -163,6 +164,11 @@ export default function CampaignComposer({ listings = [], onClose, showToast }) 
   // rather than waiting for the listings prop to come back around.
   const [stamps, setStamps] = useState({});
   const [err, setErr] = useState("");
+  // Lots: offers by video that aren't stock (src/CampaignLots.jsx). Picked ones print after the pieces.
+  const [lots, setLots] = useState([]);
+  const [lotSel, setLotSel] = useState(() => new Set());
+  useEffect(() => { loadLots().then(setLots); }, []);
+  const toggleLot = id => setLotSel(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
 
   const post = async payload => {
     const r = await fetch("/api/omnisend", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
@@ -347,9 +353,10 @@ export default function CampaignComposer({ listings = [], onClose, showToast }) 
   const clearOverrides = id => { setOverrides(o => { const n = { ...o }; delete n[id]; return n; }); invalidate(); };
 
   const ql = q.toLowerCase();
-  const visible = (source === "trade" ? tradeView : source === "stock" ? stockView : pool.slice(0, listings.length)).filter(l => !ql || `${l.title || ""} ${l.material || ""} ${l.sku || ""}`.toLowerCase().includes(ql));
+  const visible = source === "lots" ? [] : (source === "trade" ? tradeView : source === "stock" ? stockView : pool.slice(0, listings.length)).filter(l => !ql || `${l.title || ""} ${l.material || ""} ${l.sku || ""}`.toLowerCase().includes(ql));
   const chosen = pool.filter(l => sel.has(l.id));
-  const products = chosen.map(toProduct);
+  const pickedLots = lots.filter(l => lotSel.has(l.id));
+  const products = [...chosen.map(toProduct), ...pickedLots.map(lotToProduct)];
   const payloadBase = () => ({ brand, heading, intro, products, ...design });
 
   const toggle = id => setSel(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
@@ -367,7 +374,7 @@ export default function CampaignComposer({ listings = [], onClose, showToast }) 
   const doCreate = async () => {
     setBusy("create"); setErr("");
     try {
-      await post({ action: "sync_products", products }).catch(() => {}); // catalog sync is best-effort
+      await post({ action: "sync_products", products: products.filter(p => !p.isLot) }).catch(() => {}); // catalog sync is best-effort
       const d = await post({
         action: "create_campaign", ...payloadBase(),
         // Omnisend's campaign name is internal-only; the date alone is how the
@@ -421,6 +428,11 @@ export default function CampaignComposer({ listings = [], onClose, showToast }) 
       done[l.id] = sentAt;
     }
     setStamps(s => ({ ...s, ...done }));
+    if (pickedLots.length) {
+      const fresh = await loadLots();
+      const next = fresh.map(l => lotSel.has(l.id) ? { ...l, mailedAt: sentAt, campaigns: [...(l.campaigns || []), { id: campaignId, name: CAMPAIGN_NAME, subject, sentAt }] } : l);
+      await saveLots(next); setLots(next);
+    }
   };
 
   const doSend = async () => {
@@ -446,7 +458,7 @@ export default function CampaignComposer({ listings = [], onClose, showToast }) 
       <div style={{ background: C.bg, borderRadius: mob() ? 0 : 16, width: "min(1100px,100%)", maxHeight: "100%", display: "flex", flexDirection: "column", overflow: "hidden" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "14px 18px", borderBottom: `1px solid ${C.border}`, background: C.surface, flexShrink: 0 }}>
           <div style={{ fontFamily: "'Cormorant Garamond',Georgia,serif", fontSize: 20, fontWeight: 700, color: C.ink, lineHeight: 1 }}>📣 New-products campaign</div>
-          <div style={{ fontSize: 11, color: C.inkFaint }}>{sel.size} selected{products.filter(p => p.deal).length ? ` · ${products.filter(p => p.deal).length} under the banner` : ""}</div>
+          <div style={{ fontSize: 11, color: C.inkFaint }}>{sel.size + lotSel.size} selected{lotSel.size ? ` (${lotSel.size} lot${lotSel.size === 1 ? "" : "s"})` : ""}{products.filter(p => p.deal).length ? ` · ${products.filter(p => p.deal).length} under the banner` : ""}</div>
           <div style={{ flex: 1 }} />
           <button onClick={onClose} style={{ background: "transparent", border: `1px solid ${C.border}`, borderRadius: 8, padding: "6px 14px", fontSize: 12, fontWeight: 700, cursor: "pointer", color: C.ink }}>Close</button>
         </div>
@@ -461,7 +473,7 @@ export default function CampaignComposer({ listings = [], onClose, showToast }) 
           {/* Product picker */}
           <div style={{ ...card, display: "flex", flexDirection: "column", minHeight: 0 }}>
             <div style={{ display: "flex", gap: 4, marginBottom: 8, background: C.card, borderRadius: 8, padding: 3 }}>
-              {[["listings", `Listings (${listings.length})`], ["trade", `Trade site${trade ? ` (${tradeView.length})` : ""}`], ["stock", `Stock cards${stockCards ? ` (${stockView.length})` : ""}`]].map(([k, label]) => (
+              {[["listings", `Listings (${listings.length})`], ["trade", `Trade site${trade ? ` (${tradeView.length})` : ""}`], ["stock", `Stock cards${stockCards ? ` (${stockView.length})` : ""}`], ["lots", `🎥 Lots${lots.length ? ` (${lots.length})` : ""}`]].map(([k, label]) => (
                 <button key={k} type="button" onClick={() => setSource(k)}
                   style={{ flex: 1, border: "none", borderRadius: 6, padding: "6px 8px", fontSize: 11.5, fontWeight: 700, cursor: "pointer", fontFamily: "inherit",
                     background: source === k ? C.surface : "transparent", color: source === k ? C.ink : C.inkFaint, boxShadow: source === k ? "0 1px 2px rgba(0,0,0,.08)" : "none" }}>{label}</button>
@@ -480,10 +492,11 @@ export default function CampaignComposer({ listings = [], onClose, showToast }) 
               </div>
             )}
             {loadErr && <div style={{ fontSize: 11, color: C.red, marginBottom: 8 }}>{loadErr}</div>}
-            <input value={q} onChange={e => setQ(e.target.value)} placeholder={source === "trade" ? "Search the trade site…" : source === "stock" ? "Search stock cards — stone, shape, SKU…" : "Search listings…"} style={{ ...FI(), marginBottom: 8 }} />
+            {source === "lots" && <LotsPanel lots={lots} setLots={setLots} picked={lotSel} togglePick={toggleLot} onChange={invalidate} showToast={showToast} />}
+            {source !== "lots" && <input value={q} onChange={e => setQ(e.target.value)} placeholder={source === "trade" ? "Search the trade site…" : source === "stock" ? "Search stock cards — stone, shape, SKU…" : "Search listings…"} style={{ ...FI(), marginBottom: 8 }} />}
             <div style={{ flex: 1, overflowY: "auto", maxHeight: mob() ? 260 : 420, display: "flex", flexDirection: "column", gap: 5 }}>
               {((source === "trade" && !trade) || (source === "stock" && !stockCards)) && !loadErr && <div style={{ fontSize: 12, color: C.inkFaint, padding: 10 }}>Loading {source === "trade" ? "the trade site" : "the stock cards"}…</div>}
-              {visible.length === 0 && (source === "listings" || (source === "trade" ? trade : stockCards)) && <div style={{ fontSize: 12, color: C.inkFaint, padding: 10 }}>Nothing matches.</div>}
+              {visible.length === 0 && source !== "lots" && (source === "listings" || (source === "trade" ? trade : stockCards)) && <div style={{ fontSize: 12, color: C.inkFaint, padding: 10 }}>Nothing matches.</div>}
               {visible.map(l => {
                 const on = sel.has(l.id);
                 const o = overrides[l.id] || {};
