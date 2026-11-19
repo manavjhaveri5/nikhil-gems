@@ -528,18 +528,25 @@ export default function CampaignComposer({ listings = [], onClose, showToast, dr
     catch (e) { setErr(e.message); } finally { setBusy(""); }
   };
 
-  const card = { background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: 14 };
+  const m = mob();
+  const card = { background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: m ? 11 : 14, minWidth: 0 };
   const lab = { fontSize: 9.5, fontWeight: 700, color: C.inkFaint, textTransform: "uppercase", letterSpacing: .6, marginBottom: 4, display: "block" };
 
   return (
-    <div onClick={e => e.target === e.currentTarget && saveAndClose()} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.5)", zIndex: 1000, display: "flex", alignItems: mob() ? "stretch" : "center", justifyContent: "center", padding: mob() ? 0 : 20 }}>
-      <div style={{ background: C.bg, borderRadius: mob() ? 0 : 16, width: "min(1100px,100%)", maxHeight: "100%", display: "flex", flexDirection: "column", overflow: "hidden" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "14px 18px", borderBottom: `1px solid ${C.border}`, background: C.surface, flexShrink: 0 }}>
-          <div style={{ fontFamily: "'Cormorant Garamond',Georgia,serif", fontSize: 20, fontWeight: 700, color: C.ink, lineHeight: 1 }}>📣 {draft ? "Campaign draft" : "New-products campaign"}</div>
-          <div style={{ fontSize: 11, color: C.inkFaint }}>{sel.size + lotSel.size} selected{lotSel.size ? ` (${lotSel.size} lot${lotSel.size === 1 ? "" : "s"})` : ""}{products.filter(p => p.deal).length ? ` · ${products.filter(p => p.deal).length} under the banner` : ""}</div>
-          <div style={{ flex: 1 }} />
-          <span style={{ fontSize: 11, color: saveErr ? C.red : C.inkFaint }}>{saveErr ? `⚠ Not saved: ${saveErr}` : savedAt ? `Saved in the ERP ${new Date(savedAt).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}` : ""}</span>
-          <button onClick={saveAndClose} style={{ background: "transparent", border: `1px solid ${C.border}`, borderRadius: 8, padding: "6px 14px", fontSize: 12, fontWeight: 700, cursor: "pointer", color: C.ink }}>Save & close</button>
+    <div className="cc-root" onClick={e => e.target === e.currentTarget && saveAndClose()} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.5)", zIndex: 1000, display: "flex", alignItems: mob() ? "stretch" : "center", justifyContent: "center", padding: mob() ? 0 : 20 }}>
+      {/* Phones: iOS zooms the page on focusing any field under 16px, which is what
+          left the composer stuck wider than the screen. */}
+      <style>{`@media (max-width:699px){.cc-root input:not([type=checkbox]):not([type=color]),.cc-root select,.cc-root textarea{font-size:16px!important}}`}</style>
+      <div style={{ background: C.bg, borderRadius: m ? 0 : 16, width: "min(1100px,100%)", maxHeight: "100%", height: m ? "100%" : "auto", display: "flex", flexDirection: "column", overflow: "hidden", minWidth: 0 }}>
+        <div style={{ display: "flex", alignItems: "center", flexWrap: m ? "wrap" : "nowrap", gap: m ? "4px 10px" : 12, padding: m ? "calc(10px + env(safe-area-inset-top)) 12px 10px" : "14px 18px", borderBottom: `1px solid ${C.border}`, background: C.surface, flexShrink: 0 }}>
+          <div style={{ fontFamily: "'Cormorant Garamond',Georgia,serif", fontSize: m ? 19 : 20, fontWeight: 700, color: C.ink, lineHeight: 1, whiteSpace: "nowrap", flex: m ? 1 : "none", minWidth: 0 }}>📣 {draft ? "Campaign draft" : "New-products campaign"}</div>
+          {m && <button onClick={saveAndClose} style={{ background: "transparent", border: `1px solid ${C.border}`, borderRadius: 8, padding: "7px 12px", fontSize: 12.5, fontWeight: 700, cursor: "pointer", color: C.ink, whiteSpace: "nowrap" }}>Save & close</button>}
+          <div style={{ fontSize: 11, color: C.inkFaint, order: m ? 2 : 0, width: m ? "100%" : "auto", display: m ? "flex" : "block", gap: 8, flexWrap: "wrap" }}>{sel.size + lotSel.size} selected{lotSel.size ? ` (${lotSel.size} lot${lotSel.size === 1 ? "" : "s"})` : ""}{products.filter(p => p.deal).length ? ` · ${products.filter(p => p.deal).length} under the banner` : ""}
+            {m && <span style={{ color: saveErr ? C.red : C.inkFaint }}>{saveErr ? `⚠ Not saved: ${saveErr}` : savedAt ? `· Saved ${new Date(savedAt).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}` : ""}</span>}
+          </div>
+          {!m && <div style={{ flex: 1 }} />}
+          {!m && <span style={{ fontSize: 11, color: saveErr ? C.red : C.inkFaint }}>{saveErr ? `⚠ Not saved: ${saveErr}` : savedAt ? `Saved in the ERP ${new Date(savedAt).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}` : ""}</span>}
+          {!m && <button onClick={saveAndClose} style={{ background: "transparent", border: `1px solid ${C.border}`, borderRadius: 8, padding: "6px 14px", fontSize: 12, fontWeight: 700, cursor: "pointer", color: C.ink }}>Save & close</button>}
         </div>
 
         {configured === false && (
@@ -548,13 +555,13 @@ export default function CampaignComposer({ listings = [], onClose, showToast, dr
           </div>
         )}
 
-        <div style={{ flex: 1, minHeight: 0, display: "grid", gridTemplateColumns: mob() ? "1fr" : "320px 1fr", gap: 14, padding: 14, overflowY: "auto" }}>
+        <div style={{ flex: 1, minHeight: 0, display: "grid", gridTemplateColumns: m ? "minmax(0,1fr)" : "320px minmax(0,1fr)", alignContent: "start", gap: m ? 10 : 14, padding: m ? "10px 10px calc(14px + env(safe-area-inset-bottom))" : 14, overflowY: "auto", overflowX: "hidden", WebkitOverflowScrolling: "touch" }}>
           {/* Product picker */}
-          <div style={{ ...card, display: "flex", flexDirection: "column", minHeight: 0 }}>
-            <div style={{ display: "flex", gap: 4, marginBottom: 8, background: C.card, borderRadius: 8, padding: 3 }}>
+          <div style={{ ...card, display: "flex", flexDirection: "column", minHeight: m ? "auto" : 0 }}>
+            <div style={{ display: "flex", gap: 4, marginBottom: 8, background: C.card, borderRadius: 8, padding: 3, overflowX: "auto", scrollbarWidth: "none" }}>
               {[["listings", `Listings (${listings.length})`], ["trade", `Trade site${trade ? ` (${tradeView.length})` : ""}`], ["stock", `Stock cards${stockCards ? ` (${stockView.length})` : ""}`], ["lots", `🎥 Lots${lots.length ? ` (${lots.length})` : ""}`]].map(([k, label]) => (
                 <button key={k} type="button" onClick={() => setSource(k)}
-                  style={{ flex: 1, border: "none", borderRadius: 6, padding: "6px 8px", fontSize: 11.5, fontWeight: 700, cursor: "pointer", fontFamily: "inherit",
+                  style={{ flex: m ? "0 0 auto" : 1, whiteSpace: "nowrap", border: "none", borderRadius: 6, padding: m ? "8px 10px" : "6px 8px", fontSize: m ? 12.5 : 11.5, fontWeight: 700, cursor: "pointer", fontFamily: "inherit",
                     background: source === k ? C.surface : "transparent", color: source === k ? C.ink : C.inkFaint, boxShadow: source === k ? "0 1px 2px rgba(0,0,0,.08)" : "none" }}>{label}</button>
               ))}
             </div>
@@ -573,7 +580,7 @@ export default function CampaignComposer({ listings = [], onClose, showToast, dr
             {loadErr && <div style={{ fontSize: 11, color: C.red, marginBottom: 8 }}>{loadErr}</div>}
             {source === "lots" && <LotsPanel lots={lots} setLots={setLots} picked={lotSel} togglePick={toggleLot} onChange={invalidate} showToast={showToast} />}
             {source !== "lots" && <input value={q} onChange={e => setQ(e.target.value)} placeholder={source === "trade" ? "Search the trade site…" : source === "stock" ? "Search stock cards — stone, shape, SKU…" : "Search listings…"} style={{ ...FI(), marginBottom: 8 }} />}
-            <div style={{ flex: 1, overflowY: "auto", maxHeight: mob() ? 260 : 420, display: "flex", flexDirection: "column", gap: 5 }}>
+            <div style={{ flex: m ? "0 1 auto" : 1, overflowY: "auto", maxHeight: m ? 300 : 420, display: "flex", flexDirection: "column", gap: 5 }}>
               {((source === "trade" && !trade) || (source === "stock" && !stockCards)) && !loadErr && <div style={{ fontSize: 12, color: C.inkFaint, padding: 10 }}>Loading {source === "trade" ? "the trade site" : "the stock cards"}…</div>}
               {visible.length === 0 && source !== "lots" && (source === "listings" || (source === "trade" ? trade : stockCards)) && <div style={{ fontSize: 12, color: C.inkFaint, padding: 10 }}>Nothing matches.</div>}
               {visible.map(l => {
@@ -942,7 +949,7 @@ export default function CampaignComposer({ listings = [], onClose, showToast, dr
 
             {previewHtml && (
               <div style={{ ...card, padding: 0, overflow: "hidden" }}>
-                <iframe title="Email preview" srcDoc={previewHtml} style={{ width: "100%", height: 380, border: "none", background: "#fff" }} />
+                <iframe title="Email preview" srcDoc={previewHtml} style={{ width: "100%", height: m ? 520 : 380, border: "none", background: "#fff" }} />
               </div>
             )}
 
@@ -975,7 +982,7 @@ export default function CampaignComposer({ listings = [], onClose, showToast, dr
                 {busy === "create" ? "Sending to Omnisend…" : campaignId ? "In Omnisend ✓ — put it in again" : pushedId ? "Final — update it in Omnisend" : "Final — put it in Omnisend"}
               </button>
               {campaignId && <>
-                <input value={testTo} onChange={e => setTestTo(e.target.value)} placeholder="you@example.com" style={{ ...FI(), width: 190 }} />
+                <input value={testTo} onChange={e => setTestTo(e.target.value)} placeholder="you@example.com" style={{ ...FI(), width: m ? "100%" : 190 }} />
                 <button onClick={doTest} disabled={!testTo || !!busy}
                   style={{ background: C.tealBg, color: C.teal, border: `1px solid ${C.teal}`, borderRadius: 9, padding: "10px 16px", fontSize: 12.5, fontWeight: 700, cursor: testTo ? "pointer" : "not-allowed", opacity: testTo ? 1 : .5 }}>
                   {busy === "test" ? "Sending…" : "Send test"}
