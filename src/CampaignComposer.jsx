@@ -1,12 +1,17 @@
 import { useState, useEffect, useMemo } from "react";
 import { C, mob, FI } from "./lmTheme.js";
-import { loadK, loadKFresh, saveK as saveKV, upsertItemK, upsertVersionedItemK } from "./utils.js";
+import { loadK, loadKFresh, saveK as saveKV, upsertItemK, upsertVersionedItemK, uid } from "./utils.js";
 import { EARTH_LOGO_URL, KEYS } from "./constants.js";
 import { loadLiveTrade, setTradePrice, TRADE_SITE } from "./TradeSiteApp.jsx";
 import { loadStoreFacts, loadStoreProduct, publishListingToStore } from "./StoreApp.jsx";
 import LotsPanel, { loadLots, saveLots, lotToProduct, videoToYoutube, posterFromVideo, makePoster, youtubeId } from "./CampaignLots.jsx";
 // A stored video sent to YouTube for a mailer, kept so it goes up once: { [stored url]: { url, poster } }.
 const CAMPAIGN_VIDEOS_KEY = "ng-campaign-videos-v1";
+/* Campaigns are drafted in the ERP: the whole composer is saved here as you
+   work ({ id, name, subject, count, updatedAt, status: draft | sent,
+   omnisendId, state }), reopened from the Omnisend page, and only goes to
+   Omnisend at the final step. */
+export const CAMPAIGN_DRAFTS_KEY = "ng-campaign-drafts-v1";
 
 const STORE_SITE = "https://eartheditions.co";
 
@@ -81,54 +86,8 @@ function PriceEditor({ fields, busy, err, onSave, onCancel }) {
   );
 }
 
-export default function CampaignComposer({ listings = [], onClose, showToast }) {
-  const [sel, setSel] = useState(() => new Set());
-  /* The in-stock banner splits the mailer: pieces marked as a deal print under
-     it, everything else above. Mark none and the banner stays where it was,
-     above the whole run of products. */
-  const [deals, setDeals] = useState(() => new Set());
-  /* Per-card copy for this mailer only. A listing is written for its storefront;
-     the card that sells it in an email sometimes wants a shorter name, a lot
-     price, or the second photo. Overrides are keyed by listing id and hold only
-     the fields actually typed — a blank one falls back to the listing, so the
-     card follows later catalogue edits until the moment it is overridden.
-     Nothing here is written back to the listing. */
-  const [overrides, setOverrides] = useState({});
-  const [editing, setEditing] = useState("");
-  const [q, setQ] = useState("");
-  /* The picker shows the listings, everything live on the trade site (most
-     of it made there, with no listing), or the stock cards in stock — the
-     lots and repeatable lines to offer as deals. A trade product that came
-     from a listing is that listing, so picking it in either view is the same
-     pick, and a send marks it as mailed; the rest have nowhere to keep that. */
-  const [source, setSource] = useState("listings");
-  const [trade, setTrade] = useState(null); // live trade products, once asked for
-  const [stockCards, setStockCards] = useState(null); // likewise the stock cards
-  const [storeMap, setStoreMap] = useState(null); // eartheditions.co's products, by listing id
-  const [loadErr, setLoadErr] = useState("");
-  const [pricing, setPricing] = useState(null); // { id, busy, err }: the row whose prices are open
-  // Prices saved on listings this session: the listings prop is the one handed in when the composer opened.
-  const [patched, setPatched] = useState({});
-  const [brand, setBrand] = useState("Nikhil Gems");
-  const [heading, setHeading] = useState("New arrivals");
-  // Every mailer is the same weekly list with a new date on it, so the subject
-  // writes itself. Still a plain field — a one-off can say something else.
-  const [subject, setSubject] = useState(() => `NIKHIL GEMS - WEEKLY MAILING LIST - ${MAILER_DATE}`);
-  const [preheader, setPreheader] = useState("");
-  /* Every mailer has opened with the same line telling the reader why it landed
-     in their inbox — the standing broadcast-list note. It is prefilled like the
-     other standing furniture (promo, shipping, trade) rather than retyped each
-     week; clear the field to drop the paragraph entirely. */
-  const [intro, setIntro] = useState(
-    "You're receiving this email as part of the Nikhil Gems broadcast list, where we share weekly updates on new stones, carvings, and special lots available for order."
-  );
-  const [senderName, setSenderName] = useState("Nikhil Gems");
-  const [senderEmail, setSenderEmail] = useState("");
-  // The list is trade buyers: trade prices and the trade site's pages unless another storefront is chosen.
-  const [priceMode, setPriceMode] = useState("trade");
-  /* Design lives in one object so preview and the created draft can never drift
-     apart — both are rendered from payloadBase() by the same server function. */
-  const [design, setDesign] = useState({
+// The mailer's look, as it starts; a saved draft keeps its own.
+const DESIGN_DEFAULTS = () => ({
     layout: "editorial",
     columns: 2, accent: "#9a6200", ink: "#1a1308", pageBg: "#e5e6e6", cardBg: "#ffffff",
     font: "serif", showPrice: true, showMeta: true, showCta: true, showDivider: false,
@@ -152,13 +111,66 @@ export default function CampaignComposer({ listings = [], onClose, showToast }) 
     tradeEyebrow: "Trade access", tradeLine: "View full catalogue & wholesale pricing",
     tradeButton: "Log in to eartheditions.co", tradeUrl: "https://eartheditions.co/account/login",
     instagramUrl: "https://www.instagram.com/eartheditions_/?hl=fr", addressLine: "",
-  });
+});
+
+export default function CampaignComposer({ listings = [], onClose, showToast, draft = null, onSaved }) {
+  const ds = draft?.state || {};
+  const [draftId] = useState(() => draft?.id || uid());
+  const [sel, setSel] = useState(() => new Set(ds.sel || []));
+  /* The in-stock banner splits the mailer: pieces marked as a deal print under
+     it, everything else above. Mark none and the banner stays where it was,
+     above the whole run of products. */
+  const [deals, setDeals] = useState(() => new Set(ds.deals || []));
+  /* Per-card copy for this mailer only. A listing is written for its storefront;
+     the card that sells it in an email sometimes wants a shorter name, a lot
+     price, or the second photo. Overrides are keyed by listing id and hold only
+     the fields actually typed — a blank one falls back to the listing, so the
+     card follows later catalogue edits until the moment it is overridden.
+     Nothing here is written back to the listing. */
+  const [overrides, setOverrides] = useState(() => ds.overrides || {});
+  const [editing, setEditing] = useState("");
+  const [q, setQ] = useState("");
+  /* The picker shows the listings, everything live on the trade site (most
+     of it made there, with no listing), or the stock cards in stock — the
+     lots and repeatable lines to offer as deals. A trade product that came
+     from a listing is that listing, so picking it in either view is the same
+     pick, and a send marks it as mailed; the rest have nowhere to keep that. */
+  const [source, setSource] = useState(ds.source || "listings");
+  const [trade, setTrade] = useState(null); // live trade products, once asked for
+  const [stockCards, setStockCards] = useState(null); // likewise the stock cards
+  const [storeMap, setStoreMap] = useState(null); // eartheditions.co's products, by listing id
+  const [loadErr, setLoadErr] = useState("");
+  const [pricing, setPricing] = useState(null); // { id, busy, err }: the row whose prices are open
+  // Prices saved on listings this session: the listings prop is the one handed in when the composer opened.
+  const [patched, setPatched] = useState({});
+  const [brand, setBrand] = useState(ds.brand ?? "Nikhil Gems");
+  const [heading, setHeading] = useState(ds.heading ?? "New arrivals");
+  // Every mailer is the same weekly list with a new date on it, so the subject
+  // writes itself. Still a plain field — a one-off can say something else.
+  const [subject, setSubject] = useState(() => ds.subject ?? `NIKHIL GEMS - WEEKLY MAILING LIST - ${MAILER_DATE}`);
+  const [preheader, setPreheader] = useState(ds.preheader ?? "");
+  /* Every mailer has opened with the same line telling the reader why it landed
+     in their inbox — the standing broadcast-list note. It is prefilled like the
+     other standing furniture (promo, shipping, trade) rather than retyped each
+     week; clear the field to drop the paragraph entirely. */
+  const [intro, setIntro] = useState(() => ds.intro ??
+    "You're receiving this email as part of the Nikhil Gems broadcast list, where we share weekly updates on new stones, carvings, and special lots available for order."
+  );
+  const [senderName, setSenderName] = useState(ds.senderName ?? "Nikhil Gems");
+  const [senderEmail, setSenderEmail] = useState(ds.senderEmail ?? "");
+  // The list is trade buyers: trade prices and the trade site's pages unless another storefront is chosen.
+  const [priceMode, setPriceMode] = useState(ds.priceMode || "trade");
+  /* Design lives in one object so preview and the created draft can never drift
+     apart — both are rendered from payloadBase() by the same server function. */
+  const [design, setDesign] = useState(() => ({ ...DESIGN_DEFAULTS(), ...(ds.design || {}) }));
   const [designOpen, setDesignOpen] = useState(false);
   const [segments, setSegments] = useState([]);
-  const [segIds, setSegIds] = useState(() => new Set());
+  const [segIds, setSegIds] = useState(() => new Set(ds.segIds || []));
   const [configured, setConfigured] = useState(null); // null=checking
   const [previewHtml, setPreviewHtml] = useState("");
-  const [campaignId, setCampaignId] = useState("");
+  const [campaignId, setCampaignId] = useState(draft?.omnisendId || "");
+  // The Omnisend draft made last, kept after an edit so the final step replaces it rather than adding another.
+  const [pushedId, setPushedId] = useState(draft?.omnisendId || "");
   const [testTo, setTestTo] = useState("");
   const [testedOk, setTestedOk] = useState(false);
   const [busy, setBusy] = useState("");
@@ -168,7 +180,7 @@ export default function CampaignComposer({ listings = [], onClose, showToast }) 
   const [err, setErr] = useState("");
   // Lots: offers by video that aren't stock (src/CampaignLots.jsx). Picked ones print after the pieces.
   const [lots, setLots] = useState([]);
-  const [lotSel, setLotSel] = useState(() => new Set());
+  const [lotSel, setLotSel] = useState(() => new Set(ds.lotSel || []));
   useEffect(() => { loadLots().then(setLots); }, []);
   /* A piece or stock card with a video can go out as its photo, its video
      (frame with ▶, opening on YouTube) or both. The video goes to YouTube
@@ -400,14 +412,45 @@ export default function CampaignComposer({ listings = [], onClose, showToast }) 
   // Any design change invalidates the draft already sitting in Omnisend.
   const setD = (k, v) => { setDesign(d => ({ ...d, [k]: v })); invalidate(); };
 
+  /* Saved in the ERP as you work, a moment after each change. */
+  const [savedAt, setSavedAt] = useState(draft?.updatedAt || "");
+  const [saveErr, setSaveErr] = useState("");
+  const draftRow = (extra = {}) => ({
+    id: draftId, name: CAMPAIGN_NAME, subject, count: sel.size + lotSel.size, status: "draft",
+    createdAt: draft?.createdAt || new Date().toISOString(), updatedAt: new Date().toISOString(),
+    omnisendId: pushedId || "",
+    state: { sel: [...sel], deals: [...deals], overrides, source, brand, heading, subject, preheader, intro, senderName, senderEmail, priceMode, design, segIds: [...segIds], lotSel: [...lotSel] },
+    ...extra,
+  });
+  const sent = useState({ v: draft?.status === "sent" })[0];
+  const saveDraft = async (extra = {}) => {
+    if (sent.v && extra.status !== "sent") return null; // a sent campaign stays as it went
+    if (!draft && !sel.size && !lotSel.size && !savedAt) return null; // opened and closed with nothing picked: no draft
+    if (extra.status === "sent") sent.v = true;
+    const row = draftRow(extra);
+    try { await upsertItemK(CAMPAIGN_DRAFTS_KEY, row, { prepend: true }); setSavedAt(row.updatedAt); setSaveErr(""); onSaved?.(row); }
+    catch (e) { setSaveErr(e.message || "not saved"); }
+    return row;
+  };
+  const firstRun = useState({ v: true })[0];
+  useEffect(() => {
+    if (firstRun.v) { firstRun.v = false; return; } // opening isn't a change
+    const t = setTimeout(() => saveDraft(), 1500);
+    return () => clearTimeout(t);
+  }, [sel, deals, overrides, brand, heading, subject, preheader, intro, senderName, senderEmail, priceMode, design, segIds, lotSel, pushedId]);
+
+  const saveAndClose = async () => { await saveDraft(); onClose(); };
+
   const doPreview = async () => {
     setBusy("preview"); setErr("");
     try { const d = await post({ action: "preview", ...payloadBase() }); setPreviewHtml(d.html || ""); }
     catch (e) { setErr(e.message); } finally { setBusy(""); }
   };
+  // The final step: the campaign goes to Omnisend as a draft there, replacing the one sent before.
   const doCreate = async () => {
     setBusy("create"); setErr("");
     try {
+      if (pushedId && pushedId !== campaignId) await post({ action: "delete_campaign", campaignId: pushedId }).catch(() => {});
       await post({ action: "sync_products", products: products.filter(p => !p.isLot && !p.noSync) }).catch(() => {}); // catalog sync is best-effort
       const d = await post({
         action: "create_campaign", ...payloadBase(),
@@ -416,8 +459,8 @@ export default function CampaignComposer({ listings = [], onClose, showToast }) 
         name: CAMPAIGN_NAME, subject, preheader, senderName, senderEmail: senderEmail || undefined,
         segmentIds: [...segIds],
       });
-      setCampaignId(d.campaignId); setTestedOk(false);
-      showToast?.("✓ Draft created in Omnisend");
+      setCampaignId(d.campaignId); setPushedId(d.campaignId); setTestedOk(false);
+      showToast?.("✓ In Omnisend — send yourself a test, then send to the list");
     } catch (e) { setErr(e.message); } finally { setBusy(""); }
   };
   const doTest = async () => {
@@ -477,6 +520,7 @@ export default function CampaignComposer({ listings = [], onClose, showToast }) 
     try {
       await post({ action: "send", campaignId, confirm: "SEND" });
       showToast?.("📣 Campaign sent");
+      await saveDraft({ status: "sent", sentAt: new Date().toISOString(), omnisendId: campaignId }).catch(() => {});
       try { await recordSend(); showToast?.(`✓ ${chosen.filter(l => !l.noListing).length} listing(s) marked as mailed`); }
       catch (e) { showToast?.(`Sent — but the listings weren't marked: ${e.message}`); }
       onClose();
@@ -488,13 +532,14 @@ export default function CampaignComposer({ listings = [], onClose, showToast }) 
   const lab = { fontSize: 9.5, fontWeight: 700, color: C.inkFaint, textTransform: "uppercase", letterSpacing: .6, marginBottom: 4, display: "block" };
 
   return (
-    <div onClick={e => e.target === e.currentTarget && onClose()} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.5)", zIndex: 1000, display: "flex", alignItems: mob() ? "stretch" : "center", justifyContent: "center", padding: mob() ? 0 : 20 }}>
+    <div onClick={e => e.target === e.currentTarget && saveAndClose()} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.5)", zIndex: 1000, display: "flex", alignItems: mob() ? "stretch" : "center", justifyContent: "center", padding: mob() ? 0 : 20 }}>
       <div style={{ background: C.bg, borderRadius: mob() ? 0 : 16, width: "min(1100px,100%)", maxHeight: "100%", display: "flex", flexDirection: "column", overflow: "hidden" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "14px 18px", borderBottom: `1px solid ${C.border}`, background: C.surface, flexShrink: 0 }}>
-          <div style={{ fontFamily: "'Cormorant Garamond',Georgia,serif", fontSize: 20, fontWeight: 700, color: C.ink, lineHeight: 1 }}>📣 New-products campaign</div>
+          <div style={{ fontFamily: "'Cormorant Garamond',Georgia,serif", fontSize: 20, fontWeight: 700, color: C.ink, lineHeight: 1 }}>📣 {draft ? "Campaign draft" : "New-products campaign"}</div>
           <div style={{ fontSize: 11, color: C.inkFaint }}>{sel.size + lotSel.size} selected{lotSel.size ? ` (${lotSel.size} lot${lotSel.size === 1 ? "" : "s"})` : ""}{products.filter(p => p.deal).length ? ` · ${products.filter(p => p.deal).length} under the banner` : ""}</div>
           <div style={{ flex: 1 }} />
-          <button onClick={onClose} style={{ background: "transparent", border: `1px solid ${C.border}`, borderRadius: 8, padding: "6px 14px", fontSize: 12, fontWeight: 700, cursor: "pointer", color: C.ink }}>Close</button>
+          <span style={{ fontSize: 11, color: saveErr ? C.red : C.inkFaint }}>{saveErr ? `⚠ Not saved: ${saveErr}` : savedAt ? `Saved in the ERP ${new Date(savedAt).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}` : ""}</span>
+          <button onClick={saveAndClose} style={{ background: "transparent", border: `1px solid ${C.border}`, borderRadius: 8, padding: "6px 14px", fontSize: 12, fontWeight: 700, cursor: "pointer", color: C.ink }}>Save & close</button>
         </div>
 
         {configured === false && (
@@ -927,7 +972,7 @@ export default function CampaignComposer({ listings = [], onClose, showToast }) 
               </button>
               <button onClick={doCreate} disabled={!products.length || !subject || !senderName || configured === false || !!busy}
                 style={{ background: C.ink, color: "#FAF0DC", border: "none", borderRadius: 9, padding: "10px 16px", fontSize: 12.5, fontWeight: 700, cursor: "pointer", opacity: (!products.length || !subject || !senderName || configured === false) ? .4 : 1 }}>
-                {busy === "create" ? "Creating…" : campaignId ? "Recreate draft" : "Create draft"}
+                {busy === "create" ? "Sending to Omnisend…" : campaignId ? "In Omnisend ✓ — put it in again" : pushedId ? "Final — update it in Omnisend" : "Final — put it in Omnisend"}
               </button>
               {campaignId && <>
                 <input value={testTo} onChange={e => setTestTo(e.target.value)} placeholder="you@example.com" style={{ ...FI(), width: 190 }} />
@@ -945,7 +990,7 @@ export default function CampaignComposer({ listings = [], onClose, showToast }) 
               </div>
             </div>
             <div style={{ fontSize: 11, color: C.inkFaint, lineHeight: 1.6 }}>
-              The draft is created in Omnisend — you can also open it there to tweak the design. Omnisend appends its own unsubscribe footer to campaigns; confirm it's present in the test email before sending. Sending is irreversible.
+              Everything is saved in the ERP as you go — close it and carry on later from the Omnisend page. Nothing reaches Omnisend until "Final"; after an edit, "Final" replaces the draft there rather than adding another. Omnisend appends its own unsubscribe footer to campaigns; confirm it's present in the test email before sending. Sending is irreversible.
             </div>
           </div>
         </div>

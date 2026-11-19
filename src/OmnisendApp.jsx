@@ -7,9 +7,9 @@
    cursor, so "load more" walks forward and cannot jump to an arbitrary page. */
 import { useState, useEffect, useRef, useCallback } from "react";
 import { C, mob, FI } from "./lmTheme.js";
-import { loadK } from "./utils.js";
+import { loadK, loadKFresh, deleteItemK } from "./utils.js";
 import { EARTH_LOGO_URL } from "./constants.js";
-import CampaignComposer from "./CampaignComposer.jsx";
+import CampaignComposer, { CAMPAIGN_DRAFTS_KEY } from "./CampaignComposer.jsx";
 
 const LIST_KEY = "ng-listings-v1";
 const PAGE = 250;
@@ -99,6 +99,10 @@ export default function OmnisendApp({ onHome }) {
   const [setupErr, setSetupErr] = useState("");
   const [listings, setListings] = useState([]);
   const [composerOpen, setComposerOpen] = useState(false);
+  const [openDraft, setOpenDraft] = useState(null); // an ERP draft being edited
+  const [drafts, setDrafts] = useState([]);
+  const loadDrafts = () => loadKFresh(CAMPAIGN_DRAFTS_KEY).then(v => setDrafts(Array.isArray(v) ? v : [])).catch(() => {});
+  useEffect(() => { loadDrafts(); }, []);
   const [toast, setToast] = useState("");
   const showToast = m => { setToast(m); setTimeout(() => setToast(""), 3200); };
 
@@ -130,7 +134,7 @@ export default function OmnisendApp({ onHome }) {
             <div style={{ fontSize: 11, color: C.inkFaint, marginTop: 1 }}>Campaigns, subscribers and mailers</div>
           </div>
           <div style={{ flex: 1 }} />
-          <button onClick={() => setComposerOpen(true)} disabled={!configured}
+          <button onClick={() => { setOpenDraft(null); setComposerOpen(true); }} disabled={!configured}
             title={configured ? "" : "Connect Omnisend first"}
             style={{ background: configured ? C.ink : C.card, color: configured ? "#FAF0DC" : C.inkFaint, border: "none",
               borderRadius: 7, padding: "8px 18px", fontSize: 13, fontWeight: 700, fontFamily: "inherit",
@@ -160,12 +164,37 @@ export default function OmnisendApp({ onHome }) {
           </div>
         )}
         {configured === null && <div style={{ color: C.inkFaint, fontSize: 13, padding: 20 }}>Checking connection…</div>}
+        {configured && tab === "campaigns" && <ErpDrafts drafts={drafts} onOpen={d => { setOpenDraft(d); setComposerOpen(true); }}
+          onDelete={async d => { if (!window.confirm(`Delete the draft "${d.subject || d.name}"?${d.omnisendId ? " Its copy in Omnisend stays — delete that below if you want." : ""}`)) return; await deleteItemK(CAMPAIGN_DRAFTS_KEY, d.id).catch(e => showToast(`Not deleted: ${e.message}`)); loadDrafts(); }} />}
         {configured && tab === "campaigns" && <CampaignsTab showToast={showToast} />}
         {configured && tab === "approvals" && <TradeApprovalsMoved showToast={showToast} />}
         {configured && tab === "subscribers" && <SubscribersTab showToast={showToast} />}
       </div>
 
-      {composerOpen && <CampaignComposer listings={listings} showToast={showToast} onClose={() => setComposerOpen(false)} />}
+      {composerOpen && <CampaignComposer key={openDraft?.id || "new"} draft={openDraft} listings={listings} showToast={showToast} onClose={() => { setComposerOpen(false); setOpenDraft(null); loadDrafts(); }} />}
+    </div>
+  );
+}
+
+/* ── Drafts kept in the ERP ───────────────────────────────────────────────────
+   A campaign is worked on here and saved as it goes; it reaches Omnisend only
+   at the composer's final step. Sent ones drop off this list. */
+function ErpDrafts({ drafts, onOpen, onDelete }) {
+  const open = drafts.filter(d => d.status !== "sent").sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)));
+  if (!open.length) return null;
+  return (
+    <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: "14px 16px", marginBottom: 18 }}>
+      <div style={{ fontSize: 12, fontWeight: 700, color: C.inkMid, textTransform: "uppercase", letterSpacing: .6, marginBottom: 8 }}>Drafts in the ERP · {open.length}</div>
+      {open.map(d => (
+        <div key={d.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "9px 0", borderTop: `1px solid ${C.border}`, flexWrap: mob() ? "wrap" : "nowrap" }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 14, fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{d.subject || d.name}</div>
+            <div style={{ fontSize: 11.5, color: C.inkFaint }}>{d.count || 0} picked · saved {fmtDate(d.updatedAt)} {d.updatedAt ? new Date(d.updatedAt).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" }) : ""}{d.omnisendId ? " · a copy is in Omnisend" : " · not in Omnisend yet"}</div>
+          </div>
+          <button onClick={() => onOpen(d)} style={{ background: C.ink, color: "#FAF0DC", border: "none", borderRadius: 7, padding: "7px 14px", fontSize: 12.5, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>Open & edit</button>
+          <button onClick={() => onDelete(d)} style={{ background: "transparent", color: C.red, border: `1px solid ${C.border}`, borderRadius: 7, padding: "7px 12px", fontSize: 12, cursor: "pointer", fontFamily: "inherit" }}>Delete</button>
+        </div>
+      ))}
     </div>
   );
 }
