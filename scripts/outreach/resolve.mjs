@@ -5,7 +5,7 @@
 import { readFileSync, writeFileSync } from "node:fs";
 const [inp, out] = process.argv.slice(2);
 const seeds = JSON.parse(readFileSync(inp, "utf8"));
-const TLD = { CA: [".ca", ".com"], FR: [".fr", ".com"], IT: [".it", ".com"], ES: [".es", ".com"], BE: [".be", ".com"], AT: [".at", ".com"], CH: [".ch", ".com"], SE: [".se", ".com"], DK: [".dk", ".com"], US: [".com"], GB: [".co.uk", ".com", ".uk"], AU: [".com.au", ".com"], NZ: [".co.nz", ".nz", ".com"], DE: [".de", ".com"], JP: [".jp", ".com", ".co.jp"], NL: [".nl", ".com"], IE: [".ie", ".com"] };
+const TLD = { CA: [".ca", ".com"], FR: [".fr", ".com"], IT: [".it", ".com"], ES: [".es", ".com"], BE: [".be", ".com"], AT: [".at", ".com"], CH: [".ch", ".com"], SE: [".se", ".com"], DK: [".dk", ".com"], US: [".com"], GB: [".co.uk", ".com", ".uk"], AU: [".com.au", ".com"], NZ: [".co.nz", ".nz", ".com"], DE: [".de", ".com"], JP: [".jp", ".com", ".co.jp"], TW: [".tw", ".com.tw", ".com"], NL: [".nl", ".com"], IE: [".ie", ".com"] };
 const UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36";
 const CRYS = /crystal|mineral|gem|stone|metaphysical|spiritual|tarot|witch|healing|fossil|kristall|edelstein|天然石|パワーストーン/i;
 async function head(u) { try { const r = await fetch(u, { headers: { "User-Agent": UA }, redirect: "follow", signal: AbortSignal.timeout(9000) }); if (!r.ok) return ""; return (await r.text()).slice(0, 200000); } catch { return ""; } }

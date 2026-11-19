@@ -71,6 +71,8 @@ function drafts(l, shapes) {
 貴店のウェブサイトを拝見し、ご連絡いたしました。${hook ? hook : "石のセレクションの素晴らしさに惹かれました。"}
 
 弊社では自社工房で研磨したスフィア、パームストーン、ハート、タンブル、タワー、彫刻品などを、1点からキロ単位まで卸売りしております。${pick(RARE_JA, 4, l.name).join("、")}など珍しい石も多く扱っており、特注品や彫刻のご依頼にも、ほぼどのような石でも対応いたします。
+
+また、日本の多くのお店で人気の、マニハール産・マニカラン産のヒマラヤ水晶やゴールデンルチルのロットも、入荷次第ご案内できます。
 ・原石は鉱山主から直接（ツーソンやジャイプールにて）買い付け、自社工房で研磨しているため、仲介業者はおりません
 ・最低注文数はございません
 ・ご購入前に、実際のロットの写真や動画をお送りいたします
@@ -79,7 +81,7 @@ function drafts(l, shapes) {
 卸価格は、こちらでご登録いただいた後にご覧いただけます：${SITE}
 やり取りは英語が中心となりますが、日本語のメールも翻訳して拝読いたします。
 
-よく売れる石の種類をお知らせいただければ、在庫の写真をお送りいたします。
+よく売れる石の種類をお知らせいただければ、在庫の写真をお送りいたします。ヒマラヤ水晶の最新ロットの動画もお送りできます。
 今後このようなご案内が不要でしたら、その旨ご返信ください。以後ご連絡はいたしません。
 
 何卒よろしくお願い申し上げます。
@@ -87,9 +89,9 @@ function drafts(l, shapes) {
 セジャル
 Earth Editions / Nikhil Gems（インド・ムンバイ）
 WhatsApp: ${WA}` },
-      dm: `はじめまして。インド・ムンバイの天然石工房 Earth Editions のセジャルと申します。素敵な石のセレクションですね。弊社は原石を直接買い付け、自社工房で研磨したスフィアやパームストーンなどを、珍しい石も含め1点からキロ単位で卸売りしており、ご購入前に実際のロットの動画をお送りしています。よろしければ、在庫の写真をお送りしてもよろしいでしょうか？`,
+      dm: `はじめまして。インド・ムンバイの天然石工房 Earth Editions のセジャルと申します。素敵な石のセレクションですね。弊社は原石を直接買い付け、自社工房で研磨したスフィアやパームストーンなどを、珍しい石も含め1点からキロ単位で卸売りしております。マニハール・マニカラン産のヒマラヤ水晶やゴールデンルチルのロットも入荷次第ご案内でき、ご購入前に実際のロットの動画をお送りしています。よろしければ、在庫の写真をお送りしてもよろしいでしょうか？`,
       followups: [
-        { day: 4, body: `${name} ご担当者様\n\n先日はご案内をお送りし、失礼いたしました。もしご興味がございましたら、現在の在庫（スフィア・パームストーンなど）の短い動画をお送りいたします。\n\nセジャル / Earth Editions` },
+        { day: 4, body: `${name} ご担当者様\n\n先日はご案内をお送りし、失礼いたしました。もしご興味がございましたら、現在の在庫（ヒマラヤ水晶のロット、スフィア・パームストーンなど）の短い動画をお送りいたします。\n\nセジャル / Earth Editions` },
         { day: 10, body: `${name} ご担当者様\n\nこちらが最後のご連絡となります。今後、インドからの仕入れをご検討の際は ${SITE} からいつでもご登録いただけます。WhatsApp（${WA}）でも承ります。\n\n貴店のますますのご発展をお祈り申し上げます。\nセジャル / Earth Editions` },
       ],
     };
@@ -97,6 +99,10 @@ WhatsApp: ${WA}` },
   const where = l.segment === "etsy_reseller" ? "your Etsy shop" : l.segment === "physical_shop" && l.city ? `your shop in ${l.city}` : "your shop";
   const opener = `${liked.length ? `I came across ${where} and loved your ${list(liked)}.` : `I came across ${where} and really liked your selection.`}${hook ? ` ${hook}` : ""}`;
   const live = (l.signals || []).includes("live");
+  const himalaya = l.country === "TW" || shapes.includes("himalayan");
+  const himTxt = l.country === "TW"
+    ? "We also supply Himalayan quartz lots as they come in, from Manihar and Manikaran, and golden rutile: the Himalayan pieces so many shops in Japan and Taiwan carry."
+    : "Since you carry Himalayan quartz: we supply Manihar and Manikaran quartz and golden rutile lots as they come in.";
   const subject = l.segment === "etsy_reseller" ? `Crystals by the kilo for ${name}, from our workshop in India` : `Wholesale crystals for ${name}, from our workshop in India`;
   const body =
 `Hi there,
@@ -105,7 +111,7 @@ ${opener}
 
 I'm Sejal from Earth Editions, a family crystal workshop in Mumbai. We supply shops by the kilo or by the piece: ${list(shapeList)}, plus carvings.${live ? " We also put together mixed kilo lots that work well for live sales." : ""}
 
-We work in a lot of uncommon stones, like ${list(rare)}, and we can source almost any stone for custom orders and carvings.
+We work in a lot of uncommon stones, like ${list(rare)}, and we can source almost any stone for custom orders and carvings.${himalaya ? `\n\n${himTxt}` : ""}
 
 A few things shops like about buying from us:
 - no middleman: we buy the rough ourselves from miners in Tucson and sometimes Jaipur, and cut it in our own lapidary
@@ -121,12 +127,12 @@ Earth Editions · Nikhil Gems, Mumbai
 WhatsApp ${WA}
 
 P.S. If this isn't for you, reply "no thanks" and I won't write again.`;
-  const dm = `Hi! ${liked.length ? `Love your ${list(liked)} 💎` : "Love your crystals 💎"} I'm Sejal from @eartheditions_, a family crystal workshop in Mumbai. We buy the rough ourselves and cut it in our own lapidary, so no middleman. We supply shops by the kilo with no minimum, in lots of uncommon stones like ${list(rare.slice(0, 3))}, and we send a video of the exact lot before you pay. Would it be OK if I sent you a few photos of what we have right now?`;
+  const dm = `Hi! ${liked.length ? `Love your ${list(liked)} 💎` : "Love your crystals 💎"} I'm Sejal from @eartheditions_, a family crystal workshop in Mumbai. We buy the rough ourselves and cut it in our own lapidary, so no middleman. We supply shops by the kilo with no minimum, in lots of uncommon stones like ${list(rare.slice(0, 3))}${himalaya ? ", plus Manihar and Manikaran Himalayan quartz and golden rutile lots as they come in" : ""}, and we send a video of the exact lot before you pay. Would it be OK if I sent you a few photos of what we have right now?`;
   const first = shapeList[0];
   return {
     language: "en", draft: { subject, body }, dm,
     followups: [
-      { day: 4, body: `Hi again, just bringing this back to the top of your inbox. If it helps, I can send a short video of the ${first} lots we have right now, so you can see the quality before anything else.\n\nSejal` },
+      { day: 4, body: `Hi again, just bringing this back to the top of your inbox. If it helps, I can send a short video of the ${himalaya ? "Himalayan quartz" : first} lots we have right now, so you can see the quality before anything else.\n\nSejal` },
       { day: 10, body: `Last note from me! If buying direct from India is ever useful, ${SITE.replace("https://", "")} is always open, and you can WhatsApp me on ${WA}. Wishing ${name} a great season.\n\nSejal` },
     ],
   };

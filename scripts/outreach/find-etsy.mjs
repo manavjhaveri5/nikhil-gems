@@ -7,7 +7,7 @@
    node scripts/outreach/find-etsy.mjs out.json [US,GB,AU,NZ,JP,DE,NL,FR,IT,ES,IE,CA] */
 import { writeFileSync } from "node:fs";
 import { loadEnv } from "../raj/raj-common.mjs";
-const [out = "etsy.json", cc = "US,GB,AU,NZ,JP,DE,NL,FR,IT,ES,IE,BE,AT,CH,SE,DK,CA"] = process.argv.slice(2);
+const [out = "etsy.json", cc = "US,GB,AU,NZ,JP,TW,DE,NL,FR,IT,ES,IE,BE,AT,CH,SE,DK,CA"] = process.argv.slice(2);
 const TARGET = new Set(cc.split(","));
 const e = loadEnv(), key = e.ETSY_KEYSTRING || e.ETSY_API_KEY;
 const H = { "x-api-key": e.ETSY_SHARED_SECRET ? `${key}:${e.ETSY_SHARED_SECRET}` : key };

@@ -23,7 +23,7 @@ const lab = { fontSize: 9.5, fontWeight: 700, color: C.inkFaint, textTransform: 
 const sub = { fontSize: 11.5, color: C.inkFaint };
 const Tag = ({ c = C.inkMid, bg = C.card, children }) => <span style={{ fontSize: 9.5, fontWeight: 700, textTransform: "uppercase", letterSpacing: .4, background: bg, color: c, borderRadius: 4, padding: "2px 6px", whiteSpace: "nowrap" }}>{children}</span>;
 const addDays = (d, n) => new Date(Date.parse(`${d}T00:00:00Z`) + n * 864e5).toISOString().slice(0, 10);
-const FLAG = { US: "🇺🇸", GB: "🇬🇧", AU: "🇦🇺", NZ: "🇳🇿", JP: "🇯🇵", DE: "🇩🇪", NL: "🇳🇱", FR: "🇫🇷", IT: "🇮🇹", ES: "🇪🇸", IE: "🇮🇪", CA: "🇨🇦", BE: "🇧🇪", AT: "🇦🇹", CH: "🇨🇭", SE: "🇸🇪", DK: "🇩🇰" };
+const FLAG = { US: "🇺🇸", GB: "🇬🇧", AU: "🇦🇺", NZ: "🇳🇿", JP: "🇯🇵", TW: "🇹🇼", DE: "🇩🇪", NL: "🇳🇱", FR: "🇫🇷", IT: "🇮🇹", ES: "🇪🇸", IE: "🇮🇪", CA: "🇨🇦", BE: "🇧🇪", AT: "🇦🇹", CH: "🇨🇭", SE: "🇸🇪", DK: "🇩🇰" };
 const SEG = { etsy_reseller: "Etsy shop", online_shop: "Online shop", physical_shop: "Shop (walk-in)", live_seller: "Live seller" };
 const STAGE = { new: ["Not contacted", C.inkMid, C.card], sent: ["Sent", C.blue, C.blueBg], followed_up: ["Followed up", C.blue, C.blueBg], replied: ["Replied", C.green, C.greenBg],
   talking: ["In talks", C.green, C.greenBg], sample: ["Sample / trial", ACCENT, "#F3E9DF"], customer: ["Customer", "#fff", C.green], no: ["Not interested", C.inkFaint, C.card], bounced: ["Bounced", C.red, C.redBg], skip: ["Skipped", C.inkFaint, C.card] };
