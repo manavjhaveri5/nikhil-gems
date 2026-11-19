@@ -26,16 +26,9 @@ export function youtubeId(url) {
 
 const loadImg = src => new Promise((ok, bad) => { const i = new Image(); i.crossOrigin = "anonymous"; i.onload = () => ok(i); i.onerror = bad; i.src = src; });
 
-/* The video's frame with a play button on it, uploaded as a JPEG. Falls back
-   to YouTube's own thumbnail when drawing isn't possible. */
-async function makePoster(id, lotId) {
-  let img = null;
-  for (const name of ["maxresdefault", "sddefault", "hqdefault"]) {
-    try { const i = await loadImg(`https://i.ytimg.com/vi/${id}/${name}.jpg`); if (i.naturalWidth > 120) { img = i; break; } } catch {}
-  }
-  if (!img) throw new Error("Couldn't load that video's picture. Is the link right, and the video public or unlisted?");
-  try {
-    const w = Math.min(1080, img.naturalWidth), h = Math.round(w * img.naturalHeight / img.naturalWidth);
+/* A frame (an image or a <video>) with a ▶ drawn on it, uploaded as a JPEG. */
+async function drawPoster(img, sw, sh, name) {
+    const w = Math.min(1080, sw), h = Math.round(w * sh / sw);
     const c = document.createElement("canvas"); c.width = w; c.height = h;
     const g = c.getContext("2d");
     g.drawImage(img, 0, 0, w, h);
@@ -45,9 +38,55 @@ async function makePoster(id, lotId) {
     g.fillStyle = "#fff"; g.beginPath();
     g.moveTo(x - r * 0.32, y - r * 0.45); g.lineTo(x - r * 0.32, y + r * 0.45); g.lineTo(x + r * 0.5, y); g.closePath(); g.fill();
     const blob = await new Promise(ok => c.toBlob(ok, "image/jpeg", 0.86));
-    const file = new File([blob], `${lotId}.jpg`, { type: "image/jpeg" });
-    return await uploadToStorage(`campaign/lots/${lotId}-${Date.now()}.jpg`, file);
-  } catch { return img.src; }
+    const file = new File([blob], `${name}.jpg`, { type: "image/jpeg" });
+    return await uploadToStorage(`campaign/lots/${name}-${Date.now()}.jpg`, file);
+}
+
+/* The video's frame with a play button on it. Falls back to YouTube's own
+   thumbnail when drawing isn't possible. */
+export async function makePoster(id, lotId) {
+  let img = null;
+  for (const name of ["maxresdefault", "sddefault", "hqdefault"]) {
+    try { const i = await loadImg(`https://i.ytimg.com/vi/${id}/${name}.jpg`); if (i.naturalWidth > 120) { img = i; break; } } catch {}
+  }
+  if (!img) throw new Error("Couldn't load that video's picture. Is the link right, and the video public or unlisted?");
+  try { return await drawPoster(img, img.naturalWidth, img.naturalHeight, lotId); } catch { return img.src; }
+}
+
+/* The poster from the video itself (a file, or a URL that allows it) — YouTube
+   has no thumbnail for a few minutes after an upload. A frame a second in. */
+export async function posterFromVideo(src, name) {
+  const v = document.createElement("video");
+  v.muted = true; v.playsInline = true; v.preload = "auto"; v.crossOrigin = "anonymous";
+  const url = typeof src === "string" ? src : URL.createObjectURL(src);
+  try {
+    await new Promise((ok, bad) => { v.onloadeddata = ok; v.onerror = () => bad(new Error("Couldn't read a frame of that video")); v.src = url; });
+    await new Promise(ok => { v.onseeked = ok; v.currentTime = Math.min(1, (v.duration || 2) / 2); });
+    return await drawPoster(v, v.videoWidth, v.videoHeight, name);
+  } finally { if (typeof src !== "string") URL.revokeObjectURL(url); }
+}
+
+/* A video to YouTube as Unlisted, through Social's connected channel. Takes a
+   File (stored first, over 50 MB a 1080p copy) or a stored URL. Returns
+   { url: "https://youtu.be/…", id, note }. */
+export async function videoToYoutube(src, { title = "", text = "", onStep } = {}) {
+  let url = typeof src === "string" ? src : "";
+  if (!url) {
+    let up = src;
+    if (up.size > 50 * 1024 * 1024) {
+      const { fitVideoForStorage } = await import("./videoLab.js");
+      up = await fitVideoForStorage(up, { onProgress: p => onStep?.(`Making a 1080p copy (over 50 MB)… ${Math.round(p * 100)}%`) });
+    }
+    const ext = (up.name.split(".").pop() || "mp4").toLowerCase();
+    onStep?.("Uploading… 0%");
+    url = await uploadToStorage(`campaign/lot-videos/${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}.${ext}`, up, { onProgress: p => onStep?.(`Uploading… ${Math.round((p > 1 ? p / 100 : p) * 100)}%`) });
+  }
+  onStep?.("Sending to YouTube (unlisted)…");
+  const r = await fetch("/api/social?action=post&p=youtube", { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ p: "youtube", video: url, title: String(title || "Earth Editions lot").slice(0, 90), text, privacy: "unlisted", source: "campaign" }) });
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(/connect|token/i.test(d.error || "") ? "YouTube isn't connected — connect it in Social first" : d.error || `YouTube failed (${r.status})`);
+  return d;
 }
 
 const num = v => String(v ?? "").replace(/[^\d.]/g, "");
@@ -76,6 +115,7 @@ export default function LotsPanel({ lots, setLots, picked, togglePick, onChange,
   const [edit, setEdit] = useState(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
+  const [step, setStep] = useState("");
   const lab = { fontSize: 9.5, fontWeight: 700, color: C.inkFaint, textTransform: "uppercase", letterSpacing: .6, marginBottom: 3, display: "block" };
   const set = p => setEdit(e => ({ ...e, ...p }));
 
@@ -86,14 +126,30 @@ export default function LotsPanel({ lots, setLots, picked, togglePick, onChange,
     setBusy(true); setErr("");
     try {
       const old = lots.find(l => l.id === edit.id);
-      const poster = old && old.videoId === id && old.poster ? old.poster : await makePoster(id, edit.id);
-      const lot = { ...edit, title: edit.title.trim(), details: edit.details.trim(), videoId: id, videoUrl: `https://youtu.be/${id}`, poster, updatedAt: new Date().toISOString(), createdAt: edit.createdAt || new Date().toISOString() };
+      const poster = edit.posterFor === id && edit.poster ? edit.poster : old && old.videoId === id && old.poster ? old.poster : await makePoster(id, edit.id);
+      const { posterFor, ...rest } = edit;
+      const lot = { ...rest, title: edit.title.trim(), details: edit.details.trim(), videoId: id, videoUrl: `https://youtu.be/${id}`, poster, updatedAt: new Date().toISOString(), createdAt: edit.createdAt || new Date().toISOString() };
       const next = old ? lots.map(l => l.id === lot.id ? lot : l) : [lot, ...lots];
       await saveLots(next); setLots(next); setEdit(null);
       if (!old && !picked.has(lot.id)) togglePick(lot.id);
       onChange?.(); showToast?.(`✓ ${lot.title} saved${old ? "" : " and added to this mailer"}`);
     } catch (e) { setErr(e.message); }
     setBusy(false);
+  };
+  /* Upload the video here: it goes to YouTube as Unlisted on Social's channel,
+     its link fills in, and the poster is drawn from the file itself. */
+  const uploadVideo = async f => {
+    if (!f) return;
+    setBusy(true); setErr("");
+    try {
+      let poster = "";
+      try { setStep("Taking a frame for the email…"); poster = await posterFromVideo(f, edit.id); } catch {}
+      const d = await videoToYoutube(f, { title: edit.title || f.name.replace(/\.[^.]+$/, ""), text: edit.details, onStep: setStep });
+      const vid = youtubeId(d.url);
+      set({ videoUrl: d.url, ...(poster ? { poster, posterFor: vid } : {}) });
+      showToast?.(`✓ On YouTube (unlisted)${d.note ? ` — ${d.note}` : ""}`, d.note ? 9000 : 4000);
+    } catch (e) { setErr(e.message || String(e)); }
+    setStep(""); setBusy(false);
   };
   const remove = async l => {
     if (!window.confirm(`Delete the lot "${l.title}"? The YouTube video isn't touched.`)) return;
@@ -107,8 +163,13 @@ export default function LotsPanel({ lots, setLots, picked, togglePick, onChange,
     const pv = lotPrice(edit);
     return (
       <div style={{ display: "grid", gap: 9, overflowY: "auto" }}>
-        <div><span style={lab}>YouTube link (unlisted is fine)</span><input value={edit.videoUrl} onChange={e => set({ videoUrl: e.target.value })} placeholder="https://youtu.be/…" style={FI()} /></div>
-        {yt && <img src={`https://i.ytimg.com/vi/${yt}/hqdefault.jpg`} alt="" style={{ width: "100%", borderRadius: 7, display: "block" }} />}
+        <label style={{ background: C.card, border: `1px dashed ${C.border}`, borderRadius: 7, padding: "9px 12px", fontSize: 12.5, fontWeight: 700, cursor: busy ? "default" : "pointer", textAlign: "center", opacity: busy ? .6 : 1 }}>
+          {yt ? "⬆ Upload a different video" : "⬆ Upload the video — it goes to YouTube as unlisted"}
+          <input type="file" accept="video/*" disabled={busy} style={{ display: "none" }} onChange={e => { uploadVideo(e.target.files?.[0]); e.target.value = ""; }} />
+        </label>
+        {step && <div style={{ fontSize: 12, color: C.inkMid }}>{step}</div>}
+        <div><span style={lab}>…or paste a YouTube link (unlisted is fine)</span><input value={edit.videoUrl} onChange={e => set({ videoUrl: e.target.value })} placeholder="https://youtu.be/…" style={FI()} /></div>
+        {yt && <img src={edit.posterFor === yt && edit.poster ? edit.poster : `https://i.ytimg.com/vi/${yt}/hqdefault.jpg`} alt="" style={{ width: "100%", borderRadius: 7, display: "block" }} />}
         <div><span style={lab}>Lot name</span><input value={edit.title} onChange={e => set({ title: e.target.value })} placeholder="Amethyst points lot" style={FI()} /></div>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 70px 1fr", gap: 6 }}>
           <div><span style={lab}>Weight</span><input value={edit.weight} onChange={e => set({ weight: num(e.target.value) })} style={FI()} /></div>
@@ -138,7 +199,7 @@ export default function LotsPanel({ lots, setLots, picked, togglePick, onChange,
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 8, minHeight: 0 }}>
-      <div style={{ fontSize: 11, color: C.inkMid, lineHeight: 1.45 }}>Offers that aren't in stock, shown by video. Upload the video to YouTube as <b>Unlisted</b>, then paste its link here. The email shows the video's frame with a ▶ that opens it.</div>
+      <div style={{ fontSize: 11, color: C.inkMid, lineHeight: 1.45 }}>Offers that aren't in stock, shown by video. Upload the video here and it goes to YouTube as <b>Unlisted</b> on your connected channel (or paste a link). The email shows the video's frame with a ▶ that opens it.</div>
       <button type="button" onClick={() => setEdit(blank())} style={{ background: C.ink, color: "#FAF0DC", border: "none", borderRadius: 7, padding: "8px 12px", fontSize: 12.5, fontWeight: 700, cursor: "pointer" }}>＋ New lot</button>
       <div style={{ overflowY: "auto", display: "grid", gap: 6 }}>
         {!lots.length && <div style={{ fontSize: 12, color: C.inkFaint, textAlign: "center", padding: 16 }}>No lots yet.</div>}

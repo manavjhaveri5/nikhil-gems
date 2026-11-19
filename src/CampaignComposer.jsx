@@ -1,10 +1,12 @@
 import { useState, useEffect, useMemo } from "react";
 import { C, mob, FI } from "./lmTheme.js";
-import { loadK, loadKFresh, upsertItemK, upsertVersionedItemK } from "./utils.js";
+import { loadK, loadKFresh, saveK as saveKV, upsertItemK, upsertVersionedItemK } from "./utils.js";
 import { EARTH_LOGO_URL, KEYS } from "./constants.js";
 import { loadLiveTrade, setTradePrice, TRADE_SITE } from "./TradeSiteApp.jsx";
 import { loadStoreFacts, loadStoreProduct, publishListingToStore } from "./StoreApp.jsx";
-import LotsPanel, { loadLots, saveLots, lotToProduct } from "./CampaignLots.jsx";
+import LotsPanel, { loadLots, saveLots, lotToProduct, videoToYoutube, posterFromVideo, makePoster, youtubeId } from "./CampaignLots.jsx";
+// A stored video sent to YouTube for a mailer, kept so it goes up once: { [stored url]: { url, poster } }.
+const CAMPAIGN_VIDEOS_KEY = "ng-campaign-videos-v1";
 
 const STORE_SITE = "https://eartheditions.co";
 
@@ -168,6 +170,29 @@ export default function CampaignComposer({ listings = [], onClose, showToast }) 
   const [lots, setLots] = useState([]);
   const [lotSel, setLotSel] = useState(() => new Set());
   useEffect(() => { loadLots().then(setLots); }, []);
+  /* A piece or stock card with a video can go out as its photo, its video
+     (frame with ▶, opening on YouTube) or both. The video goes to YouTube
+     unlisted the first time it's chosen. */
+  const [vids, setVids] = useState({});
+  const [vidBusy, setVidBusy] = useState({});
+  useEffect(() => { loadKFresh(CAMPAIGN_VIDEOS_KEY).then(v => setVids(v && typeof v === "object" ? v : {})).catch(() => {}); }, []);
+  const ensureVideo = async l => {
+    const src = l.video;
+    if (!src || vids[src]?.url) return;
+    setVidBusy(b => ({ ...b, [l.id]: "Sending the video to YouTube…" }));
+    try {
+      const d = await videoToYoutube(src, { title: l.title, text: l.description || "", onStep: t => setVidBusy(b => ({ ...b, [l.id]: t })) });
+      let poster = "";
+      try { poster = await posterFromVideo(src, String(l.id).replace(/[^a-z0-9-]/gi, "-")); } catch {}
+      if (!poster) try { poster = await makePoster(youtubeId(d.url), String(l.id).replace(/[^a-z0-9-]/gi, "-")); } catch {}
+      const fresh = (await loadKFresh(CAMPAIGN_VIDEOS_KEY).catch(() => null)) || {};
+      const next = { ...fresh, [src]: { url: d.url, poster, at: new Date().toISOString() } };
+      await saveKV(CAMPAIGN_VIDEOS_KEY, next);
+      setVids(next);
+      showToast?.(`✓ Video on YouTube (unlisted)${d.note ? ` — ${d.note}` : ""}`, d.note ? 9000 : 4000);
+    } catch (e) { setErr(`Video: ${e.message}`); setOverrides(o => ({ ...o, [l.id]: { ...(o[l.id] || {}), media: "photo" } })); }
+    setVidBusy(b => { const n = { ...b }; delete n[l.id]; return n; });
+  };
   const toggleLot = id => setLotSel(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
 
   const post = async payload => {
@@ -223,6 +248,7 @@ export default function CampaignComposer({ listings = [], onClose, showToast }) 
       id: `stock:${c.id}`, noListing: true, title: [c.material, c.shape].filter(Boolean).join(" ") || c.sku || "Stock card",
       material: c.material, shape: c.shape, size: c.size, sku: c.sku,
       images: [...new Set([...(Array.isArray(c.photos) ? c.photos : []), c.photo].filter(u => typeof u === "string" && /^https?:/.test(u)))],
+      video: typeof c.video === "string" && /^https?:/.test(c.video) ? c.video : "",
       _stock: cardFacts(c),
     }));
     return { pool: [...base.map(l => tied.get(l.id) || l), ...only, ...cards], tradeView: view, stockView: cards, cardById };
@@ -344,6 +370,14 @@ export default function CampaignComposer({ listings = [], onClose, showToast }) 
     if (o.hideMeta) p.meta = "";
     return p;
   };
+  // Photo, video or both: the video card is the frame with ▶, linking to YouTube.
+  const mediaOf = l => (l.video && overrides[l.id]?.media) || "photo";
+  const toProducts = l => {
+    const p = toProduct(l), m = mediaOf(l), v = vids[l.video];
+    if (m === "photo" || !v?.url) return [p];
+    const vc = { ...p, image: v.poster || p.image, url: v.url, video: true };
+    return m === "video" ? [vc] : [p, { ...vc, id: `${p.id}:video`, noSync: true }];
+  };
   const edited = l => ["hidePrice", "hideMeta"].some(k => (overrides[l.id] || {})[k])
     || [...OVERRIDABLE.map(f => f.key), "image"].some(k => (overrides[l.id] || {})[k]?.trim());
   const setOverride = (id, key, val) => {
@@ -356,7 +390,7 @@ export default function CampaignComposer({ listings = [], onClose, showToast }) 
   const visible = source === "lots" ? [] : (source === "trade" ? tradeView : source === "stock" ? stockView : pool.slice(0, listings.length)).filter(l => !ql || `${l.title || ""} ${l.material || ""} ${l.sku || ""}`.toLowerCase().includes(ql));
   const chosen = pool.filter(l => sel.has(l.id));
   const pickedLots = lots.filter(l => lotSel.has(l.id));
-  const products = [...chosen.map(toProduct), ...pickedLots.map(lotToProduct)];
+  const products = [...chosen.flatMap(toProducts), ...pickedLots.map(lotToProduct)];
   const payloadBase = () => ({ brand, heading, intro, products, ...design });
 
   const toggle = id => setSel(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
@@ -374,7 +408,7 @@ export default function CampaignComposer({ listings = [], onClose, showToast }) 
   const doCreate = async () => {
     setBusy("create"); setErr("");
     try {
-      await post({ action: "sync_products", products: products.filter(p => !p.isLot) }).catch(() => {}); // catalog sync is best-effort
+      await post({ action: "sync_products", products: products.filter(p => !p.isLot && !p.noSync) }).catch(() => {}); // catalog sync is best-effort
       const d = await post({
         action: "create_campaign", ...payloadBase(),
         // Omnisend's campaign name is internal-only; the date alone is how the
@@ -531,6 +565,15 @@ export default function CampaignComposer({ listings = [], onClose, showToast }) 
                         </div>
                       )}
                     </div>
+                    {on && l.video && (
+                      <span onClick={e => { e.preventDefault(); e.stopPropagation(); }} style={{ display: "flex", flexShrink: 0, border: `1px solid ${C.border}`, borderRadius: 6, overflow: "hidden" }} title={vidBusy[l.id] || "Show the photo, the video (opens on YouTube) or both"}>
+                        {[["photo", "📷"], ["video", "🎥"], ["both", "📷+🎥"]].map(([k, t]) => (
+                          <button key={k} type="button" disabled={!!vidBusy[l.id]}
+                            onClick={() => { setOverride(l.id, "media", k); if (k !== "photo") ensureVideo(l); }}
+                            style={{ border: "none", background: mediaOf(l) === k ? C.teal : "transparent", color: mediaOf(l) === k ? "#fff" : C.inkMid, padding: "3px 6px", fontSize: 10, fontWeight: 700, cursor: "pointer", opacity: vidBusy[l.id] ? .5 : 1 }}>{t}</button>
+                        ))}
+                      </span>
+                    )}
                     {on && (
                       <button type="button" title="Print this one under the in-stock banner"
                         onClick={e => { e.preventDefault(); e.stopPropagation(); toggleDeal(l.id); }}

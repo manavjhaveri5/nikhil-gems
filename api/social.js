@@ -397,20 +397,23 @@ async function postTikTok({ text, video, mode = "draft", tt = {} }) {
 }
 
 // YouTube: a vertical video under 3 minutes is a Short; #Shorts in the title helps it along.
-async function postYouTube({ title, text, video }) {
+// privacy "unlisted" (Campaign lots): an ordinary video only the link opens — no #Shorts, a youtu.be link back.
+async function postYouTube({ title, text, video, privacy }) {
   if (!video) fail(400, "YouTube needs a video");
   const t = await token("youtube");
   const { buf, type } = await download(video);
+  const unlisted = privacy === "unlisted";
   const name = String(title || text || "Earth Editions").replace(/\s+/g, " ").trim().slice(0, 90);
-  const meta = { snippet: { title: /#shorts/i.test(name) ? name : `${name.slice(0, 91)} #Shorts`, description: String(text || "").slice(0, 4900), categoryId: "26" },
-    status: { privacyStatus: "public", selfDeclaredMadeForKids: false } };
+  const meta = { snippet: { title: unlisted || /#shorts/i.test(name) ? name : `${name.slice(0, 91)} #Shorts`, description: String(text || "").slice(0, 4900), categoryId: "26" },
+    status: { privacyStatus: unlisted ? "unlisted" : "public", selfDeclaredMadeForKids: false } };
   const start = await fetch("https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status", { method: "POST",
     headers: { Authorization: `Bearer ${t.access_token}`, "Content-Type": "application/json; charset=UTF-8", "X-Upload-Content-Length": String(buf.length), "X-Upload-Content-Type": type || "video/mp4" }, body: JSON.stringify(meta) });
   if (!start.ok) fail(502, `YouTube: ${(await json(start)).error?.message || start.status}`);
   const up = await fetch(start.headers.get("location"), { method: "PUT", headers: { "Content-Type": type || "video/mp4" }, body: buf });
   const d = await json(up);
   if (!up.ok) fail(502, `YouTube: ${d.error?.message || up.status}`);
-  return { url: `https://youtube.com/shorts/${d.id}`, note: d.status?.privacyStatus && d.status.privacyStatus !== "public" ? `uploaded as ${d.status.privacyStatus} — Google keeps uploads private until the app is verified` : "" };
+  const want = unlisted ? "unlisted" : "public";
+  return { url: unlisted ? `https://youtu.be/${d.id}` : `https://youtube.com/shorts/${d.id}`, id: d.id, note: d.status?.privacyStatus && d.status.privacyStatus !== want ? `uploaded as ${d.status.privacyStatus} — Google keeps uploads private until the app is verified` : "" };
 }
 
 // Pinterest: a pin with a link back to the piece, on the board chosen (or the first).
