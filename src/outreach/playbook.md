@@ -13,9 +13,10 @@
 
 ## How to send
 
-- **Email** from Sejal's own mailbox, written to one person. Use **Open in Gmail** on the lead, read it, change anything that sounds wrong, then send. Then click **Mark email sent**.
+- **Email, one at a time:** use **Open in Gmail** on the lead, read it, change anything that sounds wrong, send it, then click **Mark email sent**.
+- **Email, several at once:** tick the shops (or **Select all**) and press **Send**. They go out from the ERP's Gmail one by one, about half a minute apart, so keep the page open until it says Finished. Read a few of the drafts first. Each shop is checked before its email goes: if it's already a customer, a trade buyer, on the Omnisend list, or anywhere in our Gmail, it's skipped and the reason is noted. Due follow-ups can be sent the same way. A shop that replied or bounced is skipped and moved to Replied or Bounced.
 - **Instagram DM** from @eartheditions_ when a shop has no email, or for live sellers. Open their profile, like one or two recent posts, then send the DM. Then click **Mark DM sent**.
-- **At most 20 new emails and 12 new DMs a day** (the Today tab counts). Sending more gets the mailbox flagged as spam and the Instagram account blocked from sending DMs. Spread them over the day.
+- **At most 20 new shops by email and 12 new DMs a day.** Follow-ups don't count toward the 20, but the ERP stops at 60 emails a day in total. Sending more gets the mailbox flagged as spam and the Instagram account blocked from sending DMs. If the mailbox has never sent emails like these, start with 10 a day for the first week.
 - **No attachments or price lists in the first message.** Use plain text and one link. Attachments from strangers go to spam.
 - **Follow-ups:** one after 4 days, and a last one 6 days after that, both in the same thread. After that, stop. The Today tab shows them when they're due.
 - **Reply the same day** to anyone who answers. Ask what they sell most, then send 3–5 photos of matching lots from stock.
@@ -26,7 +27,7 @@
 - **Germany and Austria:** the law there (UWG) makes cold sales email to businesses risky. Use Instagram DM or the shop's contact form, not email. The drafts already follow this.
 - **Japan:** emailing a shop's published business address is allowed, unless the site says it refuses sales email (広告メールお断り / 営業メールお断り). If it does, mark the lead **Skip**.
 - **UK and EU:** write only to business addresses (info@, hello@, shop@), and only about wholesale, which is relevant to their business. Delete their details if they ask.
-- Never send to existing trade buyers or past customers from this list. Those go through Trade Site and Raj.
+- Never send to existing trade buyers or past customers from this list. Those go through Trade Site and Raj. The list is checked against them when it's built, and again right before each email.
 - Never promise a price, discount or delivery date that Sir hasn't approved.
 
 ## What to track

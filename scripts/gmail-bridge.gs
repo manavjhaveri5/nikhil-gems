@@ -1,6 +1,11 @@
-/* Gmail bridge for the Nikhil Gems ERP — read-only.
+/* Gmail bridge for the Nikhil Gems ERP.
    Runs in your own Google account (script.google.com), so the ERP can search your
    Gmail for a figure and fetch an attachment, without a Google Cloud app.
+   It can also send one plain-text email at a time for Wholesale Outreach: the ERP
+   server only ever passes a lead's own stored draft, and the mail goes out from
+   this account, so it sits in Sent and replies come back here.
+   Already deployed? After pasting a new version: Deploy → Manage deployments →
+   edit (pencil) → Version: New version → Deploy. The URL stays the same.
 
    Set up once:
    1. script.google.com → New project → paste this file → Save.
@@ -40,6 +45,14 @@ function doPost(e) {
     var a = GmailApp.getMessageById(String(b.messageId)).getAttachments({ includeInlineImages: false })[Number(b.index) || 0];
     if (!a) return out({ error: "Attachment not found" });
     return out({ name: a.getName(), type: a.getContentType(), size: a.getSize(), b64: Utilities.base64Encode(a.getBytes()) });
+  }
+  if (b.action === "send") {
+    var to = String(b.to || "").trim();
+    if (!/^[^\s@,;]+@[^\s@,;]+\.[^\s@,;]+$/.test(to)) return out({ error: "Bad recipient" });
+    if (!b.subject || !b.body) return out({ error: "Nothing to send" });
+    var opts = { name: String(b.name || "").slice(0, 80) };
+    var sent = GmailApp.createDraft(to, String(b.subject).slice(0, 200), String(b.body).slice(0, 20000), opts).send();
+    return out({ ok: true, messageId: sent.getId(), threadId: sent.getThread().getId() });
   }
   return out({ error: "Unknown action" });
 }

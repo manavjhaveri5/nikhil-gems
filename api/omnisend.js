@@ -67,7 +67,7 @@ const qs = o => Object.entries(o)
    are rejected as "Unknown parameter". Page size caps at 250 and larger values
    are rejected rather than clamped, so read the cap back off the error and retry. */
 const PAGE_MAX = 250;
-async function omniList(path, params = {}) {
+export async function omniList(path, params = {}) {
   let r = await omni("GET", `${path}?${qs(params)}`);
   const cap = !r.ok && /between\s+1\s+and\s+(\d+)/i.exec(r.error || "");
   if (cap && +cap[1] > 0 && +params.limit > +cap[1]) r = await omni("GET", `${path}?${qs({ ...params, limit: +cap[1] })}`);
@@ -79,7 +79,7 @@ const pagingOf = data => ({
 });
 const clampLimit = n => Math.min(PAGE_MAX, Math.max(1, +n || 100));
 
-const rowsOf = (data, key) => data?.[key] || data?.data || (Array.isArray(data) ? data : []);
+export const rowsOf = (data, key) => data?.[key] || data?.data || (Array.isArray(data) ? data : []);
 
 /* Contacts come back flat (email/status at the top level) with an `identifiers`
    array alongside; `phone` is an array, not a string. Read both so the row stays
