@@ -5,7 +5,7 @@
    Etsy's rules forbid unsolicited sales messages through Etsy Conversations, so contact is made
    only through a website, email or Instagram the shop publishes itself.
    node scripts/outreach/find-etsy.mjs out.json [US,GB,AU,NZ,JP,DE,NL,FR,IT,ES,IE,CA] */
-import { writeFileSync } from "node:fs";
+import { writeFileSync, readFileSync, existsSync } from "node:fs";
 import { loadEnv } from "../raj/raj-common.mjs";
 const [out = "etsy.json", cc = "US,GB,AU,NZ,JP,TW,DE,NL,FR,IT,ES,IE,BE,AT,CH,SE,DK,CA"] = process.argv.slice(2);
 const TARGET = new Set(cc.split(","));
@@ -35,10 +35,17 @@ try { for (const k of KW) for (let off = 0; off < 300; off += 100) {
 console.error("shops seen", shops.size);
 const keep = [];
 let n = 0;
-const ids = [...shops.keys()].sort((a, b) => shops.get(b) - shops.get(a)); // best-matching shops first, in case the budget runs out
+// Shops already looked up on an earlier run are skipped, so each day's budget goes on new shops.
+const SEEN = new URL("../../scratchpad/outreach/etsy-seen.json", import.meta.url);
+const seen = new Set(existsSync(SEEN) ? JSON.parse(readFileSync(SEEN, "utf8")) : []);
+// SKIP_TOP=n marks the n best-matching shops as seen without looking them up (for runs made before etsy-seen.json existed).
+for (const id of [...shops.keys()].sort((a, b) => shops.get(b) - shops.get(a)).slice(0, +process.env.SKIP_TOP || 0)) seen.add(id);
+const ids = [...shops.keys()].filter(id => !seen.has(id)).sort((a, b) => shops.get(b) - shops.get(a)); // best-matching shops first, in case the budget runs out
+console.error("new to look up", ids.length, "· already seen", seen.size);
 async function check(id) {
   const hits = shops.get(id);
   const s = await get(`shops/${id}`);
+  if (s) seen.add(id);
   if (++n % 200 === 0) console.error(n, keep.length);
   if (!s || s.is_vacation) return;
   const from = s.shipping_from_country_iso || s.shop_location_country_iso;
@@ -52,9 +59,10 @@ async function check(id) {
     listings: s.listing_active_count, favs: s.num_favorers, reviews: s.review_count, rating: s.review_average, hits, since: new Date(s.create_date * 1000).toISOString().slice(0, 7),
     instagram: /^(gmail|yahoo|hotmail|outlook|icloud)/i.test(ig) ? "" : ig, email, website: site, blurb: String(s.announcement || "").slice(0, 400) });
 }
-// 4 at a time with a short pause: well under Etsy's 10 requests a second.
+// 3 at a time, a second apart: under Etsy's 5 requests a second.
 try { for (let i = 0; i < ids.length; i += 3) { await Promise.all(ids.slice(i, i + 3).map(check)); await sleep(1000); } } catch (err) { console.error(String(err.message || err), "· saving", keep.length, "shops found so far"); }
 keep.sort((a, b) => b.hits - a.hits || b.sold - a.sold);
 writeFileSync(out, JSON.stringify(keep, null, 1));
+writeFileSync(SEEN, JSON.stringify([...seen]));
 const by = {}; for (const k of keep) by[k.country] = (by[k.country] || 0) + 1;
 console.log(keep.length, JSON.stringify(by), "ig", keep.filter(k => k.instagram).length, "site", keep.filter(k => k.website).length, "email", keep.filter(k => k.email).length);

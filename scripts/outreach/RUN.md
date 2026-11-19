@@ -13,6 +13,8 @@ node scripts/outreach/build-leads.mjs $D/leads.json $D/web-enr.json $D/etsy-enr.
 node scripts/outreach/outreach-push.mjs leads $D/leads.json --dry && node scripts/outreach/outreach-push.mjs leads $D/leads.json
 ```
 
+- The Etsy limit is a rolling 24 hours and the ERP uses about 1,600 a day, so a run gets roughly 800 shop lookups before it stops at the 2,500 reserve. Shops already looked up are remembered in `scratchpad/outreach/etsy-seen.json` and skipped next time. The 19 Nov 2026 run predates that file: run the next one once with `SKIP_TOP=650`.
+- Push only shops with an email or Instagram (tiers A and B). Tier C shops have no contact at all.
 - Re-pushing keeps Sejal's stage, dates, notes and history, and updates only the research and the drafts.
 - `find-osm.mjs` (OpenStreetMap) works but the public Overpass servers time out often, and few crystal shops are tagged there. Use it only as an extra.
 - Instagram can't be searched through Meta's API. Handles come from the shops' own websites, or Sejal looks them up by hand.
