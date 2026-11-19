@@ -1,0 +1,148 @@
+/* BOI set checker — reads the documents going into a BOI remittance set and
+   says where they disagree, before the set goes to the bank:
+     1. each invoice on the form is on a shipping bill, at the same value
+     2. the HAWB printed on the shipping bill is the AWB on the shipping label
+     3. the remitter on the inward advice is the buyer on the invoice
+   Reading is one AI call per document; results are cached by the caller. */
+
+const PROMPTS = {
+  sb: 'This is an Indian customs export Shipping Bill / Courier Shipping Bill (CSB) / Postal Bill of Export. Return ONLY valid JSON, no markdown: {"sbNumber":"shipping bill number","invoices":[{"no":"invoice number exactly as printed","value":"invoice value digits only","currency":"invoice currency code"}],"hawb":["every HAWB / AWB / house airway bill / courier tracking number printed on it, digits and letters only"],"consignee":"consignee / buyer name"}',
+  awb: 'This is a shipping label, airway bill (AWB / HAWB) or bill of lading for an export shipment. Return ONLY valid JSON, no markdown: {"awb":"the airway bill / tracking / waybill number (the main barcode number), digits and letters only","other":["any other AWB / tracking / reference numbers printed"],"consignee":"receiver / consignee name"}',
+  adv: 'This is an inward remittance advice (SWIFT MT103 / bank credit advice) for an export payment received in India. Return ONLY valid JSON, no markdown: {"remitter":"name of the ordering customer / remitter / sender of the money (MT103 field 50), not the bank and not the beneficiary","amount":"amount in foreign currency digits only","currency":"currency code"}',
+  inv: 'This is an export invoice / proforma / purchase order. Return ONLY valid JSON, no markdown: {"invoiceNumber":"invoice number","amount":"total value digits only","currency":"currency code","buyer":"buyer / bill-to name","consignee":"consignee / ship-to name if different, else empty"}',
+};
+
+const b64Of = bytes => {
+  let s = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(s);
+};
+
+/** part: {kind:'pdf'|'jpg'|'png', bytes:Uint8Array}; docKind: 'sb'|'awb'|'adv'|'inv' */
+export async function readBoiDoc(part, docKind) {
+  const prompt = PROMPTS[docKind];
+  if (!prompt) return null;
+  const data = b64Of(part.bytes);
+  const file = part.kind === "pdf"
+    ? { type: "document", source: { type: "base64", media_type: "application/pdf", data } }
+    : { type: "image", source: { type: "base64", media_type: part.kind === "png" ? "image/png" : "image/jpeg", data } };
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 60000);
+  try {
+    const res = await fetch("/api/claude", {
+      method: "POST", signal: ctrl.signal,
+      headers: { "Content-Type": "application/json", "x-ai-feature": "boi-checker" },
+      body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: 500,
+        messages: [{ role: "user", content: [file, { type: "text", text: prompt }] }] }),
+    });
+    if (!res.ok) throw new Error(`AI ${res.status}`);
+    const d = await res.json();
+    if (d.error) throw new Error(d.error.message || "AI error");
+    const t = (d.content || []).map(i => i.text || "").join("").replace(/```json|```/g, "").trim();
+    return JSON.parse(t.slice(t.indexOf("{"), t.lastIndexOf("}") + 1));
+  } finally { clearTimeout(timer); }
+}
+
+// ── matching helpers ──
+const normNo = s => String(s || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+const num = v => parseFloat(String(v ?? "").replace(/[^\d.]/g, "")) || 0;
+// Invoice numbers: "NG/045/25-26" vs "NG-45/2025-26" — compare alphanumerics, and
+// fall back to the digit runs when the prefixes are printed differently.
+const sameInvNo = (a, b) => {
+  const x = normNo(a), y = normNo(b);
+  if (!x || !y) return false;
+  if (x === y) return true;
+  const dx = (String(a).match(/\d+/g) || []).map(n => String(+n)).join("|");
+  const dy = (String(b).match(/\d+/g) || []).map(n => String(+n)).join("|");
+  return !!dx && dx === dy;
+};
+// AWB numbers: carriers print them with spaces or a prefix; one containing the
+// other (8+ characters) is the same waybill.
+const sameAwb = (a, b) => {
+  const x = normNo(a), y = normNo(b);
+  if (x.length < 6 || y.length < 6) return false;
+  return x === y || (Math.min(x.length, y.length) >= 8 && (x.includes(y) || y.includes(x)));
+};
+const STOP = new Set(["LLC", "INC", "LTD", "LIMITED", "CO", "COMPANY", "CORP", "CORPORATION", "GMBH", "PVT", "PTY", "SA", "SRL", "BV", "AG", "PLC", "THE", "AND", "OF", "MR", "MRS", "MS", "DR", "LLP", "KK", "KG"]);
+const nameTokens = s => String(s || "").toUpperCase().normalize("NFD").replace(/[̀-ͯ]/g, "")
+  .replace(/[^A-Z0-9 ]/g, " ").split(/\s+/).filter(w => w.length > 1 && !STOP.has(w));
+export const sameName = (a, b) => {
+  const x = nameTokens(a), y = nameTokens(b);
+  if (!x.length || !y.length) return false;
+  const ys = new Set(y);
+  const common = x.filter(w => ys.has(w)).length;
+  return common / Math.min(x.length, y.length) >= 0.5;
+};
+
+/**
+ * @param {Object} p
+ * @param {string} p.purpose      'a' shipped | 'b' advance | …
+ * @param {Array}  p.invoices     linked invoice records [{invNo,totalAmt,currency,buyer,consignee}]
+ * @param {Array}  p.sb           readings of shipping bills [{label, ...read}]
+ * @param {Array}  p.awb          readings of AWBs / labels
+ * @param {Array}  p.adv          readings of inward advices
+ * @param {Array}  p.invFiles     readings of invoice files with no record
+ * @param {string} p.remName      remitter name typed on the form
+ * @returns {Array<{ok:boolean,title:string,detail:string}>}
+ */
+export function compareBoiSet({ purpose, invoices = [], sb = [], awb = [], adv = [], invFiles = [], remName = "" }) {
+  const out = [];
+  const flag = (title, detail) => out.push({ ok: false, title, detail });
+  const pass = (title, detail) => out.push({ ok: true, title, detail });
+
+  // Invoices: the records, plus any invoice file that isn't one of them.
+  const invs = [...invoices];
+  for (const f of invFiles) {
+    if (!f?.invoiceNumber || invs.some(i => sameInvNo(i.invNo, f.invoiceNumber))) continue;
+    invs.push({ invNo: f.invoiceNumber, totalAmt: num(f.amount), currency: String(f.currency || "").toUpperCase(), buyer: f.buyer, consignee: f.consignee });
+  }
+
+  // 1. Invoice ↔ shipping bill
+  if (purpose === "a" && sb.length) {
+    const sbInvs = sb.flatMap(s => (s.invoices || []).map(x => ({ ...x, sbNumber: s.sbNumber || s.label })));
+    for (const inv of invs) {
+      const hit = sbInvs.find(x => sameInvNo(x.no, inv.invNo));
+      if (!hit) {
+        flag(`${inv.invNo} isn't on the shipping bill`,
+          sbInvs.length ? `The shipping bill names ${sbInvs.map(x => x.no).join(", ")}.` : "No invoice number could be read off the shipping bill.");
+        continue;
+      }
+      const v = num(hit.value), t = +inv.totalAmt || 0;
+      const sameCcy = !hit.currency || !inv.currency || String(hit.currency).toUpperCase() === String(inv.currency).toUpperCase();
+      if (!sameCcy) flag(`${inv.invNo}: currency differs`, `Invoice is ${inv.currency}, shipping bill ${String(hit.currency).toUpperCase()}.`);
+      else if (v && t && Math.abs(v - t) > Math.max(1, t * 0.01)) flag(`${inv.invNo}: value differs`, `Invoice ${inv.currency || ""} ${t.toLocaleString("en-IN")} · shipping bill ${v.toLocaleString("en-IN")}.`);
+      else pass(`${inv.invNo} matches the shipping bill`, `${hit.sbNumber || "SB"}${v ? ` · ${v.toLocaleString("en-IN")}` : ""}`);
+    }
+    for (const x of sbInvs) {
+      if (!invs.some(i => sameInvNo(i.invNo, x.no))) flag(`Shipping bill names ${x.no}`, "That invoice isn't on this form — wrong shipping bill, or an invoice is missing from the form.");
+    }
+  }
+
+  // 2. HAWB on the shipping bill ↔ AWB on the label
+  if (purpose === "a" && sb.length && awb.length) {
+    const hawbs = sb.flatMap(s => (s.hawb || []).filter(Boolean));
+    for (const a of awb) {
+      const nos = [a.awb, ...(a.other || [])].filter(Boolean);
+      if (!nos.length) { flag(`${a.label}: no AWB number read`, "Check the label is legible."); continue; }
+      if (!hawbs.length) { flag("No HAWB on the shipping bill", `The label's AWB is ${a.awb || nos[0]}, but no HAWB could be read off the shipping bill.`); continue; }
+      const m = nos.find(n => hawbs.some(h => sameAwb(h, n)));
+      if (m) pass("HAWB matches the label", m);
+      else flag("HAWB doesn't match the label", `Shipping bill HAWB ${hawbs.join(", ")} · label AWB ${a.awb || nos[0]}.`);
+    }
+  }
+
+  // 3. Remitter on the inward advice ↔ buyer on the invoice
+  const buyers = [...new Set(invs.flatMap(i => [i.buyer, i.consignee]).filter(Boolean))];
+  for (const a of adv) {
+    if (!a?.remitter) { flag("Remitter not read off the advice", "Check the advice names who sent the money."); continue; }
+    if (!buyers.length) continue;
+    if (buyers.some(b => sameName(b, a.remitter))) pass("Remitter is the invoice buyer", a.remitter);
+    else flag("Remitter isn't the invoice buyer", `Advice: ${a.remitter} · invoice: ${buyers.join(" / ")}. A third-party payment needs the bank's third-party declaration.`);
+    const amt = num(a.amount), tot = invs.reduce((s, i) => s + (+i.totalAmt || 0), 0);
+    if (amt && tot && amt > tot * 1.01) flag("Advice is more than the invoices", `Advice ${String(a.currency || "").toUpperCase()} ${amt.toLocaleString("en-IN")} · invoices ${tot.toLocaleString("en-IN")}.`);
+  }
+  if (remName.trim() && buyers.length && !buyers.some(b => sameName(b, remName)) && !adv.some(a => sameName(a?.remitter, remName))) {
+    flag("Remitter on the form isn't the invoice buyer", `Form: ${remName} · invoice: ${buyers.join(" / ")}.`);
+  }
+  return out;
+}

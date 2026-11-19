@@ -12,7 +12,7 @@ import { C, mob } from "./lmTheme.js";
 import { loadK, loadKFresh, saveK, upsertItemK, deleteItemK, onCacheRefresh } from "./utils.js";
 
 export const QUEUE_KEY = "ng-etsy-queue-v1";             // [{ id: queueId(listing id, shop), listing_id, shop, etsy_id, title, image, price, shape, material, order, status: queued | live | stuck | dropped, by, tries, error, queued_at, live_at, live_day }]
-export const QUEUE_SETTINGS_KEY = "ng-etsy-queue-settings-v1";   // { on, perDay, paused }
+export const QUEUE_SETTINGS_KEY = "ng-etsy-queue-settings-v1";   // { on, perDay, perDayByShop: { atyahara, earth }, paused }
 const QUEUE_TICK_KEY = "ng-etsy-queue-tick-v1";          // the clock's last knock, written by the server
 const SLOTS_ET = [9, 11, 13, 15, 17];
 const TAPER_BELOW = 8;
@@ -26,6 +26,8 @@ const etNow = (d = new Date()) => {
 };
 const shapeOf = it => String(it?.shape || "").trim().toLowerCase();
 const byOrder = (a, b) => (+a.order || 0) - (+b.order || 0);
+// Each shop has its own count a day; perDay is the old shared one, still the fallback.
+export const shopPerDay = (settings, shop) => +settings?.perDayByShop?.[shop] || +settings?.perDay || 5;
 const perDayFor = (waiting, setting) => Math.max(1, Math.min(SLOTS_ET.length, waiting < TAPER_BELOW ? Math.min(4, +setting || 5) : +setting || 5));
 
 /* Both Etsy shops share the queue and its timetable, but each puts its own few
@@ -53,7 +55,7 @@ export async function loadQueueSettings() {
 export function forecast(items, settings, at = new Date()) {
   const when = new Map();
   for (const shop of ["atyahara", "earth"])
-    for (const [k, v] of forecastShop(items.filter(i => shopOf(i) === shop), settings, at)) when.set(k, v);
+    for (const [k, v] of forecastShop(items.filter(i => shopOf(i) === shop), { ...settings, perDay: shopPerDay(settings, shop) }, at)) when.set(k, v);
   return when;
 }
 function forecastShop(items, settings, at) {
@@ -292,7 +294,8 @@ export default function EtsyQueuePanel({ listings = [], onPublishNow, showToast,
   const small = { fontSize: 11.5, color: C.inkMid };
   const pill = (on) => ({ border: `1px solid ${on ? C.ink : C.border}`, background: on ? C.ink : C.surface, color: on ? "#FAF0DC" : C.ink, borderRadius: 8, padding: "6px 11px", fontSize: 12, fontWeight: 700, cursor: "pointer" });
   const action = { border: `1px solid ${C.border}`, background: C.surface, color: C.ink, borderRadius: 8, padding: "6px 10px", fontSize: 12, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" };
-  const perDay = perDayFor(waiting.length, settings.perDay);
+  const setting = shopPerDay(settings, shop);
+  const perDay = perDayFor(waiting.length, setting);
   // The slot hours in this device's time (India sees them in its evening), on the next day they all run.
   const hourStart = new Date(now); hourStart.setUTCMinutes(0, 0, 0);
   const firstSlot = Array.from({ length: 48 }, (_, k) => new Date(+hourStart + k * HOUR)).find(x => x > now && etNow(x).hour === SLOTS_ET[0]);
@@ -312,13 +315,13 @@ export default function EtsyQueuePanel({ listings = [], onPublishNow, showToast,
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontSize: 17, fontWeight: 800, color: C.ink }}>Etsy queue</div>
           <div style={{ ...small, marginTop: 3, lineHeight: 1.45 }}>
-            New Etsy listings upload as drafts and wait here. Each shop puts {perDay} a day live at {SLOTS_ET.slice(0, perDay).map(h => `${h > 12 ? h - 12 : h}`).join(", ")} New York time
-            {slotsLocal.every(Boolean) ? ` (${slotsLocal.join(", ")} here)` : ""}, when US buyers shop, mixing shapes through the day.
+            New Etsy listings upload as drafts and wait here. {SHOP_NAME[shop]} puts {perDay} a day live at {SLOTS_ET.slice(0, perDay).map(h => `${h > 12 ? h - 12 : h}`).join(", ")} New York time
+            {slotsLocal.every(Boolean) ? ` (${slotsLocal.join(", ")} here)` : ""}, when US buyers shop, mixing shapes through the day. Each shop has its own count{perDay < setting ? ` (${setting} set — four a day while fewer than ${TAPER_BELOW} wait)` : ""}.
           </div>
         </div>
         <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", flex: "none" }}>
-          <span style={{ ...small, marginRight: 2 }}>A day</span>
-          {[3, 4, 5].map(n => <button key={n} type="button" onClick={() => saveSettings({ perDay: n })} style={pill(+settings.perDay === n)}>{n}</button>)}
+          <span style={{ ...small, marginRight: 2 }}>{SHOP_NAME[shop]} a day</span>
+          {[1, 2, 3, 4, 5].map(n => <button key={n} type="button" onClick={() => saveSettings({ perDayByShop: { ...(settings.perDayByShop || {}), [shop]: n } })} style={pill(setting === n)}>{n}</button>)}
           <button type="button" onClick={() => saveSettings({ paused: !settings.paused })} style={{ ...pill(settings.paused), marginLeft: 6 }}>{settings.paused ? "▶ Resume" : "❚❚ Pause"}</button>
         </div>
       </div>

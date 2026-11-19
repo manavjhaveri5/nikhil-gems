@@ -958,7 +958,9 @@ async function etsyQueueTickShop({ dry = false, sb = adminClient(), at = new Dat
   const items = ((await read(QUEUE_KEY)) || []).filter(i => (i.shop || "atyahara") === shop.key);
   const { day, hour } = etNow(at);
   const waiting = items.filter(i => i.status === "queued").sort((a, b) => (a.order || 0) - (b.order || 0));
-  const perDay = Math.max(1, Math.min(QUEUE_SLOTS_ET.length, waiting.length < QUEUE_TAPER_BELOW ? Math.min(4, +settings.perDay || 5) : +settings.perDay || 5));
+  // Each shop has its own count a day (perDayByShop); the old shared perDay is the fallback.
+  const setting = +settings.perDayByShop?.[shop.key] || +settings.perDay || 5;
+  const perDay = Math.max(1, Math.min(QUEUE_SLOTS_ET.length, waiting.length < QUEUE_TAPER_BELOW ? Math.min(4, setting) : setting));
   const due = QUEUE_SLOTS_ET.slice(0, perDay).filter(h => h <= hour).length;
   const liveToday = items.filter(i => i.status === "live" && i.live_day === day && i.by === "queue");
   // A missed hour is made up, but never more than two at once.

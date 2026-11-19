@@ -59,6 +59,9 @@ const LOGO_SRC = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAfQAAAH0CAYAAADL
 
 
 const newItem=()=>({id:uid(),purchaseDesc:"",desc:"",catDesc:"",material:"",shape:"",hsn:"7103",gst:"3",qty:"",unit:"pcs",rate:"",addToAccountingStock:true,addToPhysicalStock:false,received:false,rcvDate:today(),location:"",cond:"ok",physicalEntries:[]});
+// Pick the most specific HSN offered: a full 8-digit code beats a 6-digit one, which beats the bare
+// "7103" heading. Ties go to the earlier candidate, so pass them in order of trust.
+const bestHsn=(...cands)=>{const c=cands.map(x=>String(x??"").replace(/\D/g,"")).filter(Boolean);if(!c.length)return"";return c.reduce((best,x)=>x.length>best.length?x:best,c[0]);};
 const newPurchaseBillItem=()=>({...newItem(),gst:"0.25",addToAccountingStock:false,addToPhysicalStock:false});
 // A "what we actually bought" line — the real purchase, kept separate from the accounting/customs entry.
 const newBoughtLine=()=>({id:uid(),material:"",shape:"",unit:"kg",rate:"",qty:""});
@@ -9541,7 +9544,7 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
               </Field>
               {allDescs.length>0&&<div style={{fontSize:10,color:C.inkFaint,marginTop:3}}>💡 {allDescs.length} previous descriptions available — start typing to match</div>}
             </div>
-            <Field label="HSN Code"><input value={form.hsn||"7103"} onChange={e=>setForm(f=>({...f,hsn:e.target.value}))} style={FI}/></Field>
+            <Field label="HSN Code"><input value={form.hsn??""} onChange={e=>setForm(f=>({...f,hsn:e.target.value}))} style={FI} placeholder="7103"/></Field>
             <div style={{display:"flex",gap:8,alignItems:"flex-end"}}>
               <div style={{flex:1}}><Field label="Quantity"><input type="number" value={form.qty||""} onChange={e=>setForm(f=>({...f,qty:e.target.value}))} style={FI} placeholder="0"/></Field></div>
               <div style={{width:70}}><Field label="Unit"><select value={form.unit||"pcs"} onChange={e=>setForm(f=>({...f,unit:e.target.value}))} style={{...FI,cursor:"pointer"}}>{UNITS.map(u=><option key={u}>{u}</option>)}</select></Field></div>
@@ -9610,7 +9613,7 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
                   <Field label="Product Type"><select value={form.productType||""} onChange={e=>setForm(f=>({...f,productType:e.target.value}))} style={{...FI,cursor:"pointer"}}><option value="">Select...</option>{PRODUCT_TYPES.map(typ=><option key={typ}>{typ}</option>)}</select></Field>
                   <Field label="Size"><input value={form.size||""} onChange={e=>setForm(f=>({...f,size:e.target.value}))} style={FI} placeholder="60–80mm"/></Field>
                   <Field label="Grade"><input value={form.grade||""} onChange={e=>setForm(f=>({...f,grade:e.target.value}))} style={FI} placeholder="AAA"/></Field>
-                  <Field label="HSN"><input value={form.hsn||"7103"} onChange={e=>setForm(f=>({...f,hsn:e.target.value}))} style={FI}/></Field>
+                  <Field label="HSN"><input value={form.hsn??""} onChange={e=>setForm(f=>({...f,hsn:e.target.value}))} style={FI} placeholder="7103"/></Field>
                 </div>
               </div>
               {/* ── QUANTITIES ── */}
@@ -10219,7 +10222,7 @@ function PurchasesApp({onHome,startView,startBillId,onBillIdConsumed,onGoToVendo
         const unit=it.unit||"";
         const idx=newAccStock.findIndex(e=>e.desc.trim().toLowerCase()===descLower&&(e.unit||"")===unit);
         const billEntry={billId:savedItem.id,billNumber:savedItem.billNumber||"",supplier:savedItem.supplier||"",billDate:savedItem.billDate||"",qty:it.qty,unit:it.unit||"",rate:it.rate||(+it.qty?String(Math.round(lineBase(it)/(+it.qty))):""),amt:lineTotal(it),docUrl:savedItem.docUrl,docExt:savedItem.docExt};
-        if(idx>=0){newAccStock[idx]={...newAccStock[idx],qty:(+newAccStock[idx].qty||0)+(+it.qty||0),bills:[...(newAccStock[idx].bills||[]),billEntry]};}
+        if(idx>=0){newAccStock[idx]={...newAccStock[idx],hsn:bestHsn(newAccStock[idx].hsn,it.hsn)||"7103",qty:(+newAccStock[idx].qty||0)+(+it.qty||0),bills:[...(newAccStock[idx].bills||[]),billEntry]};}
         else{newAccStock.push({id:uid(),desc:it.desc,unit,qty:+it.qty||0,hsn:it.hsn||"7103",gst:it.gst||"0",bills:[billEntry]});}
       });
       setAccStock(newAccStock);
@@ -10342,7 +10345,7 @@ function PurchasesApp({onHome,startView,startBillId,onBillIdConsumed,onGoToVendo
     // Feed our Customs Descriptions dataset to the model so it maps each raw bill line to the
     // canonical customs wording + HSN (semantic match + spelling cleanup) instead of us doing a
     // brittle exact shape-token match afterwards. Each row may list several shapes for one desc.
-    const customsList=(customsDescs||[]).filter(d=>d.desc).map(d=>`- shapes [${String(d.shape||"").trim()}] => "${d.desc}" (HSN ${d.hsn||"7103"})`).join("\n");
+    const customsList=(customsDescs||[]).filter(d=>d.desc).map(d=>`- shapes [${String(d.shape||"").trim()}] => "${d.desc}" ${d.hsn?` (HSN ${d.hsn})`:""}`).join("\n");
     const customsBlock=customsList?`
 
 CUSTOMS DESCRIPTIONS (our approved list — the canonical wording used on our export/customs paperwork):
@@ -10353,7 +10356,7 @@ material and the form/finish of the goods (e.g. sawn, polished, roughly shaped, 
 palmstone, tumbled, bracelet, geode/rough, etc.). Read the vendor's description even if it is
 misspelled or abbreviated, understand what the item actually is, then:
 - set "acctDesc" to the chosen entry's description copied EXACTLY (this is the corrected, canonical text)
-- set "acctHsn" to that entry's HSN
+- set "acctHsn" to that entry's HSN (leave it empty if the entry shows none)
 If genuinely nothing in the list fits, set "acctDesc" to a cleaned-up version of the bill description
 (fix spelling, expand abbreviations, proper capitalisation) and "acctHsn" to the bill's HSN or 7103.`:"";
     const prompt=`You are extracting data from an Indian GST purchase invoice. Read carefully and extract ALL visible text.
@@ -10374,8 +10377,8 @@ Return ONLY this exact JSON structure, no markdown, no explanation:
       "stone": "main stone/material name if obvious, else empty string",
       "shape": "shape/form if obvious e.g. Palmstone, Bracelet, Sphere, Tumble, Cluster, else empty string",
       "acctDesc": "canonical customs description for this item (see CUSTOMS DESCRIPTIONS instructions below)",
-      "acctHsn": "HSN for the chosen customs description, default 7103",
-      "hsn": "HSN code from bill, default 7103 for gems",
+      "acctHsn": "HSN for the chosen customs description, empty string if it has none",
+      "hsn": "HSN/SAC code printed on THIS line of the bill, copied digit for digit (all 6 or 8 digits, e.g. 71039990). Empty string if the bill shows none — do not guess",
       "gst": "GST percentage as number string e.g. '0.25' or '3', check SGST+CGST columns. Default 0.25 if unclear",
       "qty": numeric quantity,
       "unit": "unit from bill e.g. pcs kg ct gm lot",
@@ -10409,7 +10412,9 @@ IMPORTANT: supplierName must be the FULL business name. Extract every line item 
       const exact=aiDesc?customsDescs.find(x=>String(x.desc||"").trim().toLowerCase()===aiDesc.toLowerCase()):null;
       const tokenHit=customsDescs.find(x=>customsShapeMatch(x.shape,shape))||(purchaseDesc?customsDescs.find(x=>customsShapeMatch(x.shape,purchaseDesc)):null);
       const acctDesc=aiDesc||tokenHit?.desc||purchaseDesc;
-      const acctHsn=exact?.hsn||i.acctHsn||tokenHit?.hsn||i.hsn||"7103";
+      // The bill's own printed code usually carries all 8 digits; a dataset entry may only say
+      // "7103". Take whichever is most specific so uploads stop collapsing to the heading.
+      const acctHsn=bestHsn(i.hsn,exact?.hsn,i.acctHsn,tokenHit?.hsn)||"7103";
       return{...newPurchaseBillItem(),
         purchaseDesc,material:i.stone||"",shape,
         desc:acctDesc,catDesc:acctDesc,
@@ -11265,7 +11270,7 @@ function VerifyView({draft,setDraft,fileData,vendors,purchases=[],accStock=[],cu
   });
   const setAccountingDesc=(idx,val)=>setDraft(d=>{
     const items=[...(d.items||[])];const cur=items[idx]||{};const hit=customsDescs.find(x=>customsShapeMatch(x.shape,val));
-    items[idx]={...cur,desc:hit?hit.desc||val:val,catDesc:hit?hit.desc||val:val,...(hit?{hsn:hit.hsn||cur.hsn}:{}),amt:lineTotal({...cur,desc:hit?hit.desc||val:val})};
+    items[idx]={...cur,desc:hit?hit.desc||val:val,catDesc:hit?hit.desc||val:val,...(hit?{hsn:bestHsn(cur.hsn,hit.hsn)||cur.hsn}:{}),amt:lineTotal({...cur,desc:hit?hit.desc||val:val})};
     return{...d,items,totalAmount:billSubtotal(items)+billGST(items)+(+d.shippingCharge||0)};
   });
   const setPhys=(iIdx,eIdx,k,v)=>setDraft(d=>{
@@ -11281,7 +11286,7 @@ function VerifyView({draft,setDraft,fileData,vendors,purchases=[],accStock=[],cu
     const items=(d.items||[]).map(it=>{
       if(!isLineFilled(it))return{...it,addToAccountingStock:false};
       const hit=findCustom(it.shape);
-      return{...it,addToAccountingStock:checked,desc:checked?(it.desc||it.catDesc||hit?.desc||it.purchaseDesc||""):(it.desc||""),catDesc:checked?(it.catDesc||hit?.desc||""):(it.catDesc||""),hsn:checked?(hit?.hsn||it.hsn||"7103"):(it.hsn||"7103"),gst:it.gst||"0.25"};
+      return{...it,addToAccountingStock:checked,desc:checked?(it.desc||it.catDesc||hit?.desc||it.purchaseDesc||""):(it.desc||""),catDesc:checked?(it.catDesc||hit?.desc||""):(it.catDesc||""),hsn:checked?(bestHsn(it.hsn,hit?.hsn)||"7103"):(it.hsn||"7103"),gst:it.gst||"0.25"};
     });
     return{...d,addToAccountingStock:checked,items,totalAmount:billSubtotal(items)+billGST(items)+(+d.shippingCharge||0)};
   });
@@ -11418,7 +11423,7 @@ function VerifyView({draft,setDraft,fileData,vendors,purchases=[],accStock=[],cu
                           <div key={item.id} style={{borderBottom:`1px solid ${C.border}`,padding:"8px 14px"}}>
                             <div style={{display:"grid",gridTemplateColumns:GT,gap:8,alignItems:"center"}}>
                               <input value={item.desc||item.catDesc||""} onChange={e=>setAccountingDesc(idx,e.target.value)} style={SCI} placeholder="Customs description" list="purchase-acct-descs"/>
-                              <input value={item.hsn||"7103"} onChange={e=>updateItem(idx,{hsn:e.target.value})} style={SCI}/>
+                              <input value={item.hsn??""} onChange={e=>updateItem(idx,{hsn:e.target.value})} style={SCI} placeholder="7103" inputMode="numeric"/>
                               <input type="number" value={item.rate??""} onChange={e=>updateItem(idx,{rate:e.target.value})} style={{...SCI,textAlign:"right"}} placeholder="0"/>
                               <select value={item.unit||"kg"} onChange={e=>updateItem(idx,{unit:e.target.value})} style={{...SCI,cursor:"pointer"}}>{UNITS.map(u=><option key={u}>{u}</option>)}</select>
                               <input type="number" value={item.qty??""} onChange={e=>updateItem(idx,{qty:e.target.value})} style={{...SCI,textAlign:"right"}} placeholder="0"/>
@@ -24336,6 +24341,8 @@ function BoiRemittanceForm({showToast}){
   const [docPicks,setDocPicks]=useState({}); // the linked invoices' own documents: key → ticked
   const [amountTouched,setAmountTouched]=useState(false); // user typed their own figure
   const [shipTouched,setShipTouched]=useState(false); // user picked their own shipping date
+  const [check,setCheck]=useState(null); // the set check: {sig,flags,at} or {sig,reading:true}
+  const checkReads=useRef(new Map()); // document key → what the AI read off it
   const setF=(k,v)=>setForm(f=>({...f,[k]:v}));
   const addInv=()=>setForm(f=>({...f,invoices:[...f.invoices,blankInv()]}));
   const removeInv=i=>setForm(f=>({...f,invoices:f.invoices.filter((_,j)=>j!==i)}));
@@ -24673,6 +24680,38 @@ function BoiRemittanceForm({showToast}){
     return null;
   })();
 
+  /* The set check: reads the shipping bill, label/AWB, inward advice and any
+     invoice file going in, then compares invoice ↔ shipping bill, HAWB ↔ AWB and
+     remitter ↔ buyer. Each document is read once (cached by its key). */
+  const checkSig=[form.purpose,form.remName.trim(),...boiLinked.map(i=>`${i.id}:${i.totalAmt}`),...boiSet.items.filter(i=>i.on&&!i.missing).map(i=>i.key)].join("|");
+  const checkFresh=check&&!check.reading&&check.sig===checkSig;
+  const runCheck=async()=>{
+    const sig=checkSig;
+    setCheck({sig,reading:true});
+    const {readBoiDoc,compareBoiSet}=await import("./src/boiChecker.js");
+    const buyerOf=inv=>inv.buyerName||inv.buyer||ngBuyers.find(b=>b.id===inv.buyerId)?.name||"";
+    const got={sb:[],awb:[],adv:[],inv:[]},failed=[];
+    await Promise.all(boiSet.items.filter(it=>it.on&&!it.missing&&it.from!=="record"&&["sb","awb","adv","inv"].includes(it.kind)).map(async it=>{
+      const label=it.from==="added"?(it.doc.label||it.doc.name):(it.att.label||kindName(it.kind));
+      try{
+        let r=checkReads.current.get(it.key);
+        if(!r){
+          const blob=it.from==="added"?(it.doc.file||await (await fetch(it.doc.url)).blob()):await (await fetch(it.att.url)).blob();
+          r=await readBoiDoc(await boiDocPart(blob,label),it.kind);
+          checkReads.current.set(it.key,r);
+        }
+        if(r)got[it.kind].push({...r,label});
+      }catch(e){failed.push(`${label}: couldn't be read (${e?.message||e})`);}
+    }));
+    const flags=compareBoiSet({purpose:form.purpose,remName:form.remName,
+      invoices:boiLinked.map(inv=>({invNo:inv.invNo,totalAmt:inv.totalAmt,currency:inv.currency,buyer:buyerOf(inv),consignee:inv.consigneeSameAsBuyer===false?inv.consigneeName:""})),
+      sb:got.sb,awb:got.awb,adv:got.adv,invFiles:got.inv});
+    failed.forEach(f=>flags.unshift({ok:false,title:"Not checked",detail:f}));
+    const res={sig,flags,at:Date.now()};
+    setCheck(res);
+    return res;
+  };
+
   const generate=async()=>{
     if(!form.remName.trim()){showToast("Enter remitter name");return;}
     if(!form.amount||+form.amount<=0){showToast("Enter amount");return;}
@@ -24729,6 +24768,14 @@ function BoiRemittanceForm({showToast}){
           console.warn("BOI document left out:",name,e?.message||e);
           failed.push(`${name} — couldn't be read (${e?.message||e})`);
         }
+      }
+      // Check the set before it goes: anything that doesn't match is asked about.
+      let chk=checkFresh?check:null;
+      if(!chk){showToast("Checking the documents against each other…");try{chk=await runCheck();}catch(e){chk={flags:[{ok:false,title:"Check didn't run",detail:e?.message||String(e)}]};setCheck(null);}}
+      const bad=(chk?.flags||[]).filter(f=>!f.ok);
+      if(bad.length&&!window.confirm(`⚠ The documents don't agree:\n\n• ${bad.map(f=>`${f.title} — ${f.detail}`).join("\n• ")}\n\nDownload the set anyway?`)){
+        showToast("Not downloaded — fix what's flagged in the check, then download again");
+        return;
       }
       const gaps=[...boiSet.missing.map(m=>`${missingText(m)} — not on file`),...failed];
       if(gaps.length&&!window.confirm(`${form.purpose==="a"?"Against a shipment BOI wants the whole set":"BOI asks for these"}, and this PDF would go without:\n\n• ${gaps.join("\n• ")}\n\nDownload it anyway?`)){
@@ -25231,6 +25278,27 @@ function BoiRemittanceForm({showToast}){
             <input value={form.sigPlace} onChange={e=>setF("sigPlace",e.target.value)} style={FI}/>
           </Field>
         </div>
+      </div>
+
+      {/* The set check */}
+      <div style={{background:C.surface,border:`1.5px solid ${checkFresh&&check.flags.some(f=>!f.ok)?C.red:C.border}`,borderRadius:10,padding:"16px 20px",marginBottom:14}}>
+        <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:check?10:0}}>
+          <div style={{flex:1}}>
+            <div style={{fontSize:13,fontWeight:700,color:C.ink}}>Set check</div>
+            <div style={{fontSize:11.5,color:C.inkMid,lineHeight:1.5}}>Invoice ↔ shipping bill · HAWB on the shipping bill ↔ AWB on the label · remitter on the advice ↔ invoice buyer. Runs on its own before the download.</div>
+          </div>
+          <button type="button" onClick={()=>runCheck().catch(e=>{setCheck(null);showToast("Check failed — "+(e?.message||"try again"));})} disabled={check?.reading} style={{...smallBtn(C.blue,C.blueBg),opacity:check?.reading?.5:1,flexShrink:0}}>{check?.reading?"Reading documents…":checkFresh?"Check again":"Check the set"}</button>
+        </div>
+        {check&&!check.reading&&(<>
+          {!checkFresh&&<div style={{fontSize:11,color:C.amber,marginBottom:6}}>The set has changed since this check — check again.</div>}
+          {!check.flags.length&&<div style={{fontSize:12,color:C.inkMid}}>Nothing to compare yet — add the shipping bill, label and inward advice.</div>}
+          {[...check.flags].sort((a,b)=>a.ok-b.ok).map((f,i)=>(
+            <div key={i} style={{display:"flex",gap:8,padding:"6px 8px",borderRadius:6,marginBottom:3,background:f.ok?C.greenBg:C.redBg}}>
+              <span style={{fontSize:12,fontWeight:700,color:f.ok?C.green:C.red,flexShrink:0}}>{f.ok?"✓":"⚠"}</span>
+              <div style={{minWidth:0}}><div style={{fontSize:12,fontWeight:600,color:f.ok?C.green:C.red}}>{f.title}</div><div style={{fontSize:11,color:C.inkMid,wordBreak:"break-word"}}>{f.detail}</div></div>
+            </div>
+          ))}
+        </>)}
       </div>
 
       <div style={{display:"flex",justifyContent:"flex-end",alignItems:"center",gap:14,flexWrap:"wrap"}}>
