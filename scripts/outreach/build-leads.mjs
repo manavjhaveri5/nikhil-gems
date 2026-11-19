@@ -55,7 +55,7 @@ function hookFor(l) {
   const h = HOOKS[l.name] || HOOKS[l.display]; if (h) return h;
   if (l.source === "etsy" && l.sold >= 500) {
     const n = l.sold >= 10000 ? `${Math.floor(l.sold / 1000)}k` : l.sold >= 1000 ? `${(Math.floor(l.sold / 100) / 10).toString()}k` : `${Math.floor(l.sold / 100) * 100}`;
-    return l.since ? `${n}+ sales since ${l.since} says a lot about how much your customers love your shop.` : `${n}+ sales says a lot about how much your customers love your shop.`;
+    return l.since ? `${n}+ sales since ${String(l.since).slice(0, 4)} says a lot about how much your customers love your shop.` : `${n}+ sales says a lot about how much your customers love your shop.`;
   }
   return "";
 }
@@ -176,7 +176,7 @@ for (const f of ins) for (const l of JSON.parse(readFileSync(f, "utf8"))) {
   const d = drafts({ ...l, segment }, shapes);
   const channel = NO_COLD_EMAIL.has(l.country) || !l.email ? "instagram" : "email";
   const why = [
-    segment === "etsy_reseller" ? `Etsy shop, ${l.sold?.toLocaleString() || "?"} sales since ${l.since || "?"}, ${l.listings || "?"} listings` : SEG_WHY(segment, l),
+    segment === "etsy_reseller" ? `Etsy shop, ${l.sold?.toLocaleString() || "?"} sales since ${String(l.since || "?").slice(0, 4)}, ${l.listings || "?"} listings` : SEG_WHY(segment, l),
     shapes.length ? `sells ${shapes.map(k => NICE[k]).join(", ")}` : "",
     (l.signals || []).includes("wholesale") ? "mentions wholesale (may buy in bulk already, or be a supplier)" : "",
     !contact ? "no email or Instagram found: look them up on Instagram first" : "",

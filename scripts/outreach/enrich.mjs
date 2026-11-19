@@ -29,7 +29,10 @@ for (const l of leads) {
   let html = home;
   for (const u of extra) html += await page(u);
   const text = html.replace(/<script[\s\S]*?<\/script>|<style[\s\S]*?<\/style>/gi, " ").replace(/<[^>]+>/g, " ").replace(/&nbsp;|&amp;/g, " ").replace(/\s+/g, " ");
-  const mails = [...new Set([...html.matchAll(/(?:mailto:)?([A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,})/gi)].map(m => m[1].toLowerCase()).filter(m => !BADMAIL.test(m)))];
+  const mails = [...new Set([...html.matchAll(/(?:mailto:)?([A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,})/gi)].map(m => m[1].toLowerCase())
+    // Some themes hide the address in ROT13 (support@shop.com shows as fhccbeg@fubc.pbz).
+    .map(m => /\.(pbz|bet|arg|hx|qr|pb)$/.test(m) ? m.replace(/[a-z]/g, c => String.fromCharCode(97 + (c.charCodeAt(0) - 84) % 26)) : m)
+    .filter(m => !BADMAIL.test(m) && !/domainmarket|forsale|sedo\.com|dan\.com/.test(m)))];
   const host = new URL(o).hostname.replace(/^www\./, "");
   mails.sort((a, b) => (b.endsWith(host) - a.endsWith(host)) || (/^(hello|info|shop|contact|wholesale|buying)/.test(b) - /^(hello|info|shop|contact|wholesale|buying)/.test(a)));
   if (!l.email && mails[0]) l.email = mails[0];

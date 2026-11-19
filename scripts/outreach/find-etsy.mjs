@@ -18,7 +18,12 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
 const RESERVE = 2500;
 let left = Infinity;
 const guard = r => { const v = +r.headers.get("x-remaining-today"); if (Number.isFinite(v)) left = v; if (left < RESERVE) throw new Error(`Etsy daily budget: only ${left} requests left, stopping to leave ${RESERVE} for the ERP`); };
-const get = async u => { for (let i = 0; i < 3; i++) { let r; try { r = await fetch(`https://openapi.etsy.com/v3/application/${u}`, { headers: H, signal: AbortSignal.timeout(15000) }); } catch { await sleep(1000); continue; } if (r.status === 429) throw new Error("Etsy rate limit hit: stop"); guard(r); return r.ok ? r.json() : null; } return null; };
+const get = async u => { for (let i = 0; i < 3; i++) { let r; try { r = await fetch(`https://openapi.etsy.com/v3/application/${u}`, { headers: H, signal: AbortSignal.timeout(15000) }); } catch { await sleep(1000); continue; } if (r.status === 429) {
+    // 5-a-second limit: wait and try again. Daily limit (long Retry-After or nothing left today): stop.
+    const wait = +r.headers.get("retry-after") || 0, rem = +r.headers.get("x-remaining-today");
+    if (wait <= 5 && !(Number.isFinite(rem) && rem < RESERVE)) { await sleep(1500 + wait * 1000); continue; }
+    throw new Error("Etsy daily rate limit hit: stop");
+  } guard(r); return r.ok ? r.json() : null; } return null; };
 const KW = ["crystal sphere", "palm stone crystal", "tumbled stones", "crystal heart carving", "crystal tower", "raw crystal", "healing crystals", "crystal shop", "himalayan quartz", "crystal bowl gemstone",
   "lepidolite", "rose quartz sphere", "moonstone palm stone", "crystal worry stone", "chakra crystals set", "apophyllite", "zeolite cluster", "rhodonite", "malachite sphere", "mini crystal hearts", "crystal wand", "crystal pyramid", "crystal mystery box", "bulk crystals"];
 const shops = new Map();
@@ -48,7 +53,7 @@ async function check(id) {
     instagram: /^(gmail|yahoo|hotmail|outlook|icloud)/i.test(ig) ? "" : ig, email, website: site, blurb: String(s.announcement || "").slice(0, 400) });
 }
 // 4 at a time with a short pause: well under Etsy's 10 requests a second.
-try { for (let i = 0; i < ids.length; i += 4) { await Promise.all(ids.slice(i, i + 4).map(check)); await sleep(500); } } catch (err) { console.error(String(err.message || err), "· saving", keep.length, "shops found so far"); }
+try { for (let i = 0; i < ids.length; i += 3) { await Promise.all(ids.slice(i, i + 3).map(check)); await sleep(1000); } } catch (err) { console.error(String(err.message || err), "· saving", keep.length, "shops found so far"); }
 keep.sort((a, b) => b.hits - a.hits || b.sold - a.sold);
 writeFileSync(out, JSON.stringify(keep, null, 1));
 const by = {}; for (const k of keep) by[k.country] = (by[k.country] || 0) + 1;
