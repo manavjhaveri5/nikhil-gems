@@ -22,6 +22,18 @@ for (const t of ["trade_buyers", "store_customers", "store_orders"])
 const host = u => { try { return new URL(/^https?:/.test(u) ? u : `https://${u}`).hostname.replace(/^www\./, "").toLowerCase(); } catch { return ""; } };
 const FREE = /^(gmail|googlemail|yahoo|ymail|hotmail|outlook|live|msn|icloud|me|mac|aol|proton|protonmail|gmx|web|t-online|btinternet|bigpond|xtra|orange|free|libero|wanadoo|comcast|att|verizon)\./;
 const known = new Set();
+// Shops already marked on the Outreach page as our customer, a customer, not interested or bounced
+// stay out, even when they turn up again from another source (Etsy vs their website).
+const BLOCK = ["ours", "customer", "no", "bounced"];
+const normName = n => String(n || "").toLowerCase().replace(/&amp;/g, "&").replace(/[^a-z0-9]+/g, "");
+for (let from = 0; ; from += 1000) {
+  const { data, error } = await sb.from("app_rows").select("data").eq("key", "outreach-leads-v1").eq("deleted", false).range(from, from + 999);
+  if (error) throw new Error(error.message);
+  for (const { data: o } of data) if (BLOCK.includes(o.stage)) {
+    for (const v of [String(o.email || "").toLowerCase(), host(o.website), String(o.instagram || "").toLowerCase(), `name:${normName(o.name)}`]) if (v && v !== "name:") known.add(v);
+  }
+  if (data.length < 1000) break;
+}
 for (const b of buyers || []) { const e = String(b.email || "").toLowerCase(); if (e) { known.add(e); const d = e.split("@")[1]; if (d && !FREE.test(d)) known.add(d); } }
 
 const WA = "+91 96192 48797", SITE = "https://trade.eartheditions.co";
@@ -143,7 +155,7 @@ let dropped = { known: 0, dup: 0, nocontact: 0 };
 for (const f of ins) for (const l of JSON.parse(readFileSync(f, "utf8"))) {
   if (l.drop) continue;
   const h = host(l.website), em = String(l.email || "").toLowerCase();
-  if ((em && known.has(em)) || (h && known.has(h)) || (em && known.has(em.split("@")[1]))) { dropped.known++; continue; }
+  if ((em && known.has(em)) || (h && known.has(h)) || (em && known.has(em.split("@")[1])) || (l.instagram && known.has(l.instagram.toLowerCase())) || known.has(`name:${normName(l.display || l.name)}`)) { dropped.known++; continue; }
   const k = h || (l.instagram || "").toLowerCase() || l.etsy_url || l.name.toLowerCase();
   if (seen.has(k) || (l.instagram && seen.has(l.instagram.toLowerCase()))) { dropped.dup++; continue; }
   seen.add(k); if (l.instagram) seen.add(l.instagram.toLowerCase());

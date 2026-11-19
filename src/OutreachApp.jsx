@@ -26,7 +26,8 @@ const addDays = (d, n) => new Date(Date.parse(`${d}T00:00:00Z`) + n * 864e5).toI
 const FLAG = { US: "🇺🇸", GB: "🇬🇧", AU: "🇦🇺", NZ: "🇳🇿", JP: "🇯🇵", TW: "🇹🇼", DE: "🇩🇪", NL: "🇳🇱", FR: "🇫🇷", IT: "🇮🇹", ES: "🇪🇸", IE: "🇮🇪", CA: "🇨🇦", BE: "🇧🇪", AT: "🇦🇹", CH: "🇨🇭", SE: "🇸🇪", DK: "🇩🇰" };
 const SEG = { etsy_reseller: "Etsy shop", online_shop: "Online shop", physical_shop: "Shop (walk-in)", live_seller: "Live seller" };
 const STAGE = { new: ["Not contacted", C.inkMid, C.card], sent: ["Sent", C.blue, C.blueBg], followed_up: ["Followed up", C.blue, C.blueBg], replied: ["Replied", C.green, C.greenBg],
-  talking: ["In talks", C.green, C.greenBg], sample: ["Sample / trial", ACCENT, "#F3E9DF"], customer: ["Customer", "#fff", C.green], no: ["Not interested", C.inkFaint, C.card], bounced: ["Bounced", C.red, C.redBg], skip: ["Skipped", C.inkFaint, C.card] };
+  talking: ["In talks", C.green, C.greenBg], sample: ["Sample / trial", ACCENT, "#F3E9DF"], customer: ["Customer", "#fff", C.green], no: ["Not interested", C.inkFaint, C.card], bounced: ["Bounced", C.red, C.redBg], skip: ["Skipped", C.inkFaint, C.card],
+  ours: ["Already our customer", C.green, C.greenBg] };
 const OPEN = ["sent", "followed_up"];
 // Safe daily limits for an ordinary mailbox and a young Instagram account. The server enforces
 // the email ones too (lib/outreach.js): 20 new shops, 60 emails in all with follow-ups.
@@ -127,8 +128,8 @@ function Lead({ l, onSave, toast, today, open: open0 = false, picked, onPick }) 
       <div>
         <span style={lab}>What happened</span>
         <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-          {[["replied", "Replied"], ["talking", "In talks"], ["sample", "Sample / trial"], ["customer", "Customer 🎉"], ["no", "Not interested"], ["bounced", "Bounced"], ["skip", "Skip"], ["new", "Reset"]].map(([s, t]) =>
-            <button key={s} onClick={() => mark(s, s === "replied" ? { replied_at: today, next_followup: null } : ["no", "bounced", "skip", "customer"].includes(s) ? { next_followup: null } : {})} style={l.stage === s ? btn(C.ink, "#fff") : btn()}>{t}</button>)}
+          {[["replied", "Replied"], ["talking", "In talks"], ["sample", "Sample / trial"], ["customer", "Customer 🎉"], ["no", "Not interested"], ["bounced", "Bounced"], ["ours", "Already our customer"], ["skip", "Skip"], ["new", "Reset"]].map(([s, t]) =>
+            <button key={s} onClick={() => mark(s, s === "replied" ? { replied_at: today, next_followup: null } : ["no", "bounced", "skip", "customer", "ours"].includes(s) ? { next_followup: null } : {})} style={l.stage === s ? btn(C.ink, "#fff") : btn()}>{t}</button>)}
           {note === null ? <button onClick={() => setNote(l.note || "")} style={btn()}>{l.note ? "Edit note" : "Add note"}</button> : null}
         </div>
         {note !== null && <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
