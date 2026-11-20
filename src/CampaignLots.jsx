@@ -66,6 +66,27 @@ export async function posterFromVideo(src, name) {
   } finally { if (typeof src !== "string") URL.revokeObjectURL(url); }
 }
 
+/* Several videos joined end to end into one MP4, in the order given. Clips off
+   the same phone are copied as they are (no quality lost, quick); otherwise
+   they're re-encoded at the first clip's size. */
+export async function joinVideos(files, onStep) {
+  const [{ openClip, closeClip, exportVideo }, { NEUTRAL, NO_GEO }, { emptyCurves }] =
+    await Promise.all([import("./videoLab.js"), import("./glPipeline.js"), import("./ToneCurve.jsx")]);
+  const clips = [];
+  try {
+    for (let i = 0; i < files.length; i++) {
+      onStep?.(`Reading video ${i + 1} of ${files.length}…`);
+      clips.push(await openClip(files[i], files[i].name));
+    }
+    const { blob, lossless } = await exportVideo({
+      clips, recipe: { touched: false, adjust: NEUTRAL, bands: [], curves: emptyCurves(), geo: NO_GEO },
+      onProgress: p => onStep?.(`Joining ${files.length} videos${clips.some(c => c.videoKey !== clips[0].videoKey) ? " (re-encoding)" : ""}… ${Math.round(p * 100)}%`),
+    });
+    void lossless;
+    return new File([blob], `lot-${Date.now().toString(36)}.mp4`, { type: "video/mp4" });
+  } finally { clips.forEach(closeClip); }
+}
+
 /* A video to YouTube as Unlisted, through Social's connected channel. Takes a
    File (stored first, over 50 MB a 1080p copy) or a stored URL. Returns
    { url: "https://youtu.be/…", id, note }. */
@@ -138,16 +159,19 @@ export default function LotsPanel({ lots, setLots, picked, togglePick, onChange,
   };
   /* Upload the video here: it goes to YouTube as Unlisted on Social's channel,
      its link fills in, and the poster is drawn from the file itself. */
-  const uploadVideo = async f => {
-    if (!f) return;
+  const uploadVideo = async files => {
+    const list = (Array.isArray(files) ? files : [files]).filter(Boolean);
+    if (!list.length) return;
     setBusy(true); setErr("");
     try {
+      // Several picked: joined into one video, in the order picked, before it goes up.
+      const f = list.length > 1 ? await joinVideos(list, setStep) : list[0];
       let poster = "";
       try { setStep("Taking a frame for the email…"); poster = await posterFromVideo(f, edit.id); } catch {}
-      const d = await videoToYoutube(f, { title: edit.title || f.name.replace(/\.[^.]+$/, ""), text: edit.details, onStep: setStep });
+      const d = await videoToYoutube(f, { title: edit.title || list[0].name.replace(/\.[^.]+$/, ""), text: edit.details, onStep: setStep });
       const vid = youtubeId(d.url);
       set({ videoUrl: d.url, ...(poster ? { poster, posterFor: vid } : {}) });
-      showToast?.(`✓ On YouTube (unlisted)${d.note ? ` — ${d.note}` : ""}`, d.note ? 9000 : 4000);
+      showToast?.(`✓ ${list.length > 1 ? `${list.length} videos joined and on` : "On"} YouTube (unlisted)${d.note ? ` — ${d.note}` : ""}`, d.note ? 9000 : 4000);
     } catch (e) { setErr(e.message || String(e)); }
     setStep(""); setBusy(false);
   };
@@ -164,8 +188,8 @@ export default function LotsPanel({ lots, setLots, picked, togglePick, onChange,
     return (
       <div style={{ display: "grid", gap: 9, overflowY: "auto" }}>
         <label style={{ background: C.card, border: `1px dashed ${C.border}`, borderRadius: 7, padding: "9px 12px", fontSize: 12.5, fontWeight: 700, cursor: busy ? "default" : "pointer", textAlign: "center", opacity: busy ? .6 : 1 }}>
-          {yt ? "⬆ Upload a different video" : "⬆ Upload the video — it goes to YouTube as unlisted"}
-          <input type="file" accept="video/*" disabled={busy} style={{ display: "none" }} onChange={e => { uploadVideo(e.target.files?.[0]); e.target.value = ""; }} />
+          {yt ? "⬆ Upload a different video" : "⬆ Upload the video — pick several to join them into one"}
+          <input type="file" accept="video/*" multiple disabled={busy} style={{ display: "none" }} onChange={e => { const fs = [...(e.target.files || [])]; e.target.value = ""; uploadVideo(fs); }} />
         </label>
         {step && <div style={{ fontSize: 12, color: C.inkMid }}>{step}</div>}
         <div><span style={lab}>…or paste a YouTube link (unlisted is fine)</span><input value={edit.videoUrl} onChange={e => set({ videoUrl: e.target.value })} placeholder="https://youtu.be/…" style={FI()} /></div>
