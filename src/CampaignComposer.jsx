@@ -1,3 +1,4 @@
+import GmailSend from "./GmailSend.jsx";
 import { useState, useEffect, useMemo } from "react";
 import { C, mob, FI } from "./lmTheme.js";
 import { loadK, loadKFresh, saveK as saveKV, upsertItemK, upsertVersionedItemK, uid } from "./utils.js";
@@ -488,7 +489,8 @@ export default function CampaignComposer({ listings = [], onClose, showToast, dr
   /* A send is the only thing that marks a listing as mailed — a draft or a test
      is not, since neither reaches the list. Best-effort: the campaign is already
      out the door, so a failed stamp is reported, never thrown. */
-  const recordSend = async () => {
+  const recordSend = async (sendId = campaignId) => {
+    const campaignId = sendId;
     const sentAt = new Date().toISOString();
     const fresh = await loadK(LIST_KEY).catch(() => null);
     const byId = new Map((Array.isArray(fresh) ? fresh : listings).map(l => [l.id, l]));
@@ -996,6 +998,12 @@ export default function CampaignComposer({ listings = [], onClose, showToast, dr
                 </>}
               </div>
             </div>
+            <GmailSend payload={payloadBase} subject={subject} preheader={preheader} senderName={senderName} draftId={draftId}
+              testTo={testTo} setTestTo={setTestTo} showToast={showToast} ready={!!products.length && !!subject && !!senderName}
+              onDone={async id => {
+                await saveDraft({ status: "sent", sentAt: new Date().toISOString(), gmailSendId: id }).catch(() => {});
+                try { await recordSend(id); } catch (e) { showToast?.(`Sent — but the listings weren't marked: ${e.message}`); }
+              }} />
             <div style={{ fontSize: 11, color: C.inkFaint, lineHeight: 1.6 }}>
               Everything is saved in the ERP as you go — close it and carry on later from the Omnisend page. Nothing reaches Omnisend until "Final"; after an edit, "Final" replaces the draft there rather than adding another. Omnisend appends its own unsubscribe footer to campaigns; confirm it's present in the test email before sending. Sending is irreversible.
             </div>

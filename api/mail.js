@@ -2,6 +2,8 @@ import { requireUser, adminClient, cronKeyOk } from "../lib/auth.js";
 import { runInboxScan, SCAN_KEY } from "../lib/inbox-scan.js";
 import { outreachSend, outreachCheck, outreachCounts, outreachScan } from "../lib/outreach.js";
 import { tradeApproved, checkoutFollowup, orderShipped } from "../lib/mailTemplates.js";
+import * as list from "../lib/mailList.js";
+import { omniList, rowsOf, buildCampaignHtml } from "./omnisend.js";
 
 const STORE = "https://eartheditions.co";
 
@@ -11,6 +13,8 @@ const STORE = "https://eartheditions.co";
    by a signed-in staff member. Answers 503 until RESEND_API_KEY is set, and the
    caller falls back (the Omnisend automation, or a draft in the mail app). */
 export default async function handler(req, res) {
+  // The unsubscribe link in Gmail campaigns: public, checked by its signed token.
+  if (req.query?.action === "unsub") return unsub(req, res);
   if (req.method !== "POST") return res.status(405).json({ error: "POST only" });
   // The 07:00 IST inbox scan comes from pg_cron with Raj's key; Sir can also run it from Home.
   if (req.body?.action === "gmail_scan" && await cronKeyOk(req, "raj")) return gmail(req, res);
@@ -110,15 +114,49 @@ async function gmail(req, res) {
       // Purchase bills with our GSTIN, remittance advices and shipping papers → Home's "This morning" card.
       const scan = await runInboxScan({ bridge: call, days: +b.days || 3, trigger: b.trigger === "manual" ? "manual" : "cron" });
       // Outreach replies ride on the same morning job: sign-ups onto Omnisend, "no thanks" stopped, bounces marked.
-      let outreach;
+      let outreach, campaigns;
       try { outreach = await outreachScan({ bridge: call, trigger: "cron" }); } catch (e) { outreach = { error: e.message }; }
-      return res.json({ ...scan, outreach });
+      // Replies, unsubscribes and bounces from Gmail campaigns.
+      try { campaigns = await list.scan(call); } catch (e) { campaigns = { error: e.message }; }
+      return res.json({ ...scan, outreach, campaigns });
     }
     // Wholesale outreach: one lead per call, its own stored draft only (lib/outreach.js).
     if (b.action === "gmail_outreach_send") return res.json(await outreachSend({ bridge: call, id: String(b.id || "") }));
     if (b.action === "gmail_outreach_check") return res.json(await outreachCheck({ bridge: call, id: String(b.id || "") }));
     if (b.action === "gmail_outreach_counts") return res.json(await outreachCounts());
     if (b.action === "gmail_outreach_scan") return res.json(await outreachScan({ bridge: call, trigger: b.force ? "manual" : "page" }));
+    // Campaigns from our own Gmail (lib/mailList.js).
+    if (b.action === "gmail_list_summary") {
+      const contacts = await list.allContacts();
+      return res.json({ ...list.listSummary(contacts), sends: await list.listSends(), dayCap: list.DAY_CAP, from: list.FROM_EMAIL });
+    }
+    if (b.action === "gmail_list_contacts") {
+      const q = String(b.q || "").toLowerCase().trim();
+      const all = await list.allContacts();
+      const hit = all.filter(c => (!b.status || c.status === b.status) && (!q || c.id.includes(q) || `${c.firstName || ""} ${c.lastName || ""}`.toLowerCase().includes(q) || (c.tags || []).some(t => t.toLowerCase().includes(q))));
+      hit.sort((x, y) => String(y.updated || "").localeCompare(String(x.updated || "")));
+      return res.json({ contacts: hit.slice(0, 200), count: hit.length });
+    }
+    if (b.action === "gmail_list_import") return res.json(await list.importFromOmnisend({ omniList, rowsOf }));
+    if (b.action === "gmail_list_set") {
+      const st = String(b.status || "");
+      if (st === "subscribed") return res.json(await list.syncContact({ email: b.email, subscribe: "resubscribe", addTags: b.addTags || [] }));
+      if (!["unsubscribed", "nonSubscribed"].includes(st)) return res.status(400).json({ error: "Unknown status" });
+      return res.json(await list.setStatus(b.email, st, "erp"));
+    }
+    if (b.action === "gmail_campaign_create") {
+      if (!Array.isArray(b.products) || !b.products.length) return res.status(400).json({ error: "Pick at least one product" });
+      const html = buildCampaignHtml(b);
+      return res.json(await list.createSend({ html, subject: b.subject, preheader: b.preheader, senderName: b.senderName, tags: b.tags || [], excludeTags: b.excludeTags || [], draftId: b.draftId }));
+    }
+    if (b.action === "gmail_campaign_audience") {
+      const n = list.audienceOf(await list.allContacts(), b.tags || [], b.excludeTags || []).length;
+      return res.json({ count: n });
+    }
+    if (b.action === "gmail_campaign_test") return res.json(await list.sendTest({ id: b.id, to: b.to }, call));
+    if (b.action === "gmail_campaign_batch") return res.json(await list.sendBatch({ id: b.id, start: !!b.start }, call));
+    if (b.action === "gmail_campaign_status") return res.json(await list.setSendStatus({ id: b.id, status: b.status }));
+    if (b.action === "gmail_campaign_scan") return res.json(await list.scan(call));
     return res.status(400).json({ error: "Unknown Gmail action" });
   } catch (e) {
     return res.status(502).json({ error: e.message || "Gmail search failed" });
@@ -181,4 +219,24 @@ async function shipStoreOrder(req, res) {
   notes = [notes, `Shipped email sent ${day} (${carrier || "carrier"} ${tracking}).`].filter(Boolean).join(" ");
   await db.from("store_orders").update({ notes }).eq("id", o.id);
   return res.json({ ok: true, emailed: true, id: d.id, to, tracking_url: url, notes });
+}
+
+/* GET shows a page with one button (so a mail scanner opening the link can't
+   unsubscribe anyone); POST unsubscribes — the button, or Gmail's one-click
+   unsubscribe (RFC 8058), which POSTs "List-Unsubscribe=One-Click" here. */
+async function unsub(req, res) {
+  const email = list.readUnsubParams(req.query || {});
+  const page = (title, body) => res.status(email ? 200 : 400).setHeader("Content-Type", "text/html; charset=utf-8").send(`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title></head>
+<body style="margin:0;background:#f6f3ee;font-family:Georgia,serif;color:#1a1308;"><div style="max-width:440px;margin:12vh auto;padding:32px 28px;background:#fff;text-align:center;border:1px solid #e6dfd3;">
+<div style="font-size:22px;letter-spacing:3px;font-weight:700;">EARTH</div><div style="font-size:10px;letter-spacing:4px;color:#8a7f6d;margin-bottom:26px;">EDITIONS</div>${body}</div></body></html>`);
+  if (!email) return page("Link not valid", `<p style="font-size:15px;line-height:1.6;">This unsubscribe link isn't valid. Reply to any of our emails with "unsubscribe" and we'll take you off the list.</p>`);
+  const esc = v => String(v).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  if (req.method === "POST") {
+    try { await list.unsubscribe(email, String(req.query.s || ""), "link"); }
+    catch (e) { return page("Try again", `<p style="font-size:15px;">Something went wrong. Please try again, or reply "unsubscribe" to any of our emails.</p>`); }
+    return page("Unsubscribed", `<p style="font-size:17px;margin:0 0 10px;">You're unsubscribed.</p><p style="font-size:14px;color:#6b6152;line-height:1.6;margin:0;">${esc(email)} won't get our trade emails any more.</p>`);
+  }
+  const action = `/api/mail?${new URLSearchParams(req.query).toString()}`;
+  return page("Unsubscribe", `<p style="font-size:15px;line-height:1.6;margin:0 0 22px;">Stop trade emails to <strong>${esc(email)}</strong>?</p>
+<form method="post" action="${esc(action)}"><button type="submit" style="background:#1a1308;color:#faf0dc;border:0;padding:12px 26px;font-size:13px;letter-spacing:1.5px;cursor:pointer;">UNSUBSCRIBE</button></form>`);
 }

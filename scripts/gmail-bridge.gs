@@ -14,7 +14,11 @@
    3. Deploy → New deployment → type "Web app": Execute as "Me",
       Who has access "Anyone" → Deploy → allow Gmail access when Google asks.
    4. Copy the Web app URL into Vercel as GMAIL_BRIDGE_URL.
-   Without the secret every request is refused, so the URL alone gets nobody in. */
+   Without the secret every request is refused, so the URL alone gets nobody in.
+
+   Campaigns (send_raw) need the Gmail API service, once:
+   Editor → Services (+) → Gmail API → Add. The ERP builds each email itself
+   (one person per email, with unsubscribe headers); this only hands it to Gmail. */
 
 function doPost(e) {
   var b = {};
@@ -53,6 +57,22 @@ function doPost(e) {
     var opts = { name: String(b.name || "").slice(0, 80) };
     var sent = GmailApp.createDraft(to, String(b.subject).slice(0, 200), String(b.body).slice(0, 20000), opts).send();
     return out({ ok: true, messageId: sent.getId(), threadId: sent.getThread().getId() });
+  }
+  if (b.action === "send_raw") {
+    // Campaign emails, a small batch per call. Each must be addressed to one person.
+    var msgs = (b.messages || []).slice(0, 25);
+    var results = msgs.map(function (m) {
+      try {
+        var head = Utilities.newBlob(Utilities.base64DecodeWebSafe(String(m.raw || ""))).getDataAsString().split("\r\n\r\n")[0];
+        var to = (/^To: (.+)$/m.exec(head) || [])[1] || "";
+        if (/[,;]/.test(to) || /^(Cc|Bcc):/mi.test(head)) return { error: "One recipient per email" };
+        var r = Gmail.Users.Messages.send({ raw: m.raw }, "me");
+        return { id: r.id, threadId: r.threadId };
+      } catch (err) {
+        return { error: String(err && err.message || err).slice(0, 300) };
+      }
+    });
+    return out({ ok: true, results: results });
   }
   return out({ error: "Unknown action" });
 }

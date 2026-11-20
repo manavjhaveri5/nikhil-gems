@@ -352,7 +352,7 @@ function buildEditorialHtml({
 </body></html>`;
 }
 
-function buildCampaignHtml({
+export function buildCampaignHtml({
   brand = "Nikhil Gems", heading = "", intro = "", products = [],
   ctaLabel = "View product", footer = "",
   // Design options — all optional.
@@ -448,7 +448,19 @@ function buildCampaignHtml({
 /* Tag a subscriber by email, creating the contact if Omnisend has never seen them.
    Shared by the contact_tag action and the ERP's own server code (lib/outreach.js). */
 const R = (status, body) => ({ status, body });
+/* Every tag change also lands on the ERP's own mailing list (lib/mailList.js),
+   which Gmail campaigns send to. Best-effort: Omnisend's answer is what counts here. */
 export async function tagContact(body) {
+  const r = await tagContactOmnisend(body);
+  if (r.status === 200 || r.status === 404) {
+    try {
+      const { syncContact } = await import("../lib/mailList.js");
+      await syncContact({ ...body, subscribe: body.subscribe === false ? false : (body.subscribe ? true : undefined), source: body.source || "erp" });
+    } catch (e) { console.error("mail list sync:", e.message); }
+  }
+  return r;
+}
+async function tagContactOmnisend(body) {
     const email = String(body.email || "").trim();
     if (!email) return R(400, { error: "Email is required" });
     const add = [...new Set((body.addTags || []).map(t => String(t).trim()).filter(Boolean))];

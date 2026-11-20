@@ -10,6 +10,7 @@ import { C, mob, FI } from "./lmTheme.js";
 import { loadK, loadKFresh, deleteItemK } from "./utils.js";
 import { EARTH_LOGO_URL } from "./constants.js";
 import CampaignComposer, { CAMPAIGN_DRAFTS_KEY } from "./CampaignComposer.jsx";
+import GmailListTab from "./GmailListTab.jsx";
 
 const LIST_KEY = "ng-listings-v1";
 const PAGE = 250;
@@ -117,7 +118,7 @@ export default function OmnisendApp({ onHome }) {
     loadK(LIST_KEY).then(l => setListings(Array.isArray(l) ? l : [])).catch(() => {});
   }, []);
 
-  const TABS = [["campaigns", "📣", "Campaigns"], ["approvals", "✅", "Approvals"], ["subscribers", "👥", "Subscribers"]];
+  const TABS = [["campaigns", "📣", "Campaigns"], ["gmail", "📬", "Gmail list"], ["approvals", "✅", "Approvals"], ["subscribers", "👥", "Subscribers"]];
 
   return (
     <div style={{ minHeight: "100vh", background: C.bg, fontFamily: FONT, color: C.ink }}>
@@ -169,6 +170,7 @@ export default function OmnisendApp({ onHome }) {
         {configured && tab === "campaigns" && <CampaignsTab showToast={showToast} />}
         {configured && tab === "approvals" && <TradeApprovalsMoved showToast={showToast} />}
         {configured && tab === "subscribers" && <SubscribersTab showToast={showToast} />}
+        {tab === "gmail" && <GmailListTab showToast={showToast} />}
       </div>
 
       {composerOpen && <CampaignComposer key={openDraft?.id || "new"} draft={openDraft} listings={listings} showToast={showToast} onClose={() => { setComposerOpen(false); setOpenDraft(null); loadDrafts(); }} />}
