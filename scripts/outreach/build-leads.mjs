@@ -166,7 +166,9 @@ for (const f of ins) for (const l of JSON.parse(readFileSync(f, "utf8"))) {
   seen.add(k); if (l.instagram) seen.add(l.instagram.toLowerCase());
   const shapes = shapesFrom(l);
   const segment = l.segment || (l.source === "etsy" ? "etsy_reseller" : l.source === "web" && l.city ? "physical_shop" : "online_shop");
-  const contact = !!(l.email || l.instagram);
+  // Email only (Sir, 20 Nov 2026: no Instagram DMs). A shop is reachable only with an email
+  // address, and Germany/Austria never (UWG: no cold B2B email).
+  const contact = !!l.email && !NO_COLD_EMAIL.has(l.country);
   // Score: fit (shapes we make), size (sales/favourites), reachability.
   let score = shapes.length * 12 + (l.hits || 0) * 4 + (contact ? 25 : 0) + (l.email ? 10 : 0);
   if (l.sold) score += Math.min(30, Math.round(Math.log10(l.sold) * 9));
@@ -174,13 +176,13 @@ for (const f of ins) for (const l of JSON.parse(readFileSync(f, "utf8"))) {
   if ((l.signals || []).includes("live")) score += 8;
   const tier = !contact ? "C" : score >= 70 ? "A" : "B";
   const d = drafts({ ...l, segment }, shapes);
-  const channel = NO_COLD_EMAIL.has(l.country) || !l.email ? "instagram" : "email";
+  const channel = "email";
   const why = [
     segment === "etsy_reseller" ? `Etsy shop, ${l.sold?.toLocaleString() || "?"} sales since ${String(l.since || "?").slice(0, 4)}, ${l.listings || "?"} listings` : SEG_WHY(segment, l),
     shapes.length ? `sells ${shapes.map(k => NICE[k]).join(", ")}` : "",
     (l.signals || []).includes("wholesale") ? "mentions wholesale (may buy in bulk already, or be a supplier)" : "",
-    !contact ? "no email or Instagram found: look them up on Instagram first" : "",
-    NO_COLD_EMAIL.has(l.country) ? "Germany/Austria: DM only, no cold email" : "",
+    !l.email ? "no email address found" : "",
+    NO_COLD_EMAIL.has(l.country) ? "Germany/Austria: no cold email" : "",
   ].filter(Boolean).join(" · ");
   outL.push({ name: l.display || cleanName(l.name), country: l.country, city: l.city || "", segment, tier, score, channel, website: l.website || "", email: channel === "email" ? l.email : (l.email || ""),
     instagram: l.instagram || "", etsy_url: l.etsy_url || "", sold: l.sold || null, signals: shapes, platform: l.platform || "", why, ...d, source: l.source });

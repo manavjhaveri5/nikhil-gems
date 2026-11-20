@@ -2,7 +2,7 @@
 
    Leads are researched on Manav's Mac (scripts/outreach/: Etsy Open API, shop websites, web
    search) and pushed to app_rows outreach-leads-v1 with a personal draft for each shop.
-   Sejal either opens a draft in Gmail / Instagram and marks it here, or ticks several and
+   Email only (Sir, 20 Nov 2026: no Instagram DMs). Sejal opens a draft in Gmail and marks it here, or ticks several and
    presses Send: those go one at a time, a little apart, from the ERP's Gmail (through the
    Gmail bridge, lib/outreach.js), and each shop is first checked against everyone we already
    know (customers, trade buyers, Omnisend, past Gmail). Follow-ups come due 4 and 10 days
@@ -29,9 +29,9 @@ const STAGE = { new: ["Not contacted", C.inkMid, C.card], sent: ["Sent", C.blue,
   talking: ["In talks", C.green, C.greenBg], sample: ["Sample / trial", ACCENT, "#F3E9DF"], customer: ["Customer", "#fff", C.green], no: ["Not interested", C.inkFaint, C.card], bounced: ["Bounced", C.red, C.redBg], skip: ["Skipped", C.inkFaint, C.card],
   ours: ["Already our customer", C.green, C.greenBg] };
 const OPEN = ["sent", "followed_up"];
-// Safe daily limits for an ordinary mailbox and a young Instagram account. The server enforces
-// the email ones too (lib/outreach.js): 20 new shops, 60 emails in all with follow-ups.
-const CAP = { email: 20, instagram: 12 };
+// Safe daily limit for an ordinary mailbox, enforced on the server too (lib/outreach.js):
+// 20 new shops, 60 emails in all with follow-ups.
+const CAP = { email: 20 };
 const NO_COLD_EMAIL = ["DE", "AT"];
 const isDue = (l, today) => ["sent", "followed_up"].includes(l.stage) && l.next_followup && l.next_followup <= today && (l.followups || [])[l.followups_sent || 0];
 // Can the Send button send this lead's email right now?
@@ -114,15 +114,6 @@ function Lead({ l, onSave, toast, today, open: open0 = false, picked, onPick }) 
           {email && <a href={gmail(email, l.draft.subject, l.draft.body)} target="_blank" rel="noreferrer" style={{ ...btn(), textDecoration: "none" }}>Open in Gmail</a>}
           <button onClick={() => copy(`${l.draft.subject}\n\n${l.draft.body}`, toast)} style={btn()}>Copy</button>
           {l.stage === "new" && <button onClick={() => markSent("email")} style={btn(C.ink, "#fff")}>Mark email sent</button>}
-        </div>
-      </div>}
-      {l.dm && <div>
-        <span style={lab}>Instagram DM{ig ? ` to @${String(ig).replace(/^@/, "")}` : " (find their Instagram first)"}</span>
-        <div style={{ whiteSpace: "pre-wrap", fontSize: 13, lineHeight: 1.55, background: C.card, borderRadius: 8, padding: 10 }}>{l.dm}</div>
-        <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" }}>
-          <button onClick={() => copy(l.dm, toast)} style={btn()}>Copy</button>
-          {ig && <a href={igUrl(ig)} target="_blank" rel="noreferrer" style={{ ...btn(), textDecoration: "none" }}>Open Instagram</a>}
-          {l.stage === "new" && <button onClick={() => markSent("instagram")} style={btn(C.ink, "#fff")}>Mark DM sent</button>}
         </div>
       </div>}
       <div>
@@ -269,21 +260,16 @@ export default function OutreachApp({ onHome }) {
 
   if (tab === "today") {
     const due = leads.filter(l => isDue(l, today));
-    const usedE = sentToday(leads, "email", today, /^sent$/), usedI = sentToday(leads, "instagram", today);
+    const usedE = sentToday(leads, "email", today, /^sent$/);
     const fresh = leads.filter(l => l.stage === "new").sort((a, b) => (a.tier || "C").localeCompare(b.tier || "C") || (b.score || 0) - (a.score || 0));
     const pickE = fresh.filter(l => l.email && l.channel !== "instagram" && !NO_COLD_EMAIL.includes(l.country)).slice(0, Math.max(0, CAP.email - usedE));
-    // Only shops we can't email (no address, or Germany/Austria). Email shops past today's 20 wait
-// for tomorrow's email list rather than spilling in here and getting both a DM and an email.
-    const pickI = fresh.filter(l => l.instagram && l.dm && (!l.email || l.channel === "instagram" || NO_COLD_EMAIL.includes(l.country))).slice(0, Math.max(0, CAP.instagram - usedI));
-    return shell(<>
+        return shell(<>
       {kpis}
-      <div style={{ ...sub, marginBottom: 14 }}>Today: {usedE}/{CAP.email} new shops emailed and {usedI}/{CAP.instagram} Instagram DMs sent. Follow-ups don't count toward the 20. Staying under these limits keeps the mailbox and the Instagram account out of spam filters. Tick shops and press Send, or open one and send it yourself. Reply to anyone who answers within a day.</div>
+      <div style={{ ...sub, marginBottom: 14 }}>Today: {usedE}/{CAP.email} new shops emailed. Follow-ups don't count toward the 20. Staying under this limit keeps the mailbox out of spam filters. Only shops with an email address are listed: no Instagram DMs, and no Germany/Austria. Tick shops and press Send, or open one and send it yourself. Reply to anyone who answers within a day.</div>
       <div style={{ fontFamily: SERIF, fontSize: 18, fontWeight: 700, margin: "0 0 10px" }}>Follow-ups due <span style={{ ...sub, fontFamily: FONT }}>{due.length}</span>{selAll(due.filter(l => canEmail(l, today)))}</div>
       <div style={{ display: "grid", gap: 10, marginBottom: 22 }}>{due.map(l => row(l, { open: true }))}{!due.length && <div style={{ ...card, ...sub }}>None due today.</div>}</div>
       <div style={{ fontFamily: SERIF, fontSize: 18, fontWeight: 700, margin: "0 0 10px" }}>Send today by email <span style={{ ...sub, fontFamily: FONT }}>{pickE.length}</span>{selAll(pickE)}</div>
       <div style={{ display: "grid", gap: 10, marginBottom: 22 }}>{pickE.map(l => row(l))}{!pickE.length && <div style={{ ...card, ...sub }}>Daily email limit reached, or no leads with an email left.</div>}</div>
-      <div style={{ fontFamily: SERIF, fontSize: 18, fontWeight: 700, margin: "0 0 10px" }}>Send today on Instagram <span style={{ ...sub, fontFamily: FONT }}>{pickI.length}</span> <span style={{ ...sub, fontFamily: FONT }}>· shops with no email, and Germany/Austria</span></div>
-      <div style={{ display: "grid", gap: 10 }}>{pickI.map(l => row(l))}{!pickI.length && <div style={{ ...card, ...sub }}>Daily DM limit reached, or no Instagram leads left.</div>}</div>
     </>);
   }
 
