@@ -6,8 +6,13 @@
    node scripts/girton/proposals.mjs mark <id> <building|done|failed|approved> [--commit <sha>] [--result "<text>"]
        record progress; "approved" puts a multi-night job back in the queue
    node scripts/girton/proposals.mjs list
-       every proposal's id, status and title */
+       every proposal's id, status and title
+   node scripts/girton/proposals.mjs add <file.json>
+       file new code proposals from the daily review (array of {id,title,why,area,
+       effort,risk,plan,saving_usd_month?,saving_note?}); a decided one keeps its status */
+import { readFileSync } from "node:fs";
 import { supa, rows, upsert, telegram } from "../raj/raj-common.mjs";
+import { upsertProposals } from "../../lib/girton-proposals.js";
 
 const KEY = "girton-proposals-v1";
 const sb = supa();
@@ -30,7 +35,16 @@ if (cmd === "list") {
     await telegram(`*Girton*: ${status === "done" ? "✅ built" : "❌ couldn't build"} “${p.title}”${result ? `\n${result}` : ""}${commit ? `\ncommit ${commit.slice(0, 7)}` : ""}`).catch(() => {});
   }
   console.log(`${id} → ${status}`);
+} else if (cmd === "add") {
+  const list = JSON.parse(readFileSync(id, "utf8"));
+  if (!Array.isArray(list)) { console.error("add: file must hold a JSON array"); process.exit(1); }
+  const now = Date.now();
+  const clean = list.filter(p => p?.id && p?.title && p?.plan).map(p => ({
+    status: "proposed", created: now, saving_usd_month: 0, ...p, kind: "code", source: "review",
+  }));
+  const added = await upsertProposals(sb, clean);
+  console.log(`${clean.length} filed, ${added} new`);
 } else {
-  console.error("usage: next | mark <id> <status> | list");
+  console.error("usage: next | mark <id> <status> | list | add <file.json>");
   process.exit(1);
 }
