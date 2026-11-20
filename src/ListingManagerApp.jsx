@@ -21,6 +21,24 @@ const lmJson = async r => {
   try { return JSON.parse(text); }
   catch { return { ok: false, error: r.status === 504 || /timed out|timeout/i.test(text) ? "The server ran out of time talking to the platform — it may have gone through; check the listing there, then try again." : `The server didn't answer properly (${r.status}). Try again in a minute.` }; }
 };
+/* A publish whose connection drops with no answer at all — Safari says
+   "Load failed", Chrome "Failed to fetch" — usually means the phone lost
+   signal or locked mid-publish, not that the platform refused. Etsy (found by
+   SKU) and eBay (duplicateOf) both land a repeat on the same listing, so it is
+   sent again: once the page is back on screen, after a short pause. Any answer
+   from the server, even an error, is never retried. */
+const publishFetch = async (url, init) => {
+  for (let attempt = 1; ; attempt++) {
+    try { return await fetch(url, init); }
+    catch (e) {
+      if (!(e instanceof TypeError)) throw e;
+      if (attempt >= 3) throw new Error("the connection dropped before the server answered. It may have gone through — check the signal, then press Publish again (it won't make a second listing)");
+      if (typeof document !== "undefined" && document.visibilityState === "hidden")
+        await new Promise(ok => { const f = () => { if (document.visibilityState === "visible") { document.removeEventListener("visibilitychange", f); ok(); } }; document.addEventListener("visibilitychange", f); });
+      await new Promise(ok => setTimeout(ok, 2000 * attempt));
+    }
+  }
+};
 import { recommendCarriers, costVerdict, normalizeCarrier } from "./shipping.js";
 /* Etsy category / section / shape tables — shared with the Telegram listing bot,
    which files its drafts under exactly the same taxonomy. */
@@ -11433,7 +11451,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
       const existingItemId = listing.platforms?.ebay?.item_id;
       // eBay has no drafts — creating the item puts it on sale — so only a publish makes one.
       if (syncOnly && !existingItemId) throw new Error(allowCreate ? "eBay has no drafts, so it isn't listed there from a save. Use Publish on eBay when you're ready." : "Skipped eBay sync: no existing eBay item ID");
-      const r = await fetch("/api/ebay?action=publish_listing", {
+      const r = await publishFetch("/api/ebay?action=publish_listing", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           // eBay cuts titles at 80 characters; its own title comes first.
@@ -11492,7 +11510,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
       else if (pkey === "shopify_earth"){ action = "publish_shopify"; storeKey = "earth"; }
       else throw new Error(`Platform ${pkey} not supported`);
 
-      const r = await fetch("/api/listing-manager", {
+      const r = await (isEtsyKey(pkey) ? publishFetch : fetch)("/api/listing-manager", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action, listing: await withShopifyCreds({ ...listing, sku: listingMarketplaceSku(listing) }, storeKey), store_key: storeKey, etsy_shop: etsyShop, sync_only: syncOnly || queueIt, allow_create: allowCreate || queueIt, force_photos: forcePhotos }),
       });
