@@ -6,9 +6,9 @@
    Reading is one AI call per document; results are cached by the caller. */
 
 const PROMPTS = {
-  sb: 'This is an Indian customs export Shipping Bill / Courier Shipping Bill (CSB) / Postal Bill of Export. Return ONLY valid JSON, no markdown: {"sbNumber":"shipping bill number","invoices":[{"no":"invoice number exactly as printed","value":"invoice value digits only","currency":"invoice currency code"}],"hawb":["every HAWB / AWB / house airway bill / courier tracking number printed on it, digits and letters only"],"consignee":"consignee / buyer name"}',
+  sb: 'This is an Indian customs export Shipping Bill / Courier Shipping Bill (CSB) / Postal Bill of Export. Return ONLY valid JSON, no markdown: {"sbNumber":"shipping bill number","invoices":[{"no":"invoice number exactly as printed","value":"the invoice value in its FOREIGN currency (the item / taxable value in USD, EUR etc., NOT the INR figure), digits only","currency":"that foreign currency code e.g. USD","valueInr":"invoice value in INR if printed, digits only","rate":"exchange rate if printed"}],"hawb":["every HAWB / AWB / house airway bill / courier tracking number printed on it, digits and letters only"],"consignee":"consignee / buyer name"}',
   awb: 'This is a shipping label, airway bill (AWB / HAWB) or bill of lading for an export shipment. Return ONLY valid JSON, no markdown: {"awb":"the airway bill / tracking / waybill number (the main barcode number), digits and letters only","other":["any other AWB / tracking / reference numbers printed"],"consignee":"receiver / consignee name"}',
-  adv: 'This is an inward remittance advice (SWIFT MT103 / bank credit advice) for an export payment received in India. Return ONLY valid JSON, no markdown: {"remitter":"name of the ordering customer / remitter / sender of the money (MT103 field 50), not the bank and not the beneficiary","amount":"amount in foreign currency digits only","currency":"currency code"}',
+  adv: 'This is an inward remittance advice (SWIFT MT103 / bank credit advice) for an export payment received in India. Return ONLY valid JSON, no markdown: {"remitter":"name of the ordering customer / remitter / sender of the money (MT103 field 50), not the bank and not the beneficiary","amount":"amount credited (field 32A) digits only","ordered":"original amount ordered (field 33B) digits only, empty if not shown","currency":"currency code","invoices":["every invoice / proforma / order number the payment names — in the remittance information (field 70, RmtInf, Ustrd) or anywhere else in the payment details — exactly as written e.g. NG-57/26-27; empty list if none"]}',
   inv: 'This is an export invoice / proforma / purchase order. Return ONLY valid JSON, no markdown: {"invoiceNumber":"invoice number","amount":"total value digits only","currency":"currency code","buyer":"buyer / bill-to name","consignee":"consignee / ship-to name if different, else empty"}',
 };
 
@@ -107,9 +107,12 @@ export function compareBoiSet({ purpose, invoices = [], sb = [], awb = [], adv =
           sbInvs.length ? `The shipping bill names ${sbInvs.map(x => x.no).join(", ")}.` : "No invoice number could be read off the shipping bill.");
         continue;
       }
-      const v = num(hit.value), t = +inv.totalAmt || 0;
-      const sameCcy = !hit.currency || !inv.currency || String(hit.currency).toUpperCase() === String(inv.currency).toUpperCase();
-      if (!sameCcy) flag(`${inv.invNo}: currency differs`, `Invoice is ${inv.currency}, shipping bill ${String(hit.currency).toUpperCase()}.`);
+      const t = +inv.totalAmt || 0, ic = String(inv.currency || "").toUpperCase();
+      let v = num(hit.value), hc = String(hit.currency || "").toUpperCase();
+      // A shipping bill states the value in INR as well: an INR figure is turned back at its rate, never called a currency mismatch.
+      if (hc === "INR" && ic && ic !== "INR") { v = num(hit.rate) ? num(hit.value || hit.valueInr) / num(hit.rate) : 0; hc = ic; }
+      const sameCcy = !hc || !ic || hc === ic;
+      if (!sameCcy) flag(`${inv.invNo}: currency differs`, `Invoice is ${ic}, shipping bill ${hc}.`);
       else if (v && t && Math.abs(v - t) > Math.max(1, t * 0.01)) flag(`${inv.invNo}: value differs`, `Invoice ${inv.currency || ""} ${t.toLocaleString("en-IN")} · shipping bill ${v.toLocaleString("en-IN")}.`);
       else pass(`${inv.invNo} matches the shipping bill`, `${hit.sbNumber || "SB"}${v ? ` · ${v.toLocaleString("en-IN")}` : ""}`);
     }
@@ -138,8 +141,23 @@ export function compareBoiSet({ purpose, invoices = [], sb = [], awb = [], adv =
     if (!buyers.length) continue;
     if (buyers.some(b => sameName(b, a.remitter))) pass("Remitter is the invoice buyer", a.remitter);
     else flag("Remitter isn't the invoice buyer", `Advice: ${a.remitter} · invoice: ${buyers.join(" / ")}. A third-party payment needs the bank's third-party declaration.`);
-    const amt = num(a.amount), tot = invs.reduce((s, i) => s + (+i.totalAmt || 0), 0);
-    if (amt && tot && amt > tot * 1.01) flag("Advice is more than the invoices", `Advice ${String(a.currency || "").toUpperCase()} ${amt.toLocaleString("en-IN")} · invoices ${tot.toLocaleString("en-IN")}.`);
+    // Which invoices the payment names (field 70 / remittance information).
+    const named = (a.invoices || []).filter(Boolean);
+    if (named.length) {
+      const extra = named.filter(n => !invs.some(i => sameInvNo(i.invNo, n)));
+      const unnamed = invs.filter(i => !named.some(n => sameInvNo(i.invNo, n)));
+      if (extra.length) flag(`Advice is for ${extra.join(", ")}`, `The payment names ${named.join(", ")}, which ${extra.length > 1 ? "aren't" : "isn't"} on this form. Link ${extra.length > 1 ? "those invoices" : "that invoice"} instead.`);
+      if (unnamed.length) flag(`${unnamed.map(i => i.invNo).join(", ")} not named on the advice`, `The payment names only ${named.join(", ")}.`);
+      if (!extra.length && !unnamed.length) pass("Advice names these invoices", named.join(", "));
+    }
+    // The amount: the ordered amount (before the banks' charges) against the invoices' total.
+    const ccy = String(a.currency || "").toUpperCase();
+    const amt = num(a.ordered) || num(a.amount), tot = invs.filter(i => !ccy || !i.currency || String(i.currency).toUpperCase() === ccy).reduce((s, i) => s + (+i.totalAmt || 0), 0);
+    if (amt && tot) {
+      const gap = amt - tot, fmt = n => n.toLocaleString("en-US", { maximumFractionDigits: 2 });
+      if (Math.abs(gap) > Math.max(50, tot * 0.02)) flag(`Advice is ${ccy} ${fmt(amt)}, invoices ${fmt(tot)}`, gap < 0 ? `${fmt(-gap)} short — a different invoice, or a part payment (then the form's amount should be ${fmt(amt)}).` : `${fmt(gap)} more than the invoices on the form.`);
+      else pass("Advice amount matches the invoices", `${ccy} ${fmt(amt)}${Math.abs(gap) >= 0.01 ? ` (${fmt(Math.abs(gap))} ${gap < 0 ? "short — bank charges" : "over"})` : ""}`);
+    }
   }
   if (remName.trim() && buyers.length && !buyers.some(b => sameName(b, remName)) && !adv.some(a => sameName(a?.remitter, remName))) {
     flag("Remitter on the form isn't the invoice buyer", `Form: ${remName} · invoice: ${buyers.join(" / ")}.`);
