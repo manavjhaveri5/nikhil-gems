@@ -26,6 +26,21 @@ const aiFeature = () => {
   return file ? `${mod}/${file}` : mod;
 };
 
+/* One refresh shared by every request that hit a 401 at the same moment, and
+   at most one a minute: when Supabase itself is struggling, the server's check
+   fails too, and a refresh per request would only pile on more load. */
+let refreshing = null, lastRefresh = 0;
+const refreshOnce = () => {
+  if (refreshing) return refreshing;
+  if (Date.now() - lastRefresh < 60_000) return Promise.resolve(null);
+  lastRefresh = Date.now();
+  refreshing = Promise.race([
+    supabase.auth.refreshSession().then(r => r.data?.session || null),
+    new Promise(ok => setTimeout(() => ok(null), 15_000)),
+  ]).catch(() => null).finally(() => { refreshing = null; });
+  return refreshing;
+};
+
 window.fetch = async (input, init = {}) => {
   if (!isOwnApi(input)) return nativeFetch(input, init);
   const headers = new Headers(init.headers || (input instanceof Request ? input.headers : undefined));
@@ -48,7 +63,7 @@ window.fetch = async (input, init = {}) => {
   const resendable = !(input instanceof Request) && !(init.body instanceof ReadableStream);
   if (res.status === 401 && !ownAuth && resendable) {
     try {
-      const { data: { session } } = await supabase.auth.refreshSession();
+      const session = await refreshOnce();
       if (session?.access_token) {
         headers.set("Authorization", `Bearer ${session.access_token}`);
         return nativeFetch(input, { ...init, headers });
