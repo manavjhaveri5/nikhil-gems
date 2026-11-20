@@ -27,7 +27,7 @@ const FLAG = { US: "🇺🇸", GB: "🇬🇧", AU: "🇦🇺", NZ: "🇳🇿", J
 const SEG = { etsy_reseller: "Etsy shop", online_shop: "Online shop", physical_shop: "Shop (walk-in)", live_seller: "Live seller" };
 const STAGE = { new: ["Not contacted", C.inkMid, C.card], sent: ["Sent", C.blue, C.blueBg], followed_up: ["Followed up", C.blue, C.blueBg], replied: ["Replied", C.green, C.greenBg],
   talking: ["In talks", C.green, C.greenBg], sample: ["Sample / trial", ACCENT, "#F3E9DF"], customer: ["Customer", "#fff", C.green], no: ["Not interested", C.inkFaint, C.card], bounced: ["Bounced", C.red, C.redBg], skip: ["Skipped", C.inkFaint, C.card],
-  ours: ["Already our customer", C.green, C.greenBg] };
+  ours: ["Already our customer", C.green, C.greenBg], list: ["On mailing list", C.green, C.greenBg] };
 const OPEN = ["sent", "followed_up"];
 // Safe daily limit for an ordinary mailbox, enforced on the server too (lib/outreach.js):
 // 20 new shops, 60 emails in all with follow-ups.
@@ -69,6 +69,18 @@ function Lead({ l, onSave, toast, today, open: open0 = false, picked, onPick }) 
   const markFollowup = () => { const n = (l.followups_sent || 0) + 1; const more = (l.followups || []).length > n;
     mark("followed_up", { followups_sent: n, next_followup: more ? addDays(today, 6) : null }, `followup ${n}`, l.sent_via || ""); };
   const email = l.email, ig = l.instagram;
+  // They replied "sign me up": on to Omnisend as a trade prospect (not "trade"/"approved", which are
+  // approved buyers who see prices), and no more cold follow-ups.
+  const addToList = async x => {
+    try {
+      const r = await fetch("/api/omnisend", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "contact_tag", email: x.email, addTags: ["trade-prospect", "wholesale-outreach", `country-${String(x.country || "").toLowerCase()}`], createTags: ["trade-prospect"] }) });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(d.error || `Omnisend ${r.status}`);
+      await onSave({ ...x, stage: "list", on_list: true, next_followup: null, history: [...(x.history || []), { day: today, what: "added to mailing list", via: "omnisend" }] });
+      toast("Added to the mailing list");
+    } catch (e) { toast(`Couldn't add: ${e.message}`); }
+  };
   const fuSubject = l.draft?.subject ? `Re: ${l.draft.subject}` : "";
   return <div style={{ ...card, borderColor: due ? C.gold : C.border }}>
     <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
@@ -81,6 +93,7 @@ function Lead({ l, onSave, toast, today, open: open0 = false, picked, onPick }) 
           <Tag>{SEG[l.segment] || l.segment}</Tag>
           <Tag c={st[1]} bg={st[2]}>{st[0]}</Tag>
           {due && <Tag c="#fff" bg={C.gold}>Follow-up {(l.followups_sent || 0) + 1} due</Tag>}
+          {l.wants_list && l.stage !== "list" && <Tag c="#fff" bg={C.green}>Asked to sign up</Tag>}
           {l.language && l.language !== "en" && <Tag c={C.purple} bg={C.purpleBg}>{l.language === "ja" ? "日本語" : l.language}</Tag>}
         </div>
         <div style={{ fontSize: 12.5, color: C.inkMid, lineHeight: 1.45 }}>{l.why}</div>
@@ -121,6 +134,7 @@ function Lead({ l, onSave, toast, today, open: open0 = false, picked, onPick }) 
         <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
           {[["replied", "Replied"], ["talking", "In talks"], ["sample", "Sample / trial"], ["customer", "Customer 🎉"], ["no", "Not interested"], ["bounced", "Bounced"], ["ours", "Already our customer"], ["skip", "Skip"], ["new", "Reset"]].map(([s, t]) =>
             <button key={s} onClick={() => mark(s, s === "replied" ? { replied_at: today, next_followup: null } : ["no", "bounced", "skip", "customer", "ours"].includes(s) ? { next_followup: null } : {})} style={l.stage === s ? btn(C.ink, "#fff") : btn()}>{t}</button>)}
+          {email && l.stage !== "list" && <button onClick={() => addToList(l)} style={l.wants_list ? btn(C.green, "#fff") : btn()}>Add to mailing list</button>}
           {note === null ? <button onClick={() => setNote(l.note || "")} style={btn()}>{l.note ? "Edit note" : "Add note"}</button> : null}
         </div>
         {note !== null && <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
@@ -192,7 +206,7 @@ export default function OutreachApp({ onHome }) {
     const s = { total: 0, contacted: 0, replied: 0, customers: 0, byCountry: {} };
     for (const l of leads || []) {
       s.total++; if (l.stage !== "new" && l.stage !== "skip") s.contacted++;
-      if (["replied", "talking", "sample", "customer"].includes(l.stage)) s.replied++;
+      if (["replied", "talking", "sample", "customer", "list"].includes(l.stage)) s.replied++;
       if (l.stage === "customer") s.customers++;
       s.byCountry[l.country] = (s.byCountry[l.country] || 0) + 1;
     }

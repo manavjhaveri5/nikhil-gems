@@ -24,7 +24,7 @@ const FREE = /^(gmail|googlemail|yahoo|ymail|hotmail|outlook|live|msn|icloud|me|
 const known = new Set();
 // Shops already marked on the Outreach page as our customer, a customer, not interested or bounced
 // stay out, even when they turn up again from another source (Etsy vs their website).
-const BLOCK = ["ours", "customer", "no", "bounced"];
+const BLOCK = ["ours", "customer", "no", "bounced", "list"];
 const normName = n => String(n || "").toLowerCase().replace(/&amp;/g, "&").replace(/[^a-z0-9]+/g, "");
 for (let from = 0; ; from += 1000) {
   const { data, error } = await sb.from("app_rows").select("data").eq("key", "outreach-leads-v1").eq("deleted", false).range(from, from + 999);
@@ -99,6 +99,7 @@ function drafts(l, shapes) {
 やり取りは英語が中心となりますが、日本語のメールも翻訳して拝読いたします。
 
 よく売れる石の種類をお知らせいただければ、在庫の写真をお送りいたします。ヒマラヤ水晶の最新ロットの動画もお送りできます。
+今すぐのご予定がなければ、「登録希望」とだけご返信ください。新しいロットが入荷した際に、短いご案内をお送りいたします。
 今後このようなご案内が不要でしたら、その旨ご返信ください。以後ご連絡はいたしません。
 
 何卒よろしくお願い申し上げます。
@@ -109,7 +110,7 @@ WhatsApp: ${WA}` },
       dm: `はじめまして。インド・ムンバイの天然石工房 Earth Editions のセジャルと申します。素敵な石のセレクションですね。弊社は原石を直接買い付け、自社工房で研磨したスフィアやパームストーンなどを、珍しい石も含め1点からキロ単位で卸売りしております。マニハール・マニカラン産のヒマラヤ水晶やゴールデンルチルのロットも入荷次第ご案内でき、ご購入前に実際のロットの動画をお送りしています。${showOn("JP") ? "12月11日からの池袋・東京ミネラルショーにも参加いたします。" : ""}よろしければ、在庫の写真をお送りしてもよろしいでしょうか？`,
       followups: [
         { day: 4, body: `${name} ご担当者様\n\n先日はご案内をお送りし、失礼いたしました。もしご興味がございましたら、現在の在庫（ヒマラヤ水晶のロット、スフィア・パームストーンなど）の短い動画をお送りいたします。\n\nセジャル / Earth Editions` },
-        { day: 10, body: `${name} ご担当者様\n\nこちらが最後のご連絡となります。今後、インドからの仕入れをご検討の際は ${SITE} からいつでもご登録いただけます。WhatsApp（${WA}）でも承ります。\n\n貴店のますますのご発展をお祈り申し上げます。\nセジャル / Earth Editions` },
+        { day: 10, body: `${name} ご担当者様\n\nこちらが最後のご連絡となります。今後、インドからの仕入れをご検討の際は ${SITE} からいつでもご登録いただけます。WhatsApp（${WA}）でも承ります。新しいロットのご案内だけをご希望の場合は、「登録希望」とご返信ください。\n\n貴店のますますのご発展をお祈り申し上げます。\nセジャル / Earth Editions` },
       ],
     };
   }
@@ -138,6 +139,8 @@ A few things shops like about buying from us:
 
 You can see the trade catalogue at ${SITE.replace("https://", "")}: apply once and the trade prices open up. Or just reply with what sells best for you, and I'll send a few photos of matching stock.
 
+Not buying right now? Reply "sign me up" and I'll add you to our trade list: a short email when new lots come in, so you see them first.
+
 Warmly,
 Sejal
 Earth Editions · Nikhil Gems, Mumbai
@@ -150,7 +153,7 @@ P.S. If this isn't for you, reply "no thanks" and I won't write again.`;
     language: "en", draft: { subject, body }, dm,
     followups: [
       { day: 4, body: `Hi again, just bringing this back to the top of your inbox. If it helps, I can send a short video of the ${himalaya ? "Himalayan quartz" : first} lots we have right now, so you can see the quality before anything else.\n\nSejal` },
-      { day: 10, body: `Last note from me! If buying direct from India is ever useful, ${SITE.replace("https://", "")} is always open, and you can WhatsApp me on ${WA}. Wishing ${name} a great season.\n\nSejal` },
+      { day: 10, body: `Last note from me! If buying direct from India is ever useful, ${SITE.replace("https://", "")} is always open, and you can WhatsApp me on ${WA}. Or reply "sign me up" and I'll just send you a short note when new lots come in. Wishing ${name} a great season.\n\nSejal` },
     ],
   };
 }

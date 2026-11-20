@@ -20,6 +20,7 @@
 - **No attachments or price lists in the first message.** Use plain text and one link. Attachments from strangers go to spam.
 - **Follow-ups:** one after 4 days, and a last one 6 days after that, both in the same thread. After that, stop. The Today tab shows them when they're due.
 - **Reply the same day** to anyone who answers. Ask what they sell most, then send 3–5 photos of matching lots from stock.
+- **"Sign me up" replies:** every email offers this to shops that aren't buying yet. When someone replies like that, open the shop here and click **Add to mailing list**. They go into Omnisend tagged `trade-prospect` (not `trade`, which is for approved buyers who see prices), and the cold follow-ups stop. If the ERP spots such a reply before a follow-up, it marks the shop "Asked to sign up" and turns the button green. Send them new-lot emails from Omnisend.
 
 ## Rules (legal and reputation)
 
