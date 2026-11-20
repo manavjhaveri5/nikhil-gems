@@ -1,0 +1,250 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<title>Atyahara post</title>
+<!-- Soniya's post template: the nine-post study (Nov 2026), one layout per format,
+     in the earth palette (nine tile colours, one dusty depth, cocoa ink).
+     The post arrives as JSON in the URL hash (#<encodeURIComponent(JSON)>), and the
+     page re-renders on every hash change, so the planner can update it without a reload.
+     Fields: format, tile, kicker, headline, dev, translit, gram, body, credit, figure,
+             image, image2, image3, points[{k,v}], stamp{series,dev,no} -->
+<link href="https://fonts.googleapis.com/css2?family=Gloock&family=Gajraj+One&family=EB+Garamond:ital,wght@0,400;0,500;1,400&family=Tiro+Devanagari+Hindi&display=block" rel="stylesheet">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{width:1080px;height:1350px;overflow:hidden;background:transparent}
+body{font-family:"EB Garamond",serif;font-variant-numeric:oldstyle-nums}
+.post{width:1080px;height:1350px;position:relative;overflow:hidden;background:var(--bg);color:var(--fg)}
+.post > *{position:absolute}
+.post::after{content:"";position:absolute;inset:0;z-index:20;pointer-events:none;mix-blend-mode:multiply;opacity:.5;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='260' height='260'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.8' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 .4 0 0 0 0 .34 0 0 0 0 .26 0 0 0 .12 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E")}
+.dark::after{mix-blend-mode:screen;opacity:.3}
+.sc{font-variant-caps:all-small-caps;letter-spacing:.09em;font-weight:500}
+.dv{font-family:"Gajraj One";font-weight:400;line-height:1.05}
+.disp{font-family:"Gloock";font-weight:400;letter-spacing:-.012em;line-height:.92}
+.logo{width:84px}
+.cap{font:italic 400 22px/1.4 "EB Garamond";color:var(--soft)}
+.stamp{width:200px;height:200px}
+.acc{color:var(--acc)} .acc2{color:var(--acc2)}
+.empty{display:none!important}
+.ph{object-fit:cover;background:rgba(0,0,0,.06)}
+
+/* archive: cut-out object at right, big headline at left */
+.f-archive .obj{left:590px;top:250px;height:1180px;filter:drop-shadow(-20px 26px 30px rgba(70,40,30,.3))}
+.f-archive .stamp{left:64px;top:60px;transform:rotate(-7deg)}
+.f-archive .logo{right:72px;top:70px}
+.f-archive .k{left:80px;top:330px;font:italic 400 48px/1.1 "EB Garamond"}
+.f-archive .h{left:72px;top:390px;font-size:178px;width:560px}
+.f-archive .d{left:78px;top:585px;font-size:96px}
+.f-archive .b{left:80px;top:730px;width:470px;font:400 30px/1.4 "EB Garamond"}
+.f-archive .cap{left:80px;bottom:48px;width:500px}
+
+/* word: one Devanagari word, as a dictionary entry */
+.f-word .stamp{right:70px;top:66px;transform:rotate(5deg)}
+.f-word .w{left:62px;top:240px;font-size:250px;white-space:nowrap}
+.f-word .tr{left:78px;top:580px;font:400 74px/1 "Gloock"}
+.f-word .tr span{font:italic 400 30px/1 "EB Garamond";margin-left:18px;vertical-align:.45em}
+.f-word .rule{left:80px;right:80px;top:700px;border-top:2px solid var(--fg)}
+.f-word .rule2{left:80px;right:80px;top:707px;border-top:.8px solid var(--fg)}
+.f-word .cols{left:80px;right:80px;top:740px;display:grid;grid-template-columns:1fr 1fr;gap:56px;font:400 31px/1.38 "EB Garamond"}
+.f-word .cols b{display:block;font-size:25px;margin-bottom:10px}
+.f-word .logo{left:80px;bottom:62px}
+.f-word .cap{right:80px;bottom:62px;width:560px;text-align:right}
+
+/* specimen: a catalogue sheet */
+.f-specimen .frame{inset:44px;border:1.4px solid var(--fg)}
+.f-specimen .top{left:72px;right:72px;top:62px;display:flex;justify-content:space-between;font:500 24px/1 "EB Garamond"}
+.f-specimen .ph1{left:72px;top:112px;width:560px;height:800px;object-position:50% 40%}
+.f-specimen .ph2{left:72px;top:932px;width:268px;height:250px;object-position:50% 30%}
+.f-specimen .ph3{left:364px;top:932px;width:268px;height:250px}
+.f-specimen .h{left:668px;top:118px;width:350px;font-size:64px}
+.f-specimen .d{left:668px;top:380px;font-size:58px}
+.f-specimen table{left:668px;top:470px;width:350px;border-collapse:collapse;font:400 24px/1.25 "EB Garamond"}
+.f-specimen td{padding:11px 0;border-top:1px solid color-mix(in srgb,var(--fg) 45%,transparent);vertical-align:top}
+.f-specimen td:first-child{width:122px;font-variant-caps:all-small-caps;letter-spacing:.06em;font-weight:500;font-size:23px}
+.f-specimen .b{left:668px;top:960px;width:350px;font:italic 400 25px/1.38 "EB Garamond"}
+.f-specimen .stamp{left:470px;top:1110px;transform:rotate(-9deg)}
+.f-specimen .logo{right:72px;bottom:62px;width:70px}
+
+/* craft: photograph above, the craft in three steps below */
+.f-craft .ph1{left:0;top:0;width:1080px;height:600px;object-position:50% 55%}
+.f-craft .stamp{right:64px;top:470px;transform:rotate(8deg)}
+.f-craft .k{left:80px;top:650px;font:500 25px/1 "EB Garamond";font-variant-caps:all-small-caps;letter-spacing:.09em}
+.f-craft .h{left:74px;top:690px;font-size:136px;white-space:nowrap}
+.f-craft .d{left:80px;top:832px;font-size:64px}
+.f-craft .d em{font:italic 400 28px/1 "EB Garamond";margin-left:16px;vertical-align:.35em}
+.f-craft .steps{left:80px;right:80px;top:930px;display:grid;grid-template-columns:repeat(3,1fr);gap:40px;border-top:1.4px solid var(--fg);padding-top:22px}
+.f-craft .steps p{font:400 27px/1.36 "EB Garamond"}
+.f-craft .steps i{display:block;font:400 40px/1 "Gloock";font-style:normal;margin-bottom:10px;color:var(--acc)}
+.f-craft .cap{left:80px;bottom:44px;width:800px}
+.f-craft .logo{right:72px;bottom:52px;width:70px}
+
+/* hand: the piece held, photographed on white */
+.f-hand .ph1{left:0;top:-30px;width:1080px;height:1000px;object-position:50% 40%;mix-blend-mode:multiply;background:none}
+.f-hand .h{left:76px;top:920px;font-size:96px;width:760px}
+.f-hand .d{right:80px;top:880px;font-size:64px}
+.f-hand .b{left:80px;top:1110px;width:620px;font:400 29px/1.38 "EB Garamond"}
+.f-hand .stamp{right:84px;top:1080px;transform:rotate(-6deg)}
+.f-hand .logo{left:80px;top:70px}
+
+/* relic: one object centred, a large pale word behind it */
+.f-relic .bgw{left:0;right:0;top:330px;text-align:center;font-size:520px;color:var(--ghost);line-height:1;white-space:nowrap}
+.f-relic .obj{left:50%;top:330px;height:600px;transform:translateX(-50%);filter:drop-shadow(10px 26px 22px rgba(50,25,20,.32))}
+.f-relic .k{left:0;right:0;top:140px;text-align:center;font:italic 400 40px/1 "EB Garamond"}
+.f-relic .h{left:0;right:0;top:190px;text-align:center;font-size:96px}
+.f-relic .b{left:140px;right:140px;top:960px;text-align:center;font:400 29px/1.38 "EB Garamond"}
+.f-relic .stamp{left:66px;top:56px;transform:rotate(-5deg);width:170px;height:170px}
+.f-relic .logo{right:72px;top:68px}
+.f-relic .cap{left:110px;right:110px;bottom:44px;text-align:center}
+
+/* frieze: a row of pieces across the middle */
+.f-frieze .d{left:76px;top:150px;font-size:210px;white-space:nowrap}
+.f-frieze .k{left:80px;top:410px;font:italic 400 34px/1.2 "EB Garamond"}
+.f-frieze .ph1{left:0;top:520px;width:1080px;height:254px}
+.f-frieze .labels{left:0;right:0;top:792px;display:grid;grid-auto-flow:column;grid-auto-columns:1fr;text-align:center;font:500 24px/1 "EB Garamond";font-variant-caps:all-small-caps;letter-spacing:.09em}
+.f-frieze .b{left:80px;top:870px;width:700px;font:400 31px/1.38 "EB Garamond"}
+.f-frieze .stamp{right:80px;top:120px;transform:rotate(7deg)}
+.f-frieze .logo{left:80px;bottom:64px}
+.f-frieze .cap{right:80px;bottom:62px;text-align:right;width:560px}
+
+/* plate: a framed museum plate */
+.f-plate .plate{left:90px;top:330px;width:900px;height:560px;background:#F3ECE0;padding:18px}
+.f-plate .plate img{width:100%;height:100%;object-fit:cover;object-position:46% 58%}
+.f-plate .k{left:92px;top:150px;font:italic 400 40px/1 "EB Garamond"}
+.f-plate .h{left:86px;top:196px;font-size:118px;white-space:nowrap}
+.f-plate .d{right:96px;top:930px;font-size:120px}
+.f-plate .fig{left:92px;top:904px;font:italic 400 22px/1 "EB Garamond";color:var(--acc2)}
+.f-plate .b{left:92px;top:950px;width:620px;font:400 28px/1.38 "EB Garamond"}
+.f-plate .stamp{right:90px;top:84px;transform:rotate(6deg);width:180px;height:180px}
+.f-plate .cap{left:92px;bottom:44px;width:780px}
+.f-plate .logo{right:84px;bottom:56px;width:70px}
+
+/* window: a tall arched photograph at right */
+.f-window .win{left:600px;top:110px;width:400px;height:1120px;border-radius:200px 200px 0 0;overflow:hidden;box-shadow:0 0 0 10px var(--edge),0 0 0 11px color-mix(in srgb,var(--fg) 35%,transparent)}
+.f-window .win img{width:100%;height:100%;object-fit:cover;object-position:50% 30%}
+.f-window .d{left:76px;top:150px;font-size:150px}
+.f-window .h{left:80px;top:360px;font-size:72px;width:480px;line-height:1}
+.f-window .b{left:82px;top:640px;width:480px;font:400 28px/1.38 "EB Garamond"}
+.f-window .stamp{left:330px;top:1010px;transform:rotate(-8deg)}
+.f-window .cap{left:82px;bottom:44px;width:480px}
+.f-window .logo{left:80px;top:62px;width:72px}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script>
+const TILES = {
+  rose:       { bg:"#DDA99D", fg:"#3A2A23", acc:"#3E4A36", acc2:"#7E3B2C", ghost:"#D49C90", edge:"#CF9588" },
+  sage:       { bg:"#B5B596", fg:"#3A2A23", acc:"#3A2A23", acc2:"#5E3A2C", ghost:"#ABAB8B", edge:"#A3A386" },
+  ivory:      { bg:"#EFE6D8", fg:"#3A2A23", acc:"#3A2A23", acc2:"#A85B43", ghost:"#E5D9C6", edge:"#DCCDB6" },
+  terracotta: { bg:"#A85B43", fg:"#F7F0E6", acc:"#F3D5C8", acc2:"#F7F0E6", ghost:"#B2664E", edge:"#B9705A", dark:1 },
+  white:      { bg:"#F7F3EE", fg:"#3A2A23", acc:"#6E4A55", acc2:"#9C747A", ghost:"#EEE7DE", edge:"#E6DDD2" },
+  mauve:      { bg:"#9C747A", fg:"#F7F0E6", acc:"#F7F0E6", acc2:"#EBD3D5", ghost:"#A9838A", edge:"#AE8A90", dark:1 },
+  sand:       { bg:"#DCC8AC", fg:"#3A2A23", acc:"#3A2A23", acc2:"#A85B43", ghost:"#D2BC9D", edge:"#CDB596" },
+  moss:       { bg:"#5E6247", fg:"#F3ECE0", acc:"#F3ECE0", acc2:"#D8D3B4", ghost:"#686C50", edge:"#70745A", dark:1 },
+  blush:      { bg:"#EBCDC3", fg:"#3A2A23", acc:"#3A2A23", acc2:"#A85B43", ghost:"#E3C0B5", edge:"#D9AFA3" },
+};
+const SERIES = { archive:["THE ARCHIVE","संग्रह"], relic:["THE ARCHIVE","संग्रह"], plate:["THE ARCHIVE","संग्रह"], word:["THE WORD","शब्द"],
+  specimen:["SPECIMEN","नमूना"], craft:["CRAFT","कारीगरी"], window:["CRAFT","कारीगरी"], hand:["IN THE HAND","हस्त"], frieze:["IN THE HAND","हस्त"] };
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;" }[c]));
+const E = (cls, html, tag = "div") => html ? `<${tag} class="${cls}">${html}</${tag}>` : "";
+const img = (cls, src) => src ? `<img class="${cls}" src="${esc(src)}" alt="">` : `<div class="${cls} ph"></div>`;
+
+function stampSvg(series, dev, no, ink, id) {
+  const words = series + "  ·  ATYAHARA  ·  ";
+  return `<svg class="stamp" viewBox="0 0 200 200"><defs>
+    <path id="${id}r" d="M100,100 m-71,0 a71,71 0 1,1 142,0 a71,71 0 1,1 -142,0"/>
+    <filter id="${id}f" x="-10%" y="-10%" width="120%" height="120%">
+      <feGaussianBlur stdDeviation=".35" result="soft"/>
+      <feTurbulence type="fractalNoise" baseFrequency=".035" numOctaves="2" seed="7" result="n"/>
+      <feColorMatrix in="n" type="matrix" values="0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 .55 .62" result="dens"/>
+      <feComposite in="soft" in2="dens" operator="in"/></filter></defs>
+    <g filter="url(#${id}f)" fill="${ink}" stroke="${ink}">
+      <circle cx="100" cy="100" r="94" fill="none" stroke-width="3.2"/>
+      <circle cx="100" cy="100" r="88.5" fill="none" stroke-width="1"/>
+      <circle cx="100" cy="100" r="56" fill="none" stroke-width="1.2"/>
+      <text font-family="EB Garamond" font-weight="500" font-size="14.5" letter-spacing="2.6" stroke="none"><textPath href="#${id}r" textLength="430">${esc(words)}</textPath></text>
+      <text x="100" y="${dev.length > 4 ? 104 : 107}" text-anchor="middle" font-family="Gajraj One" font-size="${dev.length > 5 ? 25 : 31}" stroke="none">${esc(dev)}</text>
+      <line x1="76" y1="117" x2="124" y2="117" stroke-width="1"/>
+      <text x="100" y="138" text-anchor="middle" font-family="EB Garamond" font-size="17" font-weight="500" letter-spacing="1.5" stroke="none">Nº ${esc(no)}</text>
+    </g></svg>`;
+}
+
+function render(p) {
+  const f = SERIES[p.format] ? p.format : "archive";
+  const t = TILES[p.tile] || TILES.ivory;
+  const [ser, sdev] = SERIES[f];
+  const st = p.stamp || {};
+  const stamp = stampSvg(st.series || ser, st.dev || sdev, String(st.no || "01").padStart(2, "0"), f === "plate" && !t.dark ? t.acc2 : (t.dark ? t.fg : t.acc2), "s" + f);
+  const logo = `<img class="logo" src="img/${t.dark ? "logo-ivory" : "logo-ink"}.png" alt="Atyahara">`;
+  const pts = Array.isArray(p.points) ? p.points.filter(x => x && (x.k || x.v)) : [];
+  let h = "";
+  switch (f) {
+    case "archive":
+      h = img("obj", p.image) + stamp + logo + E("k", esc(p.kicker)) + E("h disp acc", esc(p.headline)) + E("d dv acc2", esc(p.dev))
+        + E("b", esc(p.body), "p") + E("cap", esc(p.credit), "p"); break;
+    case "word":
+      h = stamp + E("w dv", esc(p.dev)) + E("tr", esc(p.translit) + (p.gram ? `<span>${esc(p.gram)}</span>` : ""))
+        + `<div class="rule"></div><div class="rule2"></div>`
+        + `<div class="cols">${pts.slice(0, 2).map(x => `<div><b class="sc">${esc(x.k)}</b><p>${esc(x.v).replace(/\n/g, "</p><p>")}</p></div>`).join("")}</div>`
+        + logo + E("cap", esc(p.credit), "p"); break;
+    case "specimen":
+      h = `<div class="frame"></div><div class="top"><span class="sc">${esc(p.kicker || "Specimen")}</span><span class="sc">Atyahara collection</span></div>`
+        + img("ph ph1", p.image) + (p.image2 ? img("ph ph2", p.image2) : "") + (p.image3 ? img("ph ph3", p.image3) : "")
+        + E("h disp", esc(p.headline)) + E("d dv acc2", esc(p.dev))
+        + (pts.length ? `<table>${pts.slice(0, 6).map(x => `<tr><td>${esc(x.k)}</td><td>${esc(x.v)}</td></tr>`).join("")}</table>` : "")
+        + E("b", esc(p.body), "p") + stamp + logo; break;
+    case "craft":
+      h = img("ph ph1", p.image) + stamp + E("k", esc(p.kicker)) + E("h disp acc", esc(p.headline))
+        + E("d dv", esc(p.dev) + (p.translit ? `<em>${esc(p.translit)}</em>` : ""))
+        + (pts.length ? `<div class="steps">${pts.slice(0, 3).map((x, i) => `<p><i>${["i.", "ii.", "iii."][i]}</i>${esc(x.v || x.k)}</p>`).join("")}</div>` : "")
+        + E("cap", esc(p.credit), "p") + logo; break;
+    case "hand":
+      h = img("ph ph1", p.image) + logo + E("d dv acc2", esc(p.dev)) + E("h disp acc", esc(p.headline)) + E("b", esc(p.body), "p") + stamp; break;
+    case "relic":
+      h = E("bgw dv", esc(p.dev)) + img("obj", p.image) + stamp + logo + E("k", esc(p.kicker)) + E("h disp", esc(p.headline))
+        + E("b", esc(p.body), "p") + E("cap", esc(p.credit), "p"); break;
+    case "frieze":
+      h = stamp + E("d dv", esc(p.dev)) + E("k", esc(p.kicker)) + img("ph ph1", p.image)
+        + (pts.length ? `<div class="labels">${pts.slice(0, 6).map(x => `<span>${esc(x.k || x.v)}</span>`).join("")}</div>` : "")
+        + E("b", esc(p.body), "p") + logo + E("cap", esc(p.credit), "p"); break;
+    case "plate":
+      h = E("k", esc(p.kicker)) + E("h disp", esc(p.headline)) + E("d dv acc2", esc(p.dev))
+        + `<div class="plate">${p.image ? `<img src="${esc(p.image)}" alt="">` : ""}</div>` + E("fig", esc(p.figure))
+        + E("b", esc(p.body), "p") + stamp + E("cap", esc(p.credit), "p") + logo; break;
+    case "window":
+      h = logo + E("d dv acc2", esc(p.dev)) + E("h disp", esc(p.headline)) + E("b", esc(p.body), "p") + stamp
+        + `<div class="win">${p.image ? `<img src="${esc(p.image)}" alt="">` : ""}</div>` + E("cap", esc(p.credit), "p"); break;
+  }
+  const root = document.getElementById("root");
+  root.innerHTML = `<section class="post f-${f}${t.dark ? " dark" : ""}" style="--bg:${t.bg};--fg:${t.fg};--acc:${t.acc};--acc2:${t.acc2};--ghost:${t.ghost};--edge:${t.edge};--soft:color-mix(in srgb,${t.fg} 70%,transparent)">${h}</section>`;
+  fit(); document.fonts?.ready.then(fit);
+}
+/* Display lines are set big; a long word must not run off the post or under the
+   photo. Shrink it (never below 45%) until it sits inside its column. */
+const LIMIT = { archive: [60, 640], craft: [60, 1020], word: [50, 1030], frieze: [60, 1020], plate: [720, 1000], window: [60, 570], hand: [60, 1020], relic: [20, 1060], specimen: [650, 1030] };
+function fit() {
+  const sec = document.querySelector(".post"); if (!sec) return;
+  const f = [...sec.classList].find(c => c.startsWith("f-"))?.slice(2);
+  const [lo, hi] = LIMIT[f] || [40, 1040];
+  for (const el of sec.querySelectorAll(".h, .d, .w, .bgw")) {
+    el.style.fontSize = "";
+    const base = parseFloat(getComputedStyle(el).fontSize);
+    for (let s = base; s > base * .45; s *= .94) {
+      const rg = document.createRange(); rg.selectNodeContents(el); const r = rg.getBoundingClientRect();
+      const wide = el.classList.contains("bgw") ? el.scrollWidth <= 1080 : (r.left >= lo - 2 && r.right <= hi + 2) || (f === "plate" && el.classList.contains("h") && r.right <= 1000);
+      if (wide) break;
+      el.style.fontSize = s * .94 + "px";
+    }
+  }
+}
+function fromHash() {
+  try { render(JSON.parse(decodeURIComponent(location.hash.slice(1)) || "{}")); }
+  catch (e) { render({ format: "word", tile: "ivory", dev: "?", translit: "unreadable post data" }); }
+}
+addEventListener("hashchange", fromHash);
+addEventListener("message", e => { if (e.origin === location.origin && e.data?.soniyaPost) render(e.data.soniyaPost); });
+fromHash();
+</script>
+</body>
+</html>

@@ -13,6 +13,7 @@ import { loadK, saveK } from "./utils.js";
 import { fetchWithRetry } from "./aiClient.js";
 import { Md, istDay } from "./RajApp.jsx";
 import BRIEF from "./soniya/brief.md?raw";
+import SoniyaPlanner from "./SoniyaPlanner.jsx";
 
 const K = { work: "soniya-work-v1", notes: "soniya-notes-v1", brand: "soniya-brand-v1" };
 const FONT = "-apple-system,'SF Pro Display','Figtree',system-ui,sans-serif";
@@ -193,7 +194,7 @@ function BrandTab({ brand, onSave }) {
 }
 
 /* ── Page ─────────────────────────────────────────────────────────────── */
-const TABS = [["studio", "🎨", "Studio"], ["calendar", "🗓", "Calendar"], ["collections", "🗂", "Collections"], ["brand", "📖", "Brand book"], ["memory", "📚", "Memory"], ["ask", "💬", "Ask Soniya"]];
+const TABS = [["planner", "🗓", "Instagram planner"], ["studio", "🎨", "Studio"], ["calendar", "📅", "Proposals calendar"], ["collections", "🗂", "Collections"], ["brand", "📖", "Brand book"], ["memory", "📚", "Memory"], ["ask", "💬", "Ask Soniya"]];
 
 export default function SoniyaApp({ onHome }) {
   const [work, setWork] = useState(null);
@@ -244,7 +245,7 @@ export default function SoniyaApp({ onHome }) {
         </button>)}
       </div>
     </div>
-    <div style={{ maxWidth: 1000, margin: "0 auto", padding: mob() ? "14px 12px 60px" : "22px 28px 60px" }}>
+    <div style={{ maxWidth: tab === "planner" ? 1240 : 1000, margin: "0 auto", padding: mob() ? "14px 12px 60px" : "22px 28px 60px" }}>
       {err && <div style={{ ...card, background: C.redBg, color: C.red, marginBottom: 12, fontSize: 13 }}>{err}</div>}
       {body}
     </div>
@@ -253,7 +254,9 @@ export default function SoniyaApp({ onHome }) {
   if (!work) return shell(<div style={{ color: C.inkFaint, padding: 30 }}>{err ? "" : "Loading…"}</div>);
 
   let body;
-  if (tab === "studio") {
+  if (tab === "planner") {
+    body = <SoniyaPlanner brief={BRIEF} brand={brand} notes={notes} onNotesChanged={load} />;
+  } else if (tab === "studio") {
     const list = work.filter(w => filter === "waiting" ? (w.status === "proposed" || w.status === "changes") : filter === "approved" ? w.status === "approved" : filter === "done" ? w.status === "published" : w.status === "declined")
       .sort((a, b) => (a.type === "campaign" ? 0 : 1) - (b.type === "campaign" ? 0 : 1) || String(a.date || "9").localeCompare(String(b.date || "9")));
     body = <>
