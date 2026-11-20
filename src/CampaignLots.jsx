@@ -96,6 +96,7 @@ async function directToYoutube(file, { title, text, onStep }) {
   const r = await fetch("/api/social?action=youtube_session&p=youtube", { method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ p: "youtube", title: String(title || "Earth Editions lot").slice(0, 90), text, privacy: "unlisted", size: file.size, type: file.type || "video/mp4" }) });
   const d = await r.json().catch(() => ({}));
+  if (r.status === 401) throw Object.assign(new Error("Your ERP login ran out — reload the page, then upload again"), { final: true });
   if (!r.ok || !d.uploadUrl) throw Object.assign(new Error(/connect|token/i.test(d.error || "") ? "YouTube isn't connected — connect it in Social first" : d.error || `YouTube failed (${r.status})`), { final: true });
   const mb = Math.round(file.size / 1048576);
   const res = await new Promise((ok, bad) => {

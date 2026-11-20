@@ -33,11 +33,27 @@ window.fetch = async (input, init = {}) => {
   if (/^\/api\/(claude|openai|embed)/.test(new URL(typeof input === "string" || input instanceof URL ? input : input.url, window.location.href).pathname) && !headers.has("x-ai-feature")) {
     headers.set("x-ai-feature", aiFeature());
   }
-  if (!headers.has("Authorization")) {
+  const ownAuth = headers.has("Authorization");
+  if (!ownAuth) {
     try {
       const { data: { session } } = await supabase.auth.getSession();
       if (session?.access_token) headers.set("Authorization", `Bearer ${session.access_token}`);
     } catch {}
   }
-  return nativeFetch(input, { ...init, headers });
+  const res = await nativeFetch(input, { ...init, headers });
+  /* A 401 usually means the token ran out while the tab was busy (a long
+     video join or render keeps the refresh timer from firing). Refresh the
+     session once and send the same request again; only a body that can be
+     sent twice is retried. */
+  const resendable = !(input instanceof Request) && !(init.body instanceof ReadableStream);
+  if (res.status === 401 && !ownAuth && resendable) {
+    try {
+      const { data: { session } } = await supabase.auth.refreshSession();
+      if (session?.access_token) {
+        headers.set("Authorization", `Bearer ${session.access_token}`);
+        return nativeFetch(input, { ...init, headers });
+      }
+    } catch {}
+  }
+  return res;
 };
