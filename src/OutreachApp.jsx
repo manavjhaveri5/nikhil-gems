@@ -272,7 +272,9 @@ export default function OutreachApp({ onHome }) {
     const usedE = sentToday(leads, "email", today, /^sent$/), usedI = sentToday(leads, "instagram", today);
     const fresh = leads.filter(l => l.stage === "new").sort((a, b) => (a.tier || "C").localeCompare(b.tier || "C") || (b.score || 0) - (a.score || 0));
     const pickE = fresh.filter(l => l.email && l.channel !== "instagram" && !NO_COLD_EMAIL.includes(l.country)).slice(0, Math.max(0, CAP.email - usedE));
-    const pickI = fresh.filter(l => !pickE.includes(l) && l.instagram && l.dm).slice(0, Math.max(0, CAP.instagram - usedI));
+    // Only shops we can't email (no address, or Germany/Austria). Email shops past today's 20 wait
+// for tomorrow's email list rather than spilling in here and getting both a DM and an email.
+    const pickI = fresh.filter(l => l.instagram && l.dm && (!l.email || l.channel === "instagram" || NO_COLD_EMAIL.includes(l.country))).slice(0, Math.max(0, CAP.instagram - usedI));
     return shell(<>
       {kpis}
       <div style={{ ...sub, marginBottom: 14 }}>Today: {usedE}/{CAP.email} new shops emailed and {usedI}/{CAP.instagram} Instagram DMs sent. Follow-ups don't count toward the 20. Staying under these limits keeps the mailbox and the Instagram account out of spam filters. Tick shops and press Send, or open one and send it yourself. Reply to anyone who answers within a day.</div>
@@ -280,7 +282,7 @@ export default function OutreachApp({ onHome }) {
       <div style={{ display: "grid", gap: 10, marginBottom: 22 }}>{due.map(l => row(l, { open: true }))}{!due.length && <div style={{ ...card, ...sub }}>None due today.</div>}</div>
       <div style={{ fontFamily: SERIF, fontSize: 18, fontWeight: 700, margin: "0 0 10px" }}>Send today by email <span style={{ ...sub, fontFamily: FONT }}>{pickE.length}</span>{selAll(pickE)}</div>
       <div style={{ display: "grid", gap: 10, marginBottom: 22 }}>{pickE.map(l => row(l))}{!pickE.length && <div style={{ ...card, ...sub }}>Daily email limit reached, or no leads with an email left.</div>}</div>
-      <div style={{ fontFamily: SERIF, fontSize: 18, fontWeight: 700, margin: "0 0 10px" }}>Send today on Instagram <span style={{ ...sub, fontFamily: FONT }}>{pickI.length}</span></div>
+      <div style={{ fontFamily: SERIF, fontSize: 18, fontWeight: 700, margin: "0 0 10px" }}>Send today on Instagram <span style={{ ...sub, fontFamily: FONT }}>{pickI.length}</span> <span style={{ ...sub, fontFamily: FONT }}>· shops with no email, and Germany/Austria</span></div>
       <div style={{ display: "grid", gap: 10 }}>{pickI.map(l => row(l))}{!pickI.length && <div style={{ ...card, ...sub }}>Daily DM limit reached, or no Instagram leads left.</div>}</div>
     </>);
   }
