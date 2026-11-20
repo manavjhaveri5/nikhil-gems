@@ -164,6 +164,22 @@ export const STORAGE_MAX_BYTES = 50 * 1024 * 1024;
 const FIT_TARGET_BYTES = 44 * 1024 * 1024;
 export async function fitVideoForStorage(file, { onProgress } = {}) {
   if (!file || file.size <= FIT_TARGET_BYTES) return file;
+  /* 1080 first; a long clip that still won't fit steps down to 720, then 540,
+     rather than refusing. Each step aims under the cap for the clip's length. */
+  const steps = [[MAX_RENDER_EDGE, 2_000_000], [1280, 1_000_000], [960, 600_000]];
+  let last = 0;
+  for (let k = 0; k < steps.length; k++) {
+    const [edge, floor] = steps[k];
+    const blob = await fitOnce(file, edge, floor, p => onProgress?.((k + p) / steps.length, edge));
+    last = blob.size;
+    if (blob.size <= STORAGE_MAX_BYTES) {
+      const base = (file.name || "video").replace(/\.[^.]+$/, "");
+      return new File([blob], `${base}-${edge === MAX_RENDER_EDGE ? 1080 : edge === 1280 ? 720 : 540}p.mp4`, { type: "video/mp4" });
+    }
+  }
+  throw new Error(`Even at 540p this video is ${Math.round(last / 1048576)} MB — trim it shorter in the editor.`);
+}
+async function fitOnce(file, edge, floorBits, onProgress) {
   const input = new Input({ formats: ALL_FORMATS, source: new BlobSource(file) });
   try {
     const video = await input.getPrimaryVideoTrack();
@@ -172,14 +188,13 @@ export async function fitVideoForStorage(file, { onProgress } = {}) {
     const [duration, w, h] = await Promise.all([input.computeDuration(), video.getDisplayWidth(), video.getDisplayHeight()]);
     let fps = 30;
     try { fps = (await video.computeFrameRateMetrics()).bestGuessFrameRate || 30; } catch {}
-    const scale = Math.min(1, MAX_RENDER_EDGE / Math.max(w, h));
+    const scale = Math.min(1, edge / Math.max(w, h));
     const even = v => Math.max(2, 2 * Math.round((v * scale) / 2));
-    const audioBits = 192_000;
-    // Frame rate is kept (up to 60) so slow turns shot at 60 stay smooth; the
-    // extra frames get a little more bitrate.
+    const audioBits = edge >= MAX_RENDER_EDGE ? 192_000 : 128_000;
+    // Frame rate is kept (up to 60) so slow turns shot at 60 stay smooth.
     const outFps = Math.min(60, Math.round(fps));
     const ceiling = outFps > 30 ? 20_000_000 : 16_000_000;
-    const bitrate = Math.max(2_000_000, Math.min(ceiling, Math.floor((FIT_TARGET_BYTES * 8) / Math.max(1, duration)) - audioBits));
+    const bitrate = Math.max(floorBits, Math.min(ceiling, Math.floor((FIT_TARGET_BYTES * 8) / Math.max(1, duration)) - audioBits));
     const codec = await getFirstEncodableVideoCodec(["avc", "hevc", "vp9", "av1"], { width: even(w), height: even(h), bitrate });
     if (!codec) throw new Error("This browser can't encode video. Chrome, Edge or Safari 17+ can.");
     const output = newOutput();
@@ -189,12 +204,9 @@ export async function fitVideoForStorage(file, { onProgress } = {}) {
       audio: { bitrate: audioBits },
     });
     if (!conv.isValid) throw new Error("This browser can't convert this video. Try Chrome or Safari, or export it at 1080p from the DJI app first.");
-    if (onProgress) conv.onProgress = p => onProgress(p);
+    conv.onProgress = p => onProgress(p);
     await conv.execute();
-    const blob = new Blob([output.target.buffer], { type: "video/mp4" });   // execute() finalizes the output
-    if (blob.size > STORAGE_MAX_BYTES) throw new Error(`Even at 1080p this video is ${Math.round(blob.size / 1048576)} MB. Trim it shorter and try again.`);
-    const base = (file.name || "video").replace(/\.[^.]+$/, "");
-    return new File([blob], `${base}-1080p.mp4`, { type: "video/mp4" });
+    return new Blob([output.target.buffer], { type: "video/mp4" });   // execute() finalizes the output
   } finally { try { input.dispose(); } catch {} }
 }
 

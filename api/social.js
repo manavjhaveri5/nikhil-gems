@@ -1103,6 +1103,26 @@ export default async function handler(req, res) {
       return res.json({ media: media.map(m => ({ ...m, sent: log.filter(e => e.source === `ig:${m.id}`) })) });
     }
 
+    /* A YouTube upload the browser sends itself, straight to Google: this opens
+       the resumable session (the channel's token never leaves the server) and
+       hands back where to send the bytes. No storage in between, so no 50 MB
+       cap and no copy made smaller. body: { title, text, privacy, size, type } */
+    if (action === "youtube_session") {
+      const t = await token("youtube");
+      const unlisted = body.privacy === "unlisted";
+      const name = String(body.title || body.text || "Earth Editions").replace(/\s+/g, " ").trim().slice(0, 90);
+      const meta = { snippet: { title: unlisted || /#shorts/i.test(name) ? name : `${name.slice(0, 91)} #Shorts`, description: String(body.text || "").slice(0, 4900), categoryId: "26" },
+        status: { privacyStatus: unlisted ? "unlisted" : "public", selfDeclaredMadeForKids: false } };
+      const start = await fetch("https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status", { method: "POST",
+        headers: { Authorization: `Bearer ${t.access_token}`, "Content-Type": "application/json; charset=UTF-8",
+          ...(body.size ? { "X-Upload-Content-Length": String(body.size) } : {}), "X-Upload-Content-Type": body.type || "video/mp4",
+          // The browser that will send the bytes, so Google answers it.
+          ...(req.headers.origin ? { Origin: req.headers.origin } : {}) },
+        body: JSON.stringify(meta) });
+      if (!start.ok) fail(502, `YouTube: ${(await json(start)).error?.message || start.status}`);
+      return res.json({ uploadUrl: start.headers.get("location") });
+    }
+
     if (action === "pinterest_boards") {
       const t = await token("pinterest");
       const d = await json(await fetch("https://api.pinterest.com/v5/boards?page_size=100", { headers: { Authorization: `Bearer ${t.access_token}` } }));

@@ -9,7 +9,8 @@
 
    Lots are kept in app_data (ng-campaign-lots-v1) so one can go out again,
    and a send stamps the lots it carried, like listings. */
-import { useState } from "react";
+import { useState, lazy, Suspense } from "react";
+const VideoEditor = lazy(() => import("./VideoEditor.jsx"));
 import { C, FI } from "./lmTheme.js";
 import { loadKFresh, saveK, uid } from "./utils.js";
 import { uploadToStorage } from "./storageUtils.js";
@@ -87,16 +88,46 @@ export async function joinVideos(files, onStep) {
   } finally { clips.forEach(closeClip); }
 }
 
+/* The browser sends the file to the upload session the server opened. A
+   YouTube refusal (quota, not connected) is final; a blocked or dropped
+   connection falls back to the storage route. */
+async function directToYoutube(file, { title, text, onStep }) {
+  onStep?.("Opening the YouTube upload…");
+  const r = await fetch("/api/social?action=youtube_session&p=youtube", { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ p: "youtube", title: String(title || "Earth Editions lot").slice(0, 90), text, privacy: "unlisted", size: file.size, type: file.type || "video/mp4" }) });
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok || !d.uploadUrl) throw Object.assign(new Error(/connect|token/i.test(d.error || "") ? "YouTube isn't connected — connect it in Social first" : d.error || `YouTube failed (${r.status})`), { final: true });
+  const mb = Math.round(file.size / 1048576);
+  const res = await new Promise((ok, bad) => {
+    const x = new XMLHttpRequest();
+    x.open("PUT", d.uploadUrl);
+    x.setRequestHeader("Content-Type", file.type || "video/mp4");
+    x.upload.onprogress = e => e.lengthComputable && onStep?.(`Uploading to YouTube… ${Math.round(e.loaded / e.total * 100)}% of ${mb} MB`);
+    x.onload = () => ok(x);
+    x.onerror = () => bad(new Error("the browser couldn't reach YouTube's upload"));
+    x.send(file);
+  });
+  let v = {}; try { v = JSON.parse(res.responseText || "{}"); } catch {}
+  if (res.status < 200 || res.status >= 300 || !v.id) throw Object.assign(new Error(`YouTube: ${v.error?.message || res.status}`), { final: res.status >= 400 && res.status < 500 });
+  const note = v.status?.privacyStatus && v.status.privacyStatus !== "unlisted" ? `uploaded as ${v.status.privacyStatus} — Google keeps uploads private until the app is verified` : "";
+  return { url: `https://youtu.be/${v.id}`, id: v.id, note };
+}
+
 /* A video to YouTube as Unlisted, through Social's connected channel. Takes a
    File (stored first, over 50 MB a 1080p copy) or a stored URL. Returns
    { url: "https://youtu.be/…", id, note }. */
 export async function videoToYoutube(src, { title = "", text = "", onStep } = {}) {
+  // A file goes straight from this browser to YouTube, full quality, any size.
+  if (typeof src !== "string") {
+    try { return await directToYoutube(src, { title, text, onStep }); }
+    catch (e) { if (e.final) throw e; console.warn("[lots] direct YouTube upload failed, going via storage:", e); }
+  }
   let url = typeof src === "string" ? src : "";
   if (!url) {
     let up = src;
     if (up.size > 50 * 1024 * 1024) {
       const { fitVideoForStorage } = await import("./videoLab.js");
-      up = await fitVideoForStorage(up, { onProgress: p => onStep?.(`Making a 1080p copy (over 50 MB)… ${Math.round(p * 100)}%`) });
+      up = await fitVideoForStorage(up, { onProgress: (p, edge) => onStep?.(`Over 50 MB — making a ${edge >= 1920 ? "1080p" : edge >= 1280 ? "720p" : "540p"} copy… ${Math.round(p * 100)}%`) });
     }
     const ext = (up.name.split(".").pop() || "mp4").toLowerCase();
     onStep?.("Uploading… 0%");
@@ -137,6 +168,8 @@ export default function LotsPanel({ lots, setLots, picked, togglePick, onChange,
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const [step, setStep] = useState("");
+  const [pendingVids, setPendingVids] = useState([]); // picked, waiting for: trim in the editor, or upload as is
+  const [editorOpen, setEditorOpen] = useState(false);
   const lab = { fontSize: 9.5, fontWeight: 700, color: C.inkFaint, textTransform: "uppercase", letterSpacing: .6, marginBottom: 3, display: "block" };
   const set = p => setEdit(e => ({ ...e, ...p }));
 
@@ -166,9 +199,10 @@ export default function LotsPanel({ lots, setLots, picked, togglePick, onChange,
     try {
       // Several picked: joined into one video, in the order picked, before it goes up.
       const f = list.length > 1 ? await joinVideos(list, setStep) : list[0];
+      setPendingVids([]);
       let poster = "";
       try { setStep("Taking a frame for the email…"); poster = await posterFromVideo(f, edit.id); } catch {}
-      const d = await videoToYoutube(f, { title: edit.title || list[0].name.replace(/\.[^.]+$/, ""), text: edit.details, onStep: setStep });
+      const d = await videoToYoutube(f, { title: edit.title || (typeof list[0] === "string" ? "Lot" : list[0].name.replace(/\.[^.]+$/, "")), text: edit.details, onStep: setStep });
       const vid = youtubeId(d.url);
       set({ videoUrl: d.url, ...(poster ? { poster, posterFor: vid } : {}) });
       showToast?.(`✓ ${list.length > 1 ? `${list.length} videos joined and on` : "On"} YouTube (unlisted)${d.note ? ` — ${d.note}` : ""}`, d.note ? 9000 : 4000);
@@ -188,9 +222,27 @@ export default function LotsPanel({ lots, setLots, picked, togglePick, onChange,
     return (
       <div style={{ display: "grid", gap: 9, overflowY: "auto" }}>
         <label style={{ background: C.card, border: `1px dashed ${C.border}`, borderRadius: 7, padding: "9px 12px", fontSize: 12.5, fontWeight: 700, cursor: busy ? "default" : "pointer", textAlign: "center", opacity: busy ? .6 : 1 }}>
-          {yt ? "⬆ Upload a different video" : "⬆ Upload the video — pick several to join them into one"}
-          <input type="file" accept="video/*" multiple disabled={busy} style={{ display: "none" }} onChange={e => { const fs = [...(e.target.files || [])]; e.target.value = ""; uploadVideo(fs); }} />
+          {yt ? "⬆ Upload a different video" : "⬆ Pick the video — or several, to join into one"}
+          <input type="file" accept="video/*" multiple disabled={busy} style={{ display: "none" }} onChange={e => { const fs = [...(e.target.files || [])]; e.target.value = ""; if (fs.length) setPendingVids(fs); }} />
         </label>
+        {pendingVids.length > 0 && !busy && (
+          <div style={{ border: `1px solid ${C.border}`, borderRadius: 7, padding: 9, display: "grid", gap: 7 }}>
+            <div style={{ fontSize: 12, color: C.inkMid }}>{pendingVids.length} video{pendingVids.length > 1 ? "s" : ""} · {Math.round(pendingVids.reduce((n, f) => n + f.size, 0) / 1048576)} MB{pendingVids.length > 1 ? " — joined in this order" : ""}</div>
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+              <button type="button" onClick={() => setEditorOpen(true)} style={{ background: C.ink, color: "#FAF0DC", border: "none", borderRadius: 7, padding: "7px 12px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>✂ Trim / join in the editor</button>
+              <button type="button" onClick={() => uploadVideo(pendingVids)} style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 7, padding: "7px 12px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Upload as is</button>
+              <button type="button" onClick={() => setPendingVids([])} style={{ background: "none", border: "none", color: C.inkMid, fontSize: 12, cursor: "pointer" }}>Cancel</button>
+            </div>
+            <div style={{ fontSize: 10.5, color: C.inkFaint }}>Over 50 MB is made smaller on the way (1080p, then 720p or 540p if it must).</div>
+          </div>
+        )}
+        {editorOpen && (
+          <Suspense fallback={<div style={{ position: "fixed", inset: 0, zIndex: 2100, background: "rgba(20,15,8,.78)", display: "grid", placeItems: "center", color: "#FAF0DC", fontSize: 13, fontWeight: 700 }}>Loading the video editor…</div>}>
+            <VideoEditor urls={pendingVids} noEtsy showToast={showToast}
+              onSave={savedUrl => { setEditorOpen(false); uploadVideo([savedUrl]); }}
+              onClose={() => setEditorOpen(false)} />
+          </Suspense>
+        )}
         {step && <div style={{ fontSize: 12, color: C.inkMid }}>{step}</div>}
         <div><span style={lab}>…or paste a YouTube link (unlisted is fine)</span><input value={edit.videoUrl} onChange={e => set({ videoUrl: e.target.value })} placeholder="https://youtu.be/…" style={FI()} /></div>
         {yt && <img src={edit.posterFor === yt && edit.poster ? edit.poster : `https://i.ytimg.com/vi/${yt}/hqdefault.jpg`} alt="" style={{ width: "100%", borderRadius: 7, display: "block" }} />}

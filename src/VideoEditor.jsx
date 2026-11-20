@@ -139,7 +139,8 @@ function ClipTrack({ clip, strip, active, playhead, onTrim, onSeek, onRemove, on
    three takes, and the seller shouldn't have to upload one, edit, upload the
    next: hand them all in together and they arrive as a joined timeline, in the
    order they were picked, ready to be trimmed. */
-export default function VideoEditor({ url, urls, recipe, onSave, onClose, showToast }) {
+// noEtsy: a video that isn't for a marketplace (a campaign lot) — no 15-second limit, any length saves.
+export default function VideoEditor({ url, urls, recipe, onSave, onClose, showToast, noEtsy = false }) {
   const canvasRef = useRef(null);
   const glRef = useRef(null);
   const sinksRef = useRef(new Map());     // clip id → CanvasSink, built once per clip
@@ -189,7 +190,7 @@ export default function VideoEditor({ url, urls, recipe, onSave, onClose, showTo
   const allBands = useMemo(() => [...mixerBands(mixer), ...bands].slice(0, MAX_BANDS), [mixer, bands]);
 
   const total = totalLength(clips);
-  const overEtsy = total > ETSY_MAX_SECONDS + 0.05;
+  const overEtsy = !noEtsy && total > ETSY_MAX_SECONDS + 0.05;
   const copy = useMemo(() => canCopy({ clips, recipeTouched: graded }), [clips, graded]);
 
   /* Where the playhead is, in clip terms. The timeline the seller drags along
@@ -259,7 +260,7 @@ export default function VideoEditor({ url, urls, recipe, onSave, onClose, showTo
           if (look.mixer) setMixer(look.mixer);
           if (look.geo) setGeo(look.geo);
           if (recipe.quality) setQuality(recipe.quality);
-        } else if (seeds.length > 1 && totalLength(opened) > ETSY_MAX_SECONDS + 0.05) {
+        } else if (!noEtsy && seeds.length > 1 && totalLength(opened) > ETSY_MAX_SECONDS + 0.05) {
           /* Several takes handed in at once will almost always overrun Etsy's
              15 seconds together. Cutting them back is what the seller was going
              to do anyway, so it is done for them — and said, because the frames
@@ -432,7 +433,10 @@ export default function VideoEditor({ url, urls, recipe, onSave, onClose, showTo
       const sources = await Promise.all(takeUploads);
       setPhase("upload"); setUpProg(0);
       const name = `edited-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.mp4`;
-      const saved = await uploadToStorage(`listing-videos/${name}`, new File([blob], name, { type: "video/mp4" }),
+      // An edit over storage's 50 MB is brought down (1080p, then 720p, 540p) before it goes up.
+      const fitted = await fitVideoForStorage(new File([blob], name, { type: "video/mp4" }), { onProgress: p => { setPhase("render"); setProg(p); } });
+      setPhase("upload");
+      const saved = await uploadToStorage(`listing-videos/${name}`, fitted,
         { onProgress: setUpProg, signal: abort.signal });
       onSave(saved, {
         sources,
@@ -507,7 +511,7 @@ export default function VideoEditor({ url, urls, recipe, onSave, onClose, showTo
           <div style={{ fontSize: 11, color: C.inkFaint }}>
             {recipe?.at
               ? `Reopened from the original takes · last edited ${recipe.by ? `by ${recipe.by} ` : ""}${new Date(recipe.at).toLocaleDateString()}`
-              : `Trim, join, crop and grade · Etsy takes ${ETSY_MAX_SECONDS}s`}
+              : noEtsy ? "Trim, join, crop and grade" : `Trim, join, crop and grade · Etsy takes ${ETSY_MAX_SECONDS}s`}
           </div>
           <div style={{ flex: 1 }} />
           <button onClick={onClose} style={{ background: "none", border: "none", fontSize: 22, color: C.inkMid, cursor: "pointer", lineHeight: 1 }}>×</button>
@@ -575,7 +579,7 @@ export default function VideoEditor({ url, urls, recipe, onSave, onClose, showTo
                 <span style={{ flex: 1 }} />
                 <span style={{ fontSize: 12, fontWeight: 800, fontVariantNumeric: "tabular-nums",
                   color: overEtsy ? C.red : total < ETSY_MIN_SECONDS ? C.amber : C.green }}>
-                  {total.toFixed(1)}s / {ETSY_MAX_SECONDS}s
+                  {noEtsy ? `${total.toFixed(1)}s` : `${total.toFixed(1)}s / ${ETSY_MAX_SECONDS}s`}
                 </span>
               </div>
               <div style={{ height: 7, borderRadius: 4, background: C.border, overflow: "hidden" }}>
@@ -592,7 +596,7 @@ export default function VideoEditor({ url, urls, recipe, onSave, onClose, showTo
                   </button>
                 </div>
               )}
-              {!overEtsy && total < ETSY_MIN_SECONDS && (
+              {!noEtsy && !overEtsy && total < ETSY_MIN_SECONDS && (
                 <div style={{ fontSize: 11, color: C.inkFaint, lineHeight: 1.5 }}>
                   Etsy asks for at least {ETSY_MIN_SECONDS} seconds. Shorter than that and the listing will refuse it.
                 </div>
@@ -660,8 +664,8 @@ export default function VideoEditor({ url, urls, recipe, onSave, onClose, showTo
                   Stop
                 </button>
               )}
-              <button type="button" onClick={save} disabled={!ready || !!busy || !touched || overEtsy || !total}
-                style={{ ...btn(C.ink, "#FAF0DC"), opacity: !ready || busy || !touched || overEtsy || !total ? .5 : 1 }}>
+              <button type="button" onClick={save} disabled={!ready || !!busy || (!touched && !noEtsy) || overEtsy || !total}
+                style={{ ...btn(C.ink, "#FAF0DC"), opacity: !ready || busy || (!touched && !noEtsy) || overEtsy || !total ? .5 : 1 }}>
                 {busy === "save"
                   ? phase === "takes" ? `Saving your takes ${Math.round(upProg * 100)}%…`
                   : phase === "upload" ? `Uploading ${Math.round(upProg * 100)}%…`
