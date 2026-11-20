@@ -47,17 +47,34 @@ const pickId = o =>
   o?.templateID || o?.templateId || o?.campaignID || o?.campaignId || o?.id ||
   o?.data?.templateID || o?.data?.campaignID || o?.data?.id || "";
 
-/* Escapes for HTML, then folds every non-ASCII character to a numeric entity.
-   The output is handed to Omnisend's importer, which strips the <head> — and
-   the <meta charset> with it — so an em dash left as raw bytes is at the mercy
-   of whatever encoding the next tool assumes, and arrives as "â€". As entities
-   the dashes, curly quotes and accented buyer names are pure ASCII and cannot
-   be misread, whatever handles the file next. */
-const esc = s => String(s ?? "")
+/* Escapes for attributes (src, href, alt): HTML-escape, then fold every
+   non-ASCII character to a numeric entity. Omnisend's importer strips the <head>
+   and its <meta charset>, so raw UTF-8 bytes arrive as "â€". */
+const escAttr = s => String(s ?? "")
   .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;")
   // The /u flag matters: without it an emoji is two surrogate halves, and each
   // half becomes an entity that is meaningless on its own.
   .replace(/[^\x00-\x7F]/gu, c => `&#${c.codePointAt(0)};`);
+
+/* Escapes for visible text. Omnisend's importer mis-slices text after an
+   entity: "Palmstone" after "&#183;" became "Palmstonetone", "Bands" after
+   "&amp;" became "Bandsands", and 2&quot; showed as 2" 183; (20 Nov 2026). So
+   text goes as plain ASCII wherever it can: common punctuation is folded,
+   "&" is written out, and quotes need no escaping outside attributes. Only
+   what has no ASCII form (accents, emoji) is still sent as an entity. */
+const FOLD = {
+  "\u00b7": "|", "\u2022": "|", "\u2013": "-", "\u2014": "-", "\u2012": "-", "\u2212": "-",
+  "\u2018": "'", "\u2019": "'", "\u2032": "'", "\u201c": '"', "\u201d": '"', "\u2033": '"',
+  "\u2026": "...", "\u00a0": " ", "\u00d7": "x", "\u2122": "(TM)", "\u00ae": "(R)",
+};
+const esc = s => String(s ?? "")
+  .replace(/[\u00b7\u2022\u2013\u2014\u2012\u2212\u2018\u2019\u2032\u201c\u201d\u2033\u2026\u00a0\u00d7\u2122\u00ae]/g, c => FOLD[c])
+  .replace(/\s*&\s*/g, " and ")
+  .replace(/</g, "(").replace(/>/g, ")")
+  .replace(/[^\x00-\x7F]/gu, c => `&#${c.codePointAt(0)};`);
+
+/* Omnisend fills these placeholders per contact at send time. */
+const UNSUB = color => `<a href="[[unsubscribe_link]]" style="color:${color};text-decoration:underline;">Unsubscribe</a> | <a href="[[preference_link]]" style="color:${color};text-decoration:underline;">Email preferences</a>`;
 
 const qs = o => Object.entries(o)
   .filter(([, v]) => v !== "" && v != null)
@@ -216,7 +233,7 @@ function buildEditorialHtml({
   // A wordmark needs room an icon doesn't — 46px would render "EARTH EDITIONS"
   // as an unreadable smudge — so the masthead width is the caller's to set.
   const LOGO_W = Math.min(W, Math.max(24, +logoWidth || 150));
-  const url = v => (/^https?:\/\//i.test(String(v || "")) ? esc(v) : "");
+  const url = v => (/^https?:\/\//i.test(String(v || "")) ? escAttr(v) : "");
 
   /* Each piece is a photo with its caption centred underneath — name, what's
      left, price, and its own way in. The button repeats per product on purpose:
@@ -232,7 +249,7 @@ function buildEditorialHtml({
     const link = url(p.url);
     const src = url(p.image);
     const img = src
-      ? `<img src="${src}" width="${imgW}" alt="${esc(p.title)}" style="display:block;width:100%;max-width:${imgW}px;height:auto;border:0;border-radius:${radius};">`
+      ? `<img src="${src}" width="${imgW}" alt="${escAttr(p.title)}" style="display:block;width:100%;max-width:${imgW}px;height:auto;border:0;border-radius:${radius};">`
       : `<div style="width:100%;max-width:${imgW}px;height:${cols === 1 ? 280 : 200}px;background:${tint(A, 0.94)};border-radius:${radius};"></div>`;
     return `
       <td width="${cols === 1 ? "100%" : "50%"}" align="center" valign="top" style="padding:0 ${cols === 1 ? 0 : 8}px 30px;font-family:${F.body};">
@@ -242,7 +259,7 @@ function buildEditorialHtml({
         ${showMeta && p.meta ? `<div style="font-size:12px;color:${MUTED};padding-top:5px;">${esc(p.meta)}</div>` : ""}
         ${showPrice && p.price ? `<div style="font-size:12.5px;color:${INK};padding-top:5px;white-space:nowrap;">${esc(p.price)}${priceSuffix ? ` ${esc(priceSuffix)}` : ""}</div>` : ""}
         ${(showCta || p.video) && link ? `<div style="padding-top:12px;">
-          <a href="${link}" style="display:inline-block;border:1px solid ${INK};color:${INK};text-decoration:none;font-size:10px;letter-spacing:.5px;padding:7px 15px;">${p.video ? "&#9654; WATCH THE VIDEO" : esc(ctaLabel)}</a>
+          <a href="${link}" style="display:inline-block;border:1px solid ${INK};color:${INK};text-decoration:none;font-size:10px;letter-spacing:.5px;padding:7px 15px;">${p.video ? "WATCH THE VIDEO" : esc(ctaLabel)}</a>
         </div>` : ""}
       </td>`;
   };
@@ -305,7 +322,7 @@ function buildEditorialHtml({
   <table role="presentation" width="600" cellpadding="0" cellspacing="0" style="width:600px;max-width:100%;background:${CARD};">
     ${/* Wordmark files carry their own whitespace, so the cell adds little. */
       url(headerImage)
-      ? `<tr><td align="center" style="padding:26px 30px 0;"><img src="${url(headerImage)}" alt="${esc(brand)}" width="${LOGO_W}" style="display:block;max-width:${LOGO_W}px;height:auto;border:0;"></td></tr>`
+      ? `<tr><td align="center" style="padding:26px 30px 0;"><img src="${url(headerImage)}" alt="${escAttr(brand)}" width="${LOGO_W}" style="display:block;max-width:${LOGO_W}px;height:auto;border:0;"></td></tr>`
       : `<tr><td align="center" style="padding:32px 30px 6px;font-family:${F.body};font-size:11px;letter-spacing:2.5px;text-transform:uppercase;color:${A};font-weight:700;">${esc(brand)}</td></tr>`}
     ${stamp ? `<tr><td style="padding:${url(headerImage) ? 14 : 26}px 30px 0;font-family:${F.body};font-size:10px;letter-spacing:1.5px;text-transform:uppercase;color:${MUTED};">${esc(stamp)}</td></tr>` : ""}
     ${heading ? `<tr><td style="padding:8px 30px 0;font-family:${F.head};font-size:${Math.min(40, Math.max(16, +headingSize || 26))}px;color:${INK};line-height:1.25;">${esc(heading)}</td></tr>` : ""}
@@ -319,18 +336,17 @@ function buildEditorialHtml({
     ${belowRows}
     ${tradePanel}
     ${shipPanel}
-    ${/* Omnisend appends its own footer to every campaign — the copyright, the
-          postal address from account settings, the "sent to <you>" line and the
-          Edit preferences / Unsubscribe links — and refuses to send a campaign
-          without it. Its import docs say to strip those from imported HTML, so
-          this footer carries none of them: repeating them would print the
-          address twice and risk a second, dead unsubscribe link. What is left
-          is ours to say. */""}
+    ${/* Omnisend used to append its own footer (address, Unsubscribe) to
+          imported HTML. By 20 Nov 2026 it no longer did: the editor showed only
+          its badge, and send failed with 409 invalid-email-content. Its docs
+          now require [[unsubscribe_link]] in the content, so every template
+          carries its own, via UNSUB below. */""}
     ${(url(instagramUrl) || addressLine || footer) ? `<tr><td align="center" style="padding:0 30px 30px;font-family:${F.body};font-size:11px;line-height:1.7;color:${MUTED};">
       ${url(instagramUrl) ? `<div style="padding-bottom:10px;"><a href="${url(instagramUrl)}" style="color:${A};text-decoration:none;font-size:10.5px;letter-spacing:1.5px;text-transform:uppercase;">Instagram</a></div>` : ""}
       ${addressLine ? `<div>${esc(addressLine).replace(/\n/g, "<br>")}</div>` : ""}
       ${footer ? `<div style="padding-top:6px;">${esc(footer).replace(/\n/g, "<br>")}</div>` : ""}
     </td></tr>` : ""}
+    <tr><td align="center" style="padding:0 30px 30px;font-family:${F.body};font-size:11px;line-height:1.7;color:${MUTED};">${UNSUB(MUTED)}</td></tr>
   </table>
 </td></tr></table>
 </body></html>`;
@@ -373,9 +389,9 @@ function buildCampaignHtml({
 
   const cell = p => {
     const img = p.image
-      ? `<img src="${esc(p.image)}" width="${imgW}" alt="${esc(p.title)}" style="display:block;width:100%;max-width:${imgW}px;height:auto;border:0;border-radius:${radius};">`
+      ? `<img src="${escAttr(p.image)}" width="${imgW}" alt="${escAttr(p.title)}" style="display:block;width:100%;max-width:${imgW}px;height:auto;border:0;border-radius:${radius};">`
       : `<div style="width:100%;max-width:${imgW}px;height:${cols === 1 ? 300 : 180}px;background:${tint(A, 0.93)};border-radius:${radius};"></div>`;
-    const link = p.url ? esc(p.url) : "";
+    const link = p.url ? escAttr(p.url) : "";
     const wrap = inner => link ? `<a href="${link}" style="text-decoration:none;color:inherit;">${inner}</a>` : inner;
     const cta = ctaStyle === "outline"
       ? `display:inline-block;background:transparent;border:1.5px solid ${A};color:${A};`
@@ -389,7 +405,7 @@ function buildCampaignHtml({
         <div style="font-size:${cols === 1 ? 18 : 15}px;font-weight:700;color:${INK};margin:10px 0 2px;line-height:1.3;">${wrap(esc(p.title))}</div>
         ${showMeta && p.meta ? `<div style="font-size:12px;color:#8a7f6d;margin-bottom:4px;">${esc(p.meta)}</div>` : ""}
         ${showPrice && p.price ? `<div style="font-size:14px;font-weight:700;color:${A};">${esc(p.price)}</div>` : ""}
-        ${(showCta || p.video) && link ? `<div style="margin-top:8px;"><a href="${link}" style="${cta}${ctaPad}text-decoration:${ctaStyle === "link" ? "underline" : "none"};font-size:12px;font-weight:700;">${p.video ? "&#9654; Watch the video" : esc(ctaLabel)}</a></div>` : ""}
+        ${(showCta || p.video) && link ? `<div style="margin-top:8px;"><a href="${link}" style="${cta}${ctaPad}text-decoration:${ctaStyle === "link" ? "underline" : "none"};font-size:12px;font-weight:700;">${p.video ? "Watch the video" : esc(ctaLabel)}</a></div>` : ""}
       </td>`;
   };
 
@@ -412,7 +428,7 @@ function buildCampaignHtml({
   <table role="presentation" width="600" cellpadding="0" cellspacing="0" style="width:600px;max-width:100%;background:${CARD};border-radius:${outerRadius};overflow:hidden;">
     <tr><td style="padding:26px 24px 8px;font-family:${F.head};text-align:center;">
       ${headerImage && /^https?:\/\//i.test(headerImage)
-        ? `<img src="${esc(headerImage)}" alt="${esc(brand)}" width="150" style="display:block;margin:0 auto 12px;max-width:150px;height:auto;border:0;">`
+        ? `<img src="${escAttr(headerImage)}" alt="${escAttr(brand)}" width="150" style="display:block;margin:0 auto 12px;max-width:150px;height:auto;border:0;">`
         : `<div style="font-size:13px;letter-spacing:2px;text-transform:uppercase;color:${A};font-family:${F.body};font-weight:700;">${esc(brand)}</div>`}
       ${heading ? `<div style="font-size:${Math.min(40, Math.max(16, +headingSize || 27))}px;color:${INK};margin-top:10px;line-height:1.25;">${esc(heading)}</div>` : ""}
     </td></tr>
@@ -422,7 +438,7 @@ function buildCampaignHtml({
     </td></tr>
     <tr><td style="padding:16px 24px 26px;font-family:${F.body};font-size:11px;line-height:1.6;color:#8a7f6d;text-align:center;border-top:1px solid ${tint(A, 0.85)};">
       ${footer ? `${esc(footer).replace(/\n/g, "<br>")}<br><br>` : ""}
-      You're receiving this because you subscribed to ${esc(brand)}.
+      You're receiving this because you subscribed to ${esc(brand)}.<br>${UNSUB("#8a7f6d")}
     </td></tr>
   </table>
 </td></tr></table>
