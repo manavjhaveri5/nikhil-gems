@@ -353,23 +353,18 @@ const _catchUpVersions=async()=>{
   _invalidateKeys(rows.map(r=>r.key));
 };
 
-// Authoritative, low-payload invalidation. The database trigger writes one tiny
-// row per changed key into app_data_versions, so clients never receive the large
-// JSON app_data payload over realtime. Broadcast remains as a fast fallback until
-// every environment has the migration applied.
+// Invalidation. Each tab broadcasts its own saves on "ng-appdata-invalidate"
+// (instant). Writes made elsewhere (crons, API routes, the bot) bump a tiny row in
+// app_data_versions, which tabs poll once a minute while visible. We used to
+// subscribe to postgres_changes on that table, but Realtime then has to decode the
+// whole WAL, including every large app_data write; on 20 Nov 2026 those reads hit
+// statement timeouts and exhausted the DB pool for ~30 min. Polling avoids that.
 if(!DEMO_MODE){
-  const _versionChannel=supabase.channel("ng-appdata-versions");
-  _versionChannel
-    .on("postgres_changes",{event:"*",schema:"public",table:"app_data_versions"},payload=>{
-      const row=payload?.new||payload?.record||{};
-      const k=row.key;
-      if(!k||DEPRECATED_KEYS.includes(k))return;
-      _rememberVersionTs(row.ts);
-      _invalidateKeys([k]);
-    })
-    .subscribe(status=>{
-      if(status==="SUBSCRIBED")_catchUpVersions().catch(()=>{});
-    });
+  _catchUpVersions().catch(()=>{});
+  setInterval(()=>{
+    if(typeof document!=="undefined"&&document.visibilityState!=="visible")return;
+    _catchUpVersions().catch(()=>{});
+  },60_000);
   const _dataChannel=supabase.channel("ng-appdata-invalidate");
   _dataChannel
     .on("broadcast",{event:"invalidate"},({payload})=>{
@@ -379,7 +374,6 @@ if(!DEMO_MODE){
       _invalidateKeys([k]);
     })
     .subscribe();
-  globalThis.__ngVersionChannel=_versionChannel;
   globalThis.__ngDataChannel=_dataChannel;
 }
 
