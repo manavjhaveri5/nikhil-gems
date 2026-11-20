@@ -429,6 +429,54 @@ function buildCampaignHtml({
 </body></html>`;
 }
 
+/* Tag a subscriber by email, creating the contact if Omnisend has never seen them.
+   Shared by the contact_tag action and the ERP's own server code (lib/outreach.js). */
+const R = (status, body) => ({ status, body });
+export async function tagContact(body) {
+    const email = String(body.email || "").trim();
+    if (!email) return R(400, { error: "Email is required" });
+    const add = [...new Set((body.addTags || []).map(t => String(t).trim()).filter(Boolean))];
+    const remove = new Set((body.removeTags || []).map(t => String(t).trim().toLowerCase()).filter(Boolean));
+    if (!add.length && !remove.size) return R(400, { error: "No tags to change" });
+
+    const found = await omniList("/contacts", { email, limit: 1 });
+    const hit = rowsOf(found.data, "contacts")[0];
+
+    /* createTags apply only to a contact this call brings into existence — the
+       audience membership a new arrival should start with. They are deliberately
+       not merged into an existing contact: someone already tagged `inactive` has
+       been put there on purpose, and quietly adding `active` would land them in
+       both segments at once. */
+    const createTags = [...new Set((body.createTags || []).map(t => String(t).trim()).filter(Boolean))];
+
+    if (!hit) {
+      if (body.createIfMissing === false) return R(404, { error: `${email} is not in Omnisend` });
+      const born = [...add];
+      for (const t of createTags) if (!born.some(x => x.toLowerCase() === t.toLowerCase())) born.push(t);
+      const created = await omni("POST", "/contacts", {
+        /* subscribe: false (a trade buyer who didn't tick "send me emails") puts
+           them in the tag's segment without signing them up for campaigns. */
+        identifiers: [{ type: "email", id: email, channels: { email: { status: body.subscribe === false ? "nonSubscribed" : "subscribed" } } }],
+        tags: born.slice(0, 25),
+        ...(body.firstName ? { firstName: String(body.firstName).slice(0, 100) } : {}),
+        ...(body.lastName ? { lastName: String(body.lastName).slice(0, 100) } : {}),
+      });
+      if (!created.ok) return R(created.status || 400, { error: created.error });
+      return R(200, { ok: true, created: true, email, tags: born });
+    }
+
+    const existing = Array.isArray(hit.tags) ? hit.tags : [];
+    const kept = existing.filter(t => !remove.has(String(t).toLowerCase()));
+    const merged = [...kept];
+    for (const t of add) if (!merged.some(x => String(x).toLowerCase() === t.toLowerCase())) merged.push(t);
+    if (merged.length === existing.length && merged.every((t, i) => t === existing[i])) {
+      return R(200, { ok: true, unchanged: true, email, tags: merged });
+    }
+    const r = await omni("PATCH", `/contacts/${encodeURIComponent(hit.contactID || hit.contactId || hit.id)}`, { tags: merged.slice(0, 25) });
+    if (!r.ok) return R(r.status || 400, { error: r.error });
+    return R(200, { ok: true, created: false, email, tags: merged });
+}
+
 export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ error: "POST only" });
   let body = req.body;
@@ -570,48 +618,8 @@ export default async function handler(req, res) {
        overwrites the list, which would strip the signup's own tags
        (form_subscriber, source: shopify, …) that the audience rules rely on. */
     if (action === "contact_tag") {
-      const email = String(body.email || "").trim();
-      if (!email) return res.status(400).json({ error: "Email is required" });
-      const add = [...new Set((body.addTags || []).map(t => String(t).trim()).filter(Boolean))];
-      const remove = new Set((body.removeTags || []).map(t => String(t).trim().toLowerCase()).filter(Boolean));
-      if (!add.length && !remove.size) return res.status(400).json({ error: "No tags to change" });
-
-      const found = await omniList("/contacts", { email, limit: 1 });
-      const hit = rowsOf(found.data, "contacts")[0];
-
-      /* createTags apply only to a contact this call brings into existence — the
-         audience membership a new arrival should start with. They are deliberately
-         not merged into an existing contact: someone already tagged `inactive` has
-         been put there on purpose, and quietly adding `active` would land them in
-         both segments at once. */
-      const createTags = [...new Set((body.createTags || []).map(t => String(t).trim()).filter(Boolean))];
-
-      if (!hit) {
-        if (body.createIfMissing === false) return res.status(404).json({ error: `${email} is not in Omnisend` });
-        const born = [...add];
-        for (const t of createTags) if (!born.some(x => x.toLowerCase() === t.toLowerCase())) born.push(t);
-        const created = await omni("POST", "/contacts", {
-          /* subscribe: false (a trade buyer who didn't tick "send me emails") puts
-             them in the tag's segment without signing them up for campaigns. */
-          identifiers: [{ type: "email", id: email, channels: { email: { status: body.subscribe === false ? "nonSubscribed" : "subscribed" } } }],
-          tags: born.slice(0, 25),
-          ...(body.firstName ? { firstName: String(body.firstName).slice(0, 100) } : {}),
-          ...(body.lastName ? { lastName: String(body.lastName).slice(0, 100) } : {}),
-        });
-        if (!created.ok) return res.status(created.status || 400).json({ error: created.error });
-        return res.json({ ok: true, created: true, email, tags: born });
-      }
-
-      const existing = Array.isArray(hit.tags) ? hit.tags : [];
-      const kept = existing.filter(t => !remove.has(String(t).toLowerCase()));
-      const merged = [...kept];
-      for (const t of add) if (!merged.some(x => String(x).toLowerCase() === t.toLowerCase())) merged.push(t);
-      if (merged.length === existing.length && merged.every((t, i) => t === existing[i])) {
-        return res.json({ ok: true, unchanged: true, email, tags: merged });
-      }
-      const r = await omni("PATCH", `/contacts/${encodeURIComponent(hit.contactID || hit.contactId || hit.id)}`, { tags: merged.slice(0, 25) });
-      if (!r.ok) return res.status(r.status || 400).json({ error: r.error });
-      return res.json({ ok: true, created: false, email, tags: merged });
+      const r = await tagContact(body);
+      return res.status(r.status).json(r.body);
     }
 
     /* Fire a custom event so an Omnisend automation can send a real email to one

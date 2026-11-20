@@ -105,6 +105,7 @@ function Lead({ l, onSave, toast, today, open: open0 = false, picked, onPick }) 
           {l.city && <span style={sub}>{l.city}</span>}
           {(l.signals || []).length > 0 && <span style={sub}>stocks: {l.signals.join(", ")}</span>}
         </div>
+        {l.reply_text && <div style={{ marginTop: 6, fontSize: 12, color: C.inkMid }}>They wrote: “{l.reply_text}”</div>}
         {l.note && <div style={{ marginTop: 6, fontSize: 12, background: C.amberBg, borderRadius: 6, padding: "3px 8px", display: "inline-block" }}>Note: {l.note}</div>}
       </div>
       <button onClick={() => setOpen(o => !o)} style={btn()}>{open ? "Close" : "Open"}</button>
@@ -148,6 +149,16 @@ function Lead({ l, onSave, toast, today, open: open0 = false, picked, onPick }) 
   </div>;
 }
 
+function ScanNote({ s }) {
+  const r = s.last || s;
+  if (!r?.at) return null;
+  const t = new Date(r.at).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Kolkata" });
+  const bits = [[r.list, "signed up to the mailing list"], [r.replied, "replied, answer in Gmail"], [r.no, "said no thanks"], [r.bounced, "bounced"]].filter(([a]) => a?.length);
+  return <div style={{ ...card, marginBottom: 12, fontSize: 12.5, background: bits.length ? C.greenBg : C.surface }}>
+    Replies checked at {t}{bits.length ? ": " + bits.map(([a, w]) => `${a.length} ${w} (${a.slice(0, 4).join(", ")}${a.length > 4 ? "…" : ""})`).join(" · ") : `: nothing new from ${r.checked || 0} shops emailed.`}
+  </div>;
+}
+
 export default function OutreachApp({ onHome }) {
   const [leads, setLeads] = useState(null);
   const [err, setErr] = useState("");
@@ -159,7 +170,14 @@ export default function OutreachApp({ onHome }) {
   const toast = m => { setToastMsg(m); setTimeout(() => setToastMsg(""), 2000); };
   const go = t => { setTab(t); try { localStorage.setItem("outreach-tab", t); } catch {} };
   const refresh = () => load().then(setLeads).catch(e => setErr(e.message));
-  useEffect(() => { refresh(); }, []);
+  // Opening the page reads Gmail for replies (at most every 10 minutes, server-side): sign-ups go onto
+  // Omnisend, "no thanks" stops for good, bounces are marked. Then the list reloads if anything changed.
+  const [scan, setScan] = useState(null);
+  useEffect(() => {
+    refresh();
+    fetch("/api/mail", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "gmail_outreach_scan" }) })
+      .then(r => r.json()).then(d => { setScan(d); const n = d.list?.length + d.no?.length + d.replied?.length + d.bounced?.length; if (n) refresh(); }).catch(() => {});
+  }, []);
   const [picked, setPicked] = useState(() => new Set());
   const [run, setRun] = useState(null);       // { done, n, sent, skipped, now, wait, msgs, stopping, over }
   const stopRef = useRef(false);
@@ -279,6 +297,7 @@ export default function OutreachApp({ onHome }) {
     const pickE = fresh.filter(l => l.email && l.channel !== "instagram" && !NO_COLD_EMAIL.includes(l.country)).slice(0, Math.max(0, CAP.email - usedE));
         return shell(<>
       {kpis}
+      {scan && !scan.error && <ScanNote s={scan} />}
       <div style={{ ...sub, marginBottom: 14 }}>Today: {usedE}/{CAP.email} new shops emailed. Follow-ups don't count toward the 20. Staying under this limit keeps the mailbox out of spam filters. Only shops with an email address are listed: no Instagram DMs, and no Germany/Austria. Tick shops and press Send, or open one and send it yourself. Reply to anyone who answers within a day.</div>
       <div style={{ fontFamily: SERIF, fontSize: 18, fontWeight: 700, margin: "0 0 10px" }}>Follow-ups due <span style={{ ...sub, fontFamily: FONT }}>{due.length}</span>{selAll(due.filter(l => canEmail(l, today)))}</div>
       <div style={{ display: "grid", gap: 10, marginBottom: 22 }}>{due.map(l => row(l, { open: true }))}{!due.length && <div style={{ ...card, ...sub }}>None due today.</div>}</div>

@@ -1,6 +1,6 @@
 import { requireUser, adminClient, cronKeyOk } from "../lib/auth.js";
 import { runInboxScan, SCAN_KEY } from "../lib/inbox-scan.js";
-import { outreachSend, outreachCheck, outreachCounts } from "../lib/outreach.js";
+import { outreachSend, outreachCheck, outreachCounts, outreachScan } from "../lib/outreach.js";
 import { tradeApproved, checkoutFollowup, orderShipped } from "../lib/mailTemplates.js";
 
 const STORE = "https://eartheditions.co";
@@ -108,12 +108,17 @@ async function gmail(req, res) {
     }
     if (b.action === "gmail_scan") {
       // Purchase bills with our GSTIN, remittance advices and shipping papers → Home's "This morning" card.
-      return res.json(await runInboxScan({ bridge: call, days: +b.days || 3, trigger: b.trigger === "manual" ? "manual" : "cron" }));
+      const scan = await runInboxScan({ bridge: call, days: +b.days || 3, trigger: b.trigger === "manual" ? "manual" : "cron" });
+      // Outreach replies ride on the same morning job: sign-ups onto Omnisend, "no thanks" stopped, bounces marked.
+      let outreach;
+      try { outreach = await outreachScan({ bridge: call, trigger: "cron" }); } catch (e) { outreach = { error: e.message }; }
+      return res.json({ ...scan, outreach });
     }
     // Wholesale outreach: one lead per call, its own stored draft only (lib/outreach.js).
     if (b.action === "gmail_outreach_send") return res.json(await outreachSend({ bridge: call, id: String(b.id || "") }));
     if (b.action === "gmail_outreach_check") return res.json(await outreachCheck({ bridge: call, id: String(b.id || "") }));
     if (b.action === "gmail_outreach_counts") return res.json(await outreachCounts());
+    if (b.action === "gmail_outreach_scan") return res.json(await outreachScan({ bridge: call, trigger: b.force ? "manual" : "page" }));
     return res.status(400).json({ error: "Unknown Gmail action" });
   } catch (e) {
     return res.status(502).json({ error: e.message || "Gmail search failed" });
