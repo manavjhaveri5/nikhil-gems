@@ -223,13 +223,14 @@ async function finish(output) {
 }
 
 /* ── The copy path ────────────────────────────────────────────────────────── */
-async function exportCopy(clips, { onProgress, cancelled }) {
+async function exportCopy(clips, { onProgress, cancelled, muted = false }) {
   const output = newOutput();
   const first = clips[0];
   const videoSource = new EncodedVideoPacketSource(first.codec);
   output.addVideoTrack(videoSource, { rotation: first.rotation });
 
-  const withAudio = clips.every(c => c.audio && c.audioKey && c.audioKey === first.audioKey);
+  // Muted: the sound track is simply left out; the frames are copied as they are.
+  const withAudio = !muted && clips.every(c => c.audio && c.audioKey && c.audioKey === first.audioKey);
   let audioSource = null;
   if (withAudio) {
     audioSource = new EncodedAudioPacketSource(await first.audio.getCodec());
@@ -341,7 +342,7 @@ export async function exportVideo({ clips, recipe, quantizer = 20, onProgress, c
   if (!clips.length) throw new Error("There's nothing to export.");
   const copy = canCopy({ clips, recipeTouched: recipe.touched });
   const result = copy.ok
-    ? await exportCopy(clips, { onProgress, cancelled })
+    ? await exportCopy(clips, { onProgress, cancelled, muted: !!recipe.muted })
     : await exportRender(clips, recipe, { onProgress, cancelled, quantizer });
   onProgress?.(1);
   return { ...result, lossless: copy.ok, why: copy.why };

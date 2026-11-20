@@ -70,7 +70,7 @@ export async function posterFromVideo(src, name) {
 /* Several videos joined end to end into one MP4, in the order given. Clips off
    the same phone are copied as they are (no quality lost, quick); otherwise
    they're re-encoded at the first clip's size. */
-export async function joinVideos(files, onStep) {
+export async function joinVideos(files, onStep, { muted = false } = {}) {
   const [{ openClip, closeClip, exportVideo }, { NEUTRAL, NO_GEO }, { emptyCurves }] =
     await Promise.all([import("./videoLab.js"), import("./glPipeline.js"), import("./ToneCurve.jsx")]);
   const clips = [];
@@ -80,8 +80,8 @@ export async function joinVideos(files, onStep) {
       clips.push(await openClip(files[i], files[i].name));
     }
     const { blob, lossless } = await exportVideo({
-      clips, recipe: { touched: false, adjust: NEUTRAL, bands: [], curves: emptyCurves(), geo: NO_GEO },
-      onProgress: p => onStep?.(`Joining ${files.length} videos${clips.some(c => c.videoKey !== clips[0].videoKey) ? " (re-encoding)" : ""}… ${Math.round(p * 100)}%`),
+      clips, recipe: { touched: false, muted, adjust: NEUTRAL, bands: [], curves: emptyCurves(), geo: NO_GEO },
+      onProgress: p => onStep?.(`${files.length > 1 ? `Joining ${files.length} videos` : "Taking the sound out"}${clips.some(c => c.videoKey !== clips[0].videoKey) ? " (re-encoding)" : ""}… ${Math.round(p * 100)}%`),
     });
     void lossless;
     return new File([blob], `lot-${Date.now().toString(36)}.mp4`, { type: "video/mp4" });
@@ -170,6 +170,7 @@ export default function LotsPanel({ lots, setLots, picked, togglePick, onChange,
   const [step, setStep] = useState("");
   const [pendingVids, setPendingVids] = useState([]); // picked, waiting for: trim in the editor, or upload as is
   const [editorOpen, setEditorOpen] = useState(false);
+  const [mute, setMute] = useState(false);
   const lab = { fontSize: 9.5, fontWeight: 700, color: C.inkFaint, textTransform: "uppercase", letterSpacing: .6, marginBottom: 3, display: "block" };
   const set = p => setEdit(e => ({ ...e, ...p }));
 
@@ -192,13 +193,14 @@ export default function LotsPanel({ lots, setLots, picked, togglePick, onChange,
   };
   /* Upload the video here: it goes to YouTube as Unlisted on Social's channel,
      its link fills in, and the poster is drawn from the file itself. */
-  const uploadVideo = async files => {
+  const uploadVideo = async (files, { muted = false } = {}) => {
     const list = (Array.isArray(files) ? files : [files]).filter(Boolean);
     if (!list.length) return;
     setBusy(true); setErr("");
     try {
       // Several picked: joined into one video, in the order picked, before it goes up.
-      const f = list.length > 1 ? await joinVideos(list, setStep) : list[0];
+      // Several picked are joined into one; muted, even a single one is rebuilt without its sound.
+      const f = typeof list[0] !== "string" && (list.length > 1 || muted) ? await joinVideos(list, setStep, { muted }) : list[0];
       setPendingVids([]);
       let poster = "";
       try { setStep("Taking a frame for the email…"); poster = await posterFromVideo(f, edit.id); } catch {}
@@ -230,8 +232,9 @@ export default function LotsPanel({ lots, setLots, picked, togglePick, onChange,
             <div style={{ fontSize: 12, color: C.inkMid }}>{pendingVids.length} video{pendingVids.length > 1 ? "s" : ""} · {Math.round(pendingVids.reduce((n, f) => n + f.size, 0) / 1048576)} MB{pendingVids.length > 1 ? " — joined in this order" : ""}</div>
             <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
               <button type="button" onClick={() => setEditorOpen(true)} style={{ background: C.ink, color: "#FAF0DC", border: "none", borderRadius: 7, padding: "7px 12px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>✂ Trim / join in the editor</button>
-              <button type="button" onClick={() => uploadVideo(pendingVids)} style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 7, padding: "7px 12px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Upload as is</button>
+              <button type="button" onClick={() => uploadVideo(pendingVids, { muted: mute })} style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 7, padding: "7px 12px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Upload as is</button>
               <button type="button" onClick={() => setPendingVids([])} style={{ background: "none", border: "none", color: C.inkMid, fontSize: 12, cursor: "pointer" }}>Cancel</button>
+              <label style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 12, fontWeight: 700, cursor: "pointer", marginLeft: "auto" }}><input type="checkbox" checked={mute} onChange={e => setMute(e.target.checked)} /> 🔇 Mute</label>
             </div>
             <div style={{ fontSize: 10.5, color: C.inkFaint }}>Over 50 MB is made smaller on the way (1080p, then 720p or 540p if it must).</div>
           </div>

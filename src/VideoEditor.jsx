@@ -164,6 +164,7 @@ export default function VideoEditor({ url, urls, recipe, onSave, onClose, showTo
   const setCrop = patch => setGeo(g => ({ ...g, crop: { ...g.crop, ...patch } }));
 
   const [quality, setQuality] = useState("high");
+  const [muted, setMuted] = useState(false); // leave the sound out of the saved video
   const [mixKey, setMixKey] = useState("blue");
   const [ask, setAsk] = useState("");
   const [summary, setSummary] = useState("");
@@ -186,7 +187,7 @@ export default function VideoEditor({ url, urls, recipe, onSave, onClose, showTo
   const graded = ADJUSTMENTS.some(a => adjust[a.key] !== 0) || bands.length > 0
     || curvesTouched(curves) || mixerTouched(mixer) || geoTouched(geo);
   const trimmed = clips.some(c => c.in > 0.001 || c.out < c.duration - 0.001);
-  const touched = graded || trimmed || clips.length > 1;
+  const touched = graded || trimmed || clips.length > 1 || muted;
   const allBands = useMemo(() => [...mixerBands(mixer), ...bands].slice(0, MAX_BANDS), [mixer, bands]);
 
   const total = totalLength(clips);
@@ -259,6 +260,7 @@ export default function VideoEditor({ url, urls, recipe, onSave, onClose, showTo
           if (look.curves) setCurves(look.curves);
           if (look.mixer) setMixer(look.mixer);
           if (look.geo) setGeo(look.geo);
+          if (look.muted) setMuted(true);
           if (recipe.quality) setQuality(recipe.quality);
         } else if (!noEtsy && seeds.length > 1 && totalLength(opened) > ETSY_MAX_SECONDS + 0.05) {
           /* Several takes handed in at once will almost always overrun Etsy's
@@ -424,7 +426,7 @@ export default function VideoEditor({ url, urls, recipe, onSave, onClose, showTo
     try {
       const { blob, lossless } = await exportVideo({
         clips,
-        recipe: { touched: graded, adjust, bands: allBands, curves, geo },
+        recipe: { touched: graded, muted, adjust, bands: allBands, curves, geo },
         quantizer: (QUALITIES.find(q => q.key === quality) || QUALITIES[1]).q,
         onProgress: p => setProg(p),
         cancelled: () => cancelRef.current,
@@ -441,7 +443,7 @@ export default function VideoEditor({ url, urls, recipe, onSave, onClose, showTo
       onSave(saved, {
         sources,
         clips: clips.map((c, i) => ({ src: sources[i], in: c.in, out: c.out, label: c.label })),
-        look: { adjust, bands, curves, mixer, geo },
+        look: { adjust, bands, curves, mixer, geo, muted },
         quality, seconds: +total.toFixed(2), lossless, at: new Date().toISOString(),
       });
       showToast?.(lossless
@@ -658,6 +660,9 @@ export default function VideoEditor({ url, urls, recipe, onSave, onClose, showTo
                 title="Full length, no grade, no crop — the takes exactly as they were shot">
                 Start over
               </button>
+              <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, fontWeight: 700, color: C.ink, cursor: "pointer" }} title="Save the video without its sound">
+                <input type="checkbox" checked={muted} disabled={!!busy} onChange={e => setMuted(e.target.checked)} /> 🔇 Mute
+              </label>
               <span style={{ flex: 1 }} />
               {busy === "save" && (
                 <button type="button" onClick={() => { cancelRef.current = true; abortRef.current?.abort(); }} style={{ ...btn("transparent", C.ink), padding: "8px 12px" }}>
