@@ -153,7 +153,7 @@ function ScanNote({ s }) {
   const r = s.last || s;
   if (!r?.at) return null;
   const t = new Date(r.at).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Kolkata" });
-  const bits = [[r.list, "signed up to the mailing list"], [r.replied, "replied, answer in Gmail"], [r.no, "said no thanks"], [r.bounced, "bounced"]].filter(([a]) => a?.length);
+  const bits = [[r.list, "signed up to the mailing list"], [r.replied, "replied, answer in Gmail"], [r.no, "said no thanks"], [r.bounced, "bounced"], [r.auto, "auto-replies, follow-ups carry on"]].filter(([a]) => a?.length);
   return <div style={{ ...card, marginBottom: 12, fontSize: 12.5, background: bits.length ? C.greenBg : C.surface }}>
     Replies checked at {t}{bits.length ? ": " + bits.map(([a, w]) => `${a.length} ${w} (${a.slice(0, 4).join(", ")}${a.length > 4 ? "…" : ""})`).join(" · ") : `: nothing new from ${r.checked || 0} shops emailed.`}
   </div>;
