@@ -301,8 +301,13 @@ async function download(url) {
 
 // Instagram: one photo, a carousel of up to 10, a Reel, or a Story (one
 // photo or video, up for 24 hours; the API can't add stickers or text to it).
-async function postInstagram({ text, images = [], video, story = false }) {
-  const t = await token("instagram");
+/* Two accounts on one system-user token: @eartheditions_ (the token's own) and
+   @atyahara (Soniya's planner), found by business discovery on 20 Nov 2026.
+   The system user must be given @atyahara in Business Settings to post there. */
+const IG_ACCOUNTS = { atyahara: () => env("IG_ATYAHARA_USER_ID") || "17841448177921254" };
+async function postInstagram({ text, images = [], video, story = false, account }) {
+  const t0 = await token("instagram");
+  const t = account && IG_ACCOUNTS[account] ? { ...t0, user_id: IG_ACCOUNTS[account](), name: `@${account}` } : t0;
   const G = t.host || "https://graph.instagram.com/v21.0";
   const g = async (path, params) => {
     const d = await json(await fetch(`${G}/${path}`, { method: "POST", body: form({ ...params, access_token: t.access_token }) }));
@@ -329,7 +334,7 @@ async function postInstagram({ text, images = [], video, story = false }) {
     await wait(5000);
   }
   const pub = await g(`${user}/media_publish`, { creation_id: creation });
-  if (story) return { url: "https://www.instagram.com/stories/eartheditions_/", note: "Story is up for the next 24 hours", id: pub.id };
+  if (story) return { url: `https://www.instagram.com/stories/${(t.name || "@eartheditions_").slice(1)}/`, note: "Story is up for the next 24 hours", id: pub.id };
   const link = await json(await fetch(`${G}/${pub.id}?fields=permalink&access_token=${encodeURIComponent(t.access_token)}`));
   return { url: link.permalink || "" };
 }
@@ -997,6 +1002,16 @@ export default async function handler(req, res) {
       return res.send(Buffer.from(await r.arrayBuffer()));
     }
 
+    // Can the token post to this account? (Soniya's planner shows it before scheduling.)
+    if (action === "ig_check") {
+      const acct = String(body.account || u.searchParams.get("account") || "");
+      if (!IG_ACCOUNTS[acct]) fail(400, "Which account?");
+      const t = await getSecret("tok_instagram");
+      if (!t?.access_token) return res.json({ ok: false, reason: "Instagram isn't connected in Social." });
+      const G = t.host || "https://graph.instagram.com/v21.0";
+      const d = await json(await fetch(`${G}/${IG_ACCOUNTS[acct]()}?fields=username&access_token=${encodeURIComponent(t.access_token)}`));
+      return res.json(d.username ? { ok: true, username: d.username } : { ok: false, reason: d.error?.message || "No access" });
+    }
     if (action === "auto_get") return res.json({ auto: await autoSettings(), queue: (await appData(QUEUE_KEY)) || [] });
     if (action === "auto_set") {
       const cur = await autoSettings(), next = body.auto || {};
@@ -1010,10 +1025,10 @@ export default async function handler(req, res) {
     if (action === "schedule") {
       const queue = (await appData(QUEUE_KEY)) || [];
       if (!Date.parse(body.at)) fail(400, "When?");
-      const rows = (body.items || []).filter(i => POST[i.platform]).map(i => ({ id: crypto.randomUUID(), at: new Date(body.at).toISOString(), platform: i.platform, payload: i.payload, status: "pending", created: new Date().toISOString() }));
+      const rows = (body.items || []).filter(i => POST[i.platform]).map(i => ({ id: i.id || crypto.randomUUID(), at: new Date(body.at).toISOString(), platform: i.platform, payload: i.payload, status: "pending", created: new Date().toISOString() }));
       const keep = queue.filter(q => q.status === "pending" || Date.now() - Date.parse(q.done_at || q.at) < 30 * 864e5);
       await saveData(QUEUE_KEY, [...keep, ...rows]);
-      return res.json({ ok: true, added: rows.length });
+      return res.json({ ok: true, added: rows.length, ids: rows.map(r => r.id) });
     }
     if (action === "unschedule") {
       const queue = (await appData(QUEUE_KEY)) || [];

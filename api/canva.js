@@ -103,15 +103,43 @@ export default async function handler(req, res) {
       });
     }
 
+    /* Soniya's planner: a post rendered as a one-slide PowerPoint, imported so
+       every line of text and every photo is its own editable element.
+       body: { url (our storage), title } → { design_id, edit_url } */
+    if (action === "import") {
+      const { url, title = "Atyahara post" } = req.body || {};
+      let src; try { src = new URL(String(url || "")); } catch { return res.status(400).json({ error: "url required" }); }
+      if (src.protocol !== "https:" || !/\.supabase\.co$/i.test(src.hostname)) return res.status(400).json({ error: "Only ERP storage files can be imported" });
+      const f = await fetch(src);
+      if (!f.ok) return res.status(502).json({ error: `Couldn't read the file (${f.status})` });
+      const buf = Buffer.from(await f.arrayBuffer());
+      const im = await fetch(`${BASE}/imports`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`, "Content-Type": "application/octet-stream",
+          "Import-Metadata": JSON.stringify({ title_base64: Buffer.from(String(title).slice(0, 50)).toString("base64"), mime_type: "application/vnd.openxmlformats-officedocument.presentationml.presentation" }),
+        },
+        body: buf,
+      });
+      const imStart = await im.json();
+      if (!im.ok) return res.status(im.status).json({ error: `import: ${JSON.stringify(imStart)}`, needsAuth: im.status === 401 || im.status === 403 });
+      const job = imStart.job?.status === "in_progress" ? await pollJob(token, `/imports/${imStart.job.id}`) : imStart.job;
+      if (job?.status === "failed") return res.status(502).json({ error: `Canva couldn't import it: ${JSON.stringify(job.error || job)}` });
+      const d = job?.result?.designs?.[0];
+      if (!d?.id) return res.status(502).json({ error: `no design from Canva: ${JSON.stringify(job)}` });
+      return res.status(200).json({ design_id: d.id, edit_url: d.urls?.edit_url || d.urls?.view_url || null });
+    }
+
     if (action === "export") {
-      const { design_id } = req.body || {};
+      const { design_id, width, height, jpg } = req.body || {};
       if (!design_id) return res.status(400).json({ error: "design_id required" });
 
       // 3) Export the (background-removed) design as PNG.
       const ex = await authed(token, "/exports", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ design_id, format: { type: "png" } }),
+        // The planner asks for an Instagram-ready JPEG at the post's exact size.
+        body: JSON.stringify({ design_id, format: jpg ? { type: "jpg", quality: 92, ...(width ? { width: clampDim(width) } : {}), ...(height ? { height: clampDim(height) } : {}) } : { type: "png" } }),
       });
       const exStart = await ex.json();
       if (!ex.ok) return res.status(ex.status).json({ error: `export: ${JSON.stringify(exStart)}` });
@@ -128,10 +156,10 @@ export default async function handler(req, res) {
       // so the client can save it into ERP storage.
       const img = await fetch(url);
       const out = Buffer.from(await img.arrayBuffer());
-      return res.status(200).json({ image: `data:image/png;base64,${out.toString("base64")}` });
+      return res.status(200).json({ image: `data:image/${jpg ? "jpeg" : "png"};base64,${out.toString("base64")}` });
     }
 
-    return res.status(400).json({ error: "unknown action (use 'create' or 'export')" });
+    return res.status(400).json({ error: "unknown action (use 'create', 'import' or 'export')" });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }

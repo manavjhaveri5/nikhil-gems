@@ -10,7 +10,11 @@
      with the final, scores how much Sir changed, and Soniya writes down what she
      learned (app_rows soniya-notes-v1, kind "lesson", source "planner"). Her
      next drafts start from those lessons, so the change score should fall.
-   - Phase 1 never posts. Approved posts wait for Sir (Canva + Instagram come in phase 2).
+   - Phase 2: "Edit in Canva" sends the post to Canva as a one-slide PowerPoint
+     (every line and photo editable, api/canva.js import); "Bring back" exports
+     it as the final JPEG. An approved post is scheduled into the Social
+     autopilot queue (ng-social-queue-v1) for @atyahara at its date and time,
+     and goes out only after Sir has approved it.
 
    Storage: app_rows "soniya-ig-v1", one row per post. Renders: public/soniya/post.html.
    AI: /api/claude (metered by Girton). */
@@ -55,7 +59,7 @@ const STAGES = [
   ["visual", "4 · Visual", "Layout, tile colour and photographs.", ["format", "tile", "image", "image2", "image3"]],
   ["caption", "5 · Caption", "The Instagram caption and hashtags.", ["caption", "hashtags"]],
 ];
-const STATUS = { idea: ["Idea", C.inkMid, C.card], draft: ["Working", C.blue, C.blueBg], approved: ["Approved", C.green, C.greenBg], published: ["Published", C.inkMid, C.card], skipped: ["Skipped", C.inkFaint, C.card] };
+const STATUS = { idea: ["Idea", C.inkMid, C.card], draft: ["Working", C.blue, C.blueBg], approved: ["Approved", C.green, C.greenBg], scheduled: ["Scheduled", C.purple, C.purpleBg], published: ["Published", C.inkMid, C.card], skipped: ["Skipped", C.inkFaint, C.card] };
 const Tag = ({ c = C.inkMid, bg = C.card, children }) => <span style={{ fontSize: 9.5, fontWeight: 700, textTransform: "uppercase", letterSpacing: .4, background: bg, color: c, borderRadius: 4, padding: "2px 6px", whiteSpace: "nowrap" }}>{children}</span>;
 
 /* ── storage ─────────────────────────────────────────────────────────── */
@@ -253,6 +257,119 @@ function Stage({ st, post, no, busy, onPatch, onOptions, onChoose, library }) {
   </div>;
 }
 
+
+/* ── render in a hidden full-size frame: JPEG for Instagram, PPTX for Canva ── */
+function inFrame(data, fn) {
+  return new Promise((resolve, reject) => {
+    const f = document.createElement("iframe");
+    f.style.cssText = "position:fixed;left:-20000px;top:0;width:1080px;height:1350px;border:0;opacity:0;pointer-events:none";
+    f.src = `/soniya/post.html#${encodeURIComponent(JSON.stringify(data))}`;
+    const done = (fnErr, v) => { f.remove(); fnErr ? reject(fnErr) : resolve(v); };
+    const timer = setTimeout(() => done(new Error("The render took too long. Try again.")), 60000);
+    f.onload = async () => { try { const v = await f.contentWindow[fn](); clearTimeout(timer); done(null, v); } catch (e) { clearTimeout(timer); done(e); } };
+    document.body.appendChild(f);
+  });
+}
+const b64Blob = (b64, type) => { const bin = atob(b64.replace(/^data:[^,]+,/, "")); const a = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) a[i] = bin.charCodeAt(i); return new Blob([a], { type }); };
+const PPTX_TYPE = "application/vnd.openxmlformats-officedocument.presentationml.presentation";
+async function store(blob, name) { return uploadToStorage(`soniya/ig/${Date.now()}-${name}`, new File([blob], name, { type: blob.type })); }
+async function api(path, body) {
+  const r = await fetch(path, body ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) } : {});
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok || d.error) { const e = new Error(typeof d.error === "string" ? d.error : d.error?.message || `HTTP ${r.status}`); e.needsAuth = d.needsAuth; throw e; }
+  return d;
+}
+const istAt = (date, time) => new Date(`${date}T${time || "19:30"}:00+05:30`).toISOString();
+const captionOf = c => [c?.caption, c?.hashtags].filter(Boolean).join("\n\n");
+
+/* ── 6 · Canva & Instagram ───────────────────────────────────────────── */
+function Publish({ post, no, onSave, ig }) {
+  const [busy, setBusy] = useState("");
+  const [err, setErr] = useState("");
+  const [needCanva, setNeedCanva] = useState(false);
+  const cur = post.cur || {};
+  const lastEdit = post.versions?.length ? post.versions[post.versions.length - 1].at : "";
+  const stale = post.final?.source === "canva" && lastEdit > post.final.at;
+  const run = async (k, fn) => { setBusy(k); setErr(""); try { await fn(); } catch (e) { setErr(e.message); if (e.needsAuth) setNeedCanva(true); } setBusy(""); };
+  const data = { ...cur, stamp: { no: no || 1 } };
+
+  const toCanva = () => run("canva", async () => {
+    const b64 = await inFrame(data, "soniyaPptx");
+    const url = await store(b64Blob(b64, PPTX_TYPE), `${post.id}.pptx`);
+    const d = await api("/api/canva", { action: "import", url, title: `Atyahara · ${post.date} · ${cur.headline || cur.dev || post.idea?.subject || "post"}`.slice(0, 50) });
+    await onSave({ ...post, canva: { design_id: d.design_id, edit_url: d.edit_url, at: new Date().toISOString() } });
+  });
+  const fromCanva = () => run("back", async () => {
+    const d = await api("/api/canva", { action: "export", design_id: post.canva.design_id, jpg: true, width: 1080, height: 1350 });
+    const url = await store(b64Blob(d.image, "image/jpeg"), `${post.id}-canva.jpg`);
+    await onSave({ ...post, final: { url, source: "canva", at: new Date().toISOString() } });
+  });
+  const imageForPost = async () => {
+    if (post.final?.url && post.final.source === "canva") return post.final;
+    const jpg = await inFrame(data, "soniyaJpeg");
+    return { url: await store(b64Blob(jpg, "image/jpeg"), `${post.id}-final.jpg`), source: "erp", at: new Date().toISOString() };
+  };
+  const schedule = () => run("schedule", async () => {
+    if (!ig?.ok) throw new Error("The ERP can't post to @atyahara yet (see the note above).");
+    const at = istAt(post.date, post.time);
+    if (Date.parse(at) < Date.now() + 5 * 6e4) throw new Error("That time has passed. Change the date or time first.");
+    if (!cur.caption && !window.confirm("This post has no caption yet. Schedule it anyway?")) return;
+    const final = await imageForPost();
+    const qid = crypto.randomUUID();
+    await api("/api/social?action=schedule", { at, items: [{ id: qid, platform: "instagram", payload: { account: "atyahara", text: captionOf(cur), images: [final.url], title: cur.headline || post.idea?.subject || "", source: `soniya:${post.id}` } }] });
+    await onSave({ ...post, status: "scheduled", final, queue_id: qid, scheduled_at: at, post_error: null });
+  });
+  const unschedule = () => run("unschedule", async () => {
+    if (post.queue_id) await api("/api/social?action=unschedule", { id: post.queue_id });
+    await onSave({ ...post, status: "approved", queue_id: null, scheduled_at: null });
+  });
+  const postNow = () => run("now", async () => {
+    if (!ig?.ok) throw new Error("The ERP can't post to @atyahara yet (see the note above).");
+    if (!window.confirm("Post this to @atyahara on Instagram now?")) return;
+    const final = await imageForPost();
+    const d = await api("/api/social?action=post&p=instagram", { p: "instagram", account: "atyahara", text: captionOf(cur), images: [final.url], title: cur.headline || "", source: `soniya:${post.id}` });
+    await onSave({ ...post, status: "published", final, published_at: new Date().toISOString(), url: d.url || "" });
+  });
+
+  return <div style={{ ...card, marginBottom: 10 }}>
+    <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 8 }}>
+      <div style={{ fontFamily: SERIF, fontSize: 18, fontWeight: 700 }}>6 · Canva & Instagram</div><div style={{ ...sub, flex: 1 }}>Fine-tune in Canva if you want, then schedule.</div>
+    </div>
+    {err && <div style={{ background: C.redBg, color: C.red, borderRadius: 8, padding: "7px 10px", fontSize: 12.5, marginBottom: 8 }}>{err}</div>}
+
+    <span style={lab}>Canva</span>
+    <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", marginBottom: 6 }}>
+      {needCanva && <button onClick={() => window.open("/api/canva-auth?action=start", "canva-auth", "width=520,height=720")} style={btn(C.ink, "#fff")}>Connect Canva</button>}
+      {post.canva?.edit_url && <a href={post.canva.edit_url} target="_blank" rel="noreferrer" style={{ ...btn(ACCENT, "#fff"), textDecoration: "none" }}>Open in Canva ↗</a>}
+      <button disabled={!!busy} onClick={toCanva} style={btn()}>{busy === "canva" ? "Sending to Canva…" : post.canva ? "Send a fresh copy" : "Edit in Canva"}</button>
+      {post.canva && <button disabled={!!busy} onClick={fromCanva} style={btn(C.ink, "#fff")}>{busy === "back" ? "Bringing it back…" : "Bring back from Canva"}</button>}
+    </div>
+    <div style={{ ...sub, marginBottom: 10 }}>{post.canva ? `In Canva since ${new Date(post.canva.at).toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}. Each line of text, photo and the stamp are separate elements; fonts are Canva's own copies, so check spacing once.` : "Sends this post to your Canva as an editable design."}</div>
+    {post.final?.source === "canva" && <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 10 }}>
+      <img src={post.final.url} alt="" style={{ width: 64, borderRadius: 4, border: `1px solid ${C.border}` }} />
+      <div style={{ fontSize: 12.5, flex: 1 }}>The Canva version will be posted.{stale && <div style={{ color: C.amber }}>You've changed the post here since; bring it back again or use the ERP version.</div>}</div>
+      <button onClick={() => onSave({ ...post, final: null })} style={btn()}>Use the ERP version</button>
+    </div>}
+
+    <span style={lab}>Instagram · @atyahara</span>
+    {ig && !ig.ok && <div style={{ fontSize: 12.5, background: C.amberBg, borderRadius: 8, padding: "7px 10px", marginBottom: 8 }}>The ERP can't post to @atyahara yet: {ig.reason || "no access"}. In Meta Business Settings → Users → System users → “Earth Editions Studio System User” → Assign assets → Instagram accounts → @atyahara, give full control, then reload this page.</div>}
+    <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+      <input type="date" value={post.date} disabled={post.status === "scheduled"} onChange={e => e.target.value && onSave({ ...post, date: e.target.value })} style={FI({ width: "auto", fontSize: 12.5 })} />
+      <input type="time" value={post.time || "19:30"} disabled={post.status === "scheduled"} onChange={e => onSave({ ...post, time: e.target.value })} style={FI({ width: "auto", fontSize: 12.5 })} />
+      <span style={sub}>IST</span>
+      {post.status === "approved" && <>
+        <button disabled={!!busy} onClick={schedule} style={btn(C.green, "#fff")}>{busy === "schedule" ? "Scheduling…" : "Schedule"}</button>
+        <button disabled={!!busy} onClick={postNow} style={btn()}>{busy === "now" ? "Posting…" : "Post now"}</button>
+      </>}
+      {post.status === "scheduled" && <button disabled={!!busy} onClick={unschedule} style={btn()}>{busy === "unschedule" ? "…" : "Unschedule"}</button>}
+      {post.status === "draft" && <span style={sub}>Approve the post first.</span>}
+      {post.status === "published" && post.url && <a href={post.url} target="_blank" rel="noreferrer" style={{ fontSize: 12.5, color: ACCENT }}>View on Instagram ↗</a>}
+    </div>
+    {post.status === "scheduled" && <div style={{ ...sub, marginTop: 6 }}>Goes out {new Date(post.scheduled_at).toLocaleString("en-GB", { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", timeZone: "Asia/Kolkata" })} IST, within the hour (the autopilot runs hourly).</div>}
+    {post.post_error && <div style={{ fontSize: 12.5, color: C.red, marginTop: 6 }}>Last attempt failed: {post.post_error}</div>}
+  </div>;
+}
+
 function Compare({ post, no }) {
   const a = post.first || {}, b = post.cur || {};
   const score = changeScore(a, b);
@@ -283,6 +400,7 @@ function PostStudio({ post, no, onSave, onBack, ctx, library }) {
   const [err, setErr] = useState("");
   const [view, setView] = useState("work");
   const [ver, setVer] = useState(null);
+  const [showFinal, setShowFinal] = useState(false);
   const cur = post.cur;
   const version = (p, by, stage, note) => [...(p.versions || []), { n: (p.versions?.length || 0) + 1, at: new Date().toISOString(), by, stage, note: note || "", snap: p.cur }].slice(-40);
   const save = async (p) => { try { await onSave(p); } catch (e) { setErr(e.message); } };
@@ -371,7 +489,8 @@ function PostStudio({ post, no, onSave, onBack, ctx, library }) {
     </div> : view === "compare" ? <Compare post={post} no={no} /> :
     <div style={{ display: "grid", gridTemplateColumns: mob() ? "minmax(0,1fr)" : `${pw}px minmax(0,1fr)`, gap: 16, alignItems: "start" }}>
       <div style={{ position: mob() ? "static" : "sticky", top: 120 }}>
-        <Preview data={ver ? ver.snap : cur} width={pw} no={no} />
+        {post.final?.source === "canva" && !ver && <div style={{ display: "flex", gap: 4, marginBottom: 6 }}>{[["live", "Live render"], ["canva", "Canva version"]].map(([k, l]) => <button key={k} onClick={() => setShowFinal(k === "canva")} style={(k === "canva") === showFinal ? btn(C.ink, "#fff") : btn()}>{l}</button>)}</div>}
+        {showFinal && post.final?.source === "canva" && !ver ? <img src={post.final.url} alt="" style={{ width: pw, display: "block", borderRadius: 4 }} /> : <Preview data={ver ? ver.snap : cur} width={pw} no={no} />}
         {ver && <div style={{ display: "flex", gap: 6, marginTop: 8 }}><span style={{ ...sub, flex: 1 }}>Viewing version {ver.n}</span><button onClick={() => restore(ver)} style={btn(C.ink, "#fff")}>Go back to this</button><button onClick={() => setVer(null)} style={btn()}>Close</button></div>}
         <div style={{ ...card, marginTop: 10, padding: "10px 12px" }}>
           <span style={lab}>Versions</span>
@@ -380,7 +499,8 @@ function PostStudio({ post, no, onSave, onBack, ctx, library }) {
           </div>)}</div>
         </div>
       </div>
-      <div>{STAGES.map(st => <Stage key={st[0]} st={st} post={post} no={no} busy={busy} library={library} onPatch={patch} onOptions={options} onChoose={choose} />)}</div>
+      <div>{STAGES.map(st => <Stage key={st[0]} st={st} post={post} no={no} busy={busy} library={library} onPatch={patch} onOptions={options} onChoose={choose} />)}
+        <Publish post={post} no={no} onSave={save} ig={ctx.ig} /></div>
     </div>}
   </div>;
 }
@@ -398,8 +518,22 @@ export default function SoniyaPlanner({ brief, brand, notes, onNotesChanged }) {
   const [cad, setCad] = useState("3");
   const [showPlan, setShowPlan] = useState(false);
 
-  const load = async () => { try { setPosts(await rowsOf(KEY)); } catch (e) { setErr(e.message); } };
-  useEffect(() => { load(); }, []);
+  const [ig, setIg] = useState(null);
+  const load = async () => {
+    let ps;
+    try { ps = await rowsOf(KEY); setPosts(ps); } catch (e) { setErr(e.message); return; }
+    // What the autopilot did with scheduled posts.
+    try {
+      const { queue = [] } = await api("/api/social?action=auto_get");
+      for (const p of ps.filter(p => p.status === "scheduled" && p.queue_id)) {
+        const q = queue.find(x => x.id === p.queue_id);
+        if (q?.status === "done") await save({ ...p, status: "published", url: q.url || "", published_at: q.done_at || new Date().toISOString() });
+        else if (q?.status === "failed") await save({ ...p, status: "approved", queue_id: null, post_error: q.error || "failed" });
+        else if (!q) await save({ ...p, status: "approved", queue_id: null, post_error: "It was no longer in the queue." });
+      }
+    } catch { /* the planner still works without the queue */ }
+  };
+  useEffect(() => { load(); api("/api/social?action=ig_check&account=atyahara").then(setIg).catch(e => setIg({ ok: false, reason: e.message })); }, []);
   const setV = v => { setView(v); try { localStorage.setItem("soniya-plan-view", v); } catch {} };
 
   const lessons = useMemo(() => (notes || []).filter(n => n.kind === "lesson").slice(-40).map(n => (n.body || n.title || "").split("\n")[0]), [notes]);
@@ -463,7 +597,7 @@ export default function SoniyaPlanner({ brief, brand, notes, onNotesChanged }) {
   if (!posts) return <div style={{ color: C.inkFaint, padding: 30 }}>{err || "Loading…"}</div>;
   const open = all.find(p => p.id === openId);
   if (open) return <PostStudio key={open.id} post={open} no={nos[open.id]} onSave={save} onBack={() => setOpenId(null)} library={library}
-    ctx={{ system, neighbourTiles, onLearned: () => onNotesChanged?.() }} />;
+    ctx={{ system, neighbourTiles, ig, onLearned: () => onNotesChanged?.() }} />;
 
   const chip = p => { const c = p.cur || {}; const t = c.tile || p.idea?.tile || "ivory"; const [sl, sc] = STATUS[p.status] || STATUS.idea;
     return <div key={p.id} onClick={() => setOpenId(p.id)} title={p.idea?.angle || ""} style={{ cursor: "pointer", background: TILES[t], color: DARK.has(t) ? "#F7F0E6" : "#3A2A23", borderRadius: 6, padding: "5px 7px", marginTop: 4, fontSize: 11.5, lineHeight: 1.25 }}>
@@ -498,7 +632,8 @@ export default function SoniyaPlanner({ brief, brand, notes, onNotesChanged }) {
         <div style={{ fontSize: 18, fontWeight: 700, color: v <= 15 ? C.green : v <= 40 ? C.amber : C.red }}>{v}%</div>
         <div style={sub}>{new Date(`${m}-01T12:00:00`).toLocaleDateString("en-GB", { month: "short" })} · {n} post{n === 1 ? "" : "s"}</div></div>)
         : <div style={sub}>No approved posts yet. The score starts with your first approval.</div>}
-      <div style={{ ...sub, marginLeft: "auto" }}>{lessons.length} lesson{lessons.length === 1 ? "" : "s"} learned</div>
+      <div style={{ ...sub, marginLeft: "auto", textAlign: "right" }}>{lessons.length} lesson{lessons.length === 1 ? "" : "s"} learned
+        <div style={{ color: ig?.ok ? C.green : C.amber }}>{!ig ? "Checking @atyahara…" : ig.ok ? "Posting to @atyahara: ready" : "Posting to @atyahara: not set up yet"}</div></div>
     </div>
 
     {!all.length && <div style={{ ...card, marginBottom: 12, textAlign: "center", padding: 24 }}>

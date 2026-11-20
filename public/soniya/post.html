@@ -9,7 +9,7 @@
      page re-renders on every hash change, so the planner can update it without a reload.
      Fields: format, tile, kicker, headline, dev, translit, gram, body, credit, figure,
              image, image2, image3, points[{k,v}], stamp{series,dev,no} -->
-<link href="https://fonts.googleapis.com/css2?family=Gloock&family=Gajraj+One&family=EB+Garamond:ital,wght@0,400;0,500;1,400&family=Tiro+Devanagari+Hindi&display=block" rel="stylesheet">
+<link href="fonts/fonts.css" rel="stylesheet">
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 html,body{width:1080px;height:1350px;overflow:hidden;background:transparent}
@@ -245,6 +245,124 @@ function fromHash() {
 addEventListener("hashchange", fromHash);
 addEventListener("message", e => { if (e.origin === location.origin && e.data?.soniyaPost) render(e.data.soniyaPost); });
 fromHash();
+
+/* ── Export (called by the planner from a hidden, full-size frame) ──────────
+   soniyaJpeg()  → the post as a 1080 × 1350 JPEG data URL (Instagram takes JPEG only).
+   soniyaPptx()  → the post as a one-slide PowerPoint (base64), every line of text its
+                   own text box, every photo its own picture, so Canva imports it as
+                   editable elements. Fonts are named; Canva uses its own copy of each. */
+const loadJs = src => new Promise((ok, no) => { if ([...document.scripts].some(s => s.src === src)) return ok(); const s = document.createElement("script"); s.src = src; s.onload = ok; s.onerror = () => no(new Error("Couldn't load " + src)); document.head.appendChild(s); });
+const H2I = "https://cdn.jsdelivr.net/npm/html-to-image@1.11.11/dist/html-to-image.js";
+const PPTX = "https://cdn.jsdelivr.net/npm/pptxgenjs@3.12.0/dist/pptxgen.bundle.js";
+async function settled() {
+  await document.fonts.ready;
+  await Promise.all([...document.images].map(i => i.complete ? 0 : new Promise(r => { i.onload = i.onerror = r; })));
+  fit();
+}
+window.soniyaJpeg = async () => {
+  await loadJs(H2I); await settled();
+  const sec = document.querySelector(".post");
+  return htmlToImage.toJpeg(sec, { width: 1080, height: 1350, pixelRatio: 1, quality: .94, backgroundColor: getComputedStyle(sec).backgroundColor });
+};
+
+const hex = c => { const m = String(c).match(/[\d.]+/g); if (!m) return "000000"; return m.slice(0, 3).map(v => (+v | 0).toString(16).padStart(2, "0")).join("").toUpperCase(); };
+const alpha = c => { const m = String(c).match(/[\d.]+/g); return m && m.length > 3 ? +m[3] : 1; };
+const IN = px => px / 96;   // the slide is 1080 × 1350 px at 96 per inch
+const PT = px => px * .75;
+async function crop(img, box) {
+  // object-fit: cover, at the element's object-position, drawn the way the browser shows it.
+  const cs = getComputedStyle(img), nat = { w: img.naturalWidth, h: img.naturalHeight };
+  const c = document.createElement("canvas"); c.width = Math.round(box.w * 1.5); c.height = Math.round(box.h * 1.5);
+  const g = c.getContext("2d");
+  if (cs.objectFit === "cover") {
+    const s = Math.max(c.width / nat.w, c.height / nat.h), [px, py] = cs.objectPosition.split(" ").map(v => parseFloat(v) / 100);
+    const dw = nat.w * s, dh = nat.h * s;
+    g.drawImage(img, (c.width - dw) * (isNaN(px) ? .5 : px), (c.height - dh) * (isNaN(py) ? .5 : py), dw, dh);
+  } else g.drawImage(img, 0, 0, c.width, c.height);
+  const png = /\.png($|\?)/i.test(img.src) && cs.objectFit !== "cover";
+  return c.toDataURL(png ? "image/png" : "image/jpeg", .9);
+}
+const BLOCK = new Set(["block", "flex", "grid", "table", "table-row", "table-cell", "list-item"]);
+function runsOf(el, out = [], first = true) {
+  for (const n of el.childNodes) {
+    if (n.nodeType === 3) {
+      const t = n.textContent.replace(/\s+/g, " ");
+      if (!t.trim()) continue;
+      const cs = getComputedStyle(n.parentElement);
+      const caps = cs.fontVariantCaps === "all-small-caps" || cs.textTransform === "uppercase";
+      out.push({ text: caps ? t.toUpperCase() : t, options: {
+        fontFace: cs.fontFamily.split(",")[0].replace(/["']/g, "").trim(), fontSize: PT(parseFloat(cs.fontSize) * (cs.fontVariantCaps === "all-small-caps" ? .78 : 1)),
+        color: hex(cs.color), italic: cs.fontStyle === "italic", bold: +cs.fontWeight >= 600,
+        charSpacing: parseFloat(cs.letterSpacing) ? PT(parseFloat(cs.letterSpacing)) : 0 } });
+    } else if (n.nodeType === 1) {
+      const block = BLOCK.has(getComputedStyle(n).display);
+      if (block && out.length) out[out.length - 1].options.breakLine = true;
+      runsOf(n, out, false);
+      if (block && out.length) out[out.length - 1].options.breakLine = true;
+    }
+  }
+  if (first && out.length) out[out.length - 1].options.breakLine = false;
+  return out;
+}
+window.soniyaPptx = async () => {
+  await Promise.all([loadJs(H2I), loadJs(PPTX)]); await settled();
+  const sec = document.querySelector(".post"), base = sec.getBoundingClientRect();
+  const pptx = new PptxGenJS();
+  pptx.defineLayout({ name: "IG", width: IN(1080), height: IN(1350) }); pptx.layout = "IG";
+  pptx.title = (document.querySelector(".h, .w, .d")?.textContent || "Atyahara post").trim();
+  const slide = pptx.addSlide();
+  slide.background = { color: hex(getComputedStyle(sec).backgroundColor) };
+  const box = el => { const r = el.getBoundingClientRect(); return { x: r.left - base.left, y: r.top - base.top, w: r.width, h: r.height }; };
+  const lines = el => {   // borders become lines and frames
+    const cs = getComputedStyle(el), b = box(el);
+    const sides = ["Top", "Right", "Bottom", "Left"].map(s => [s, parseFloat(cs[`border${s}Width`]), cs[`border${s}Color`]]).filter(([, w]) => w > 0);
+    if (sides.length === 4) return slide.addShape(pptx.ShapeType.rect, { x: IN(b.x), y: IN(b.y), w: IN(b.w), h: IN(b.h), fill: { type: "none" }, line: { color: hex(sides[0][2]), width: PT(sides[0][1]), transparency: Math.round((1 - alpha(sides[0][2])) * 100) } });
+    for (const [s, w, c] of sides) {
+      const y = s === "Bottom" ? b.y + b.h : b.y;
+      if (s === "Top" || s === "Bottom") slide.addShape(pptx.ShapeType.line, { x: IN(b.x), y: IN(y), w: IN(b.w), h: 0, line: { color: hex(c), width: PT(w), transparency: Math.round((1 - alpha(c)) * 100) } });
+    }
+  };
+  async function walk(el) {
+    const cs = getComputedStyle(el);
+    if (cs.display === "none") return;
+    if (el.tagName === "IMG") {
+      const b = box(el); if (!el.naturalWidth || b.w < 2) return;
+      slide.addImage({ data: await crop(el, b), x: IN(b.x), y: IN(b.y), w: IN(b.w), h: IN(b.h) });
+      return;
+    }
+    if (el.tagName.toLowerCase() === "svg") {
+      // the stamp: drawn upright with its fonts, then turned in the slide
+      const m = new DOMMatrix(cs.transform === "none" ? undefined : cs.transform);
+      const deg = Math.round(Math.atan2(m.b, m.a) * 180 / Math.PI);
+      const r = box(el), w = el.clientWidth || 200, h = el.clientHeight || 200;
+      const data = await htmlToImage.toPng(el, { pixelRatio: 2, style: { transform: "none", position: "static", left: "auto", top: "auto", right: "auto", bottom: "auto" }, width: w, height: h });
+      slide.addImage({ data, x: IN(r.x + r.w / 2 - w / 2), y: IN(r.y + r.h / 2 - h / 2), w: IN(w), h: IN(h), rotate: deg });
+      return;
+    }
+    if (el !== sec && cs.backgroundColor && alpha(cs.backgroundColor) > 0 && !el.querySelector("img") ) {
+      const b = box(el); slide.addShape(pptx.ShapeType.rect, { x: IN(b.x), y: IN(b.y), w: IN(b.w), h: IN(b.h), fill: { color: hex(cs.backgroundColor) }, line: { type: "none" } });
+    } else if (el.classList.contains("plate")) {
+      const b = box(el); slide.addShape(pptx.ShapeType.rect, { x: IN(b.x), y: IN(b.y), w: IN(b.w), h: IN(b.h), fill: { color: hex(cs.backgroundColor) }, line: { type: "none" } });
+    }
+    if (el !== sec) lines(el);
+    const kids = [...el.children];
+    const hasMedia = el.querySelector("img, svg");
+    const spread = ["table", "table-row-group", "table-row"].includes(cs.display) || (["flex", "grid"].includes(cs.display) && kids.length > 1);
+    if (el !== sec && !hasMedia && !spread && el.textContent.trim()) {
+      const runs = runsOf(el), b = box(el);
+      const rg = document.createRange(); rg.selectNodeContents(el); const tr = rg.getBoundingClientRect();
+      const x = Math.min(b.x, tr.left - base.left), w = Math.max(b.w, tr.width) * 1.04 + 6;
+      const lh = parseFloat(cs.lineHeight) || parseFloat(cs.fontSize) * 1.2;
+      slide.addText(runs, { x: IN(x), y: IN(b.y), w: IN(Math.min(w, 1080 - x)), h: IN(Math.max(b.h, tr.height) + 4), margin: 0, valign: "top", fit: "none",
+        align: ["center", "right"].includes(cs.textAlign) ? cs.textAlign : "left", lineSpacing: PT(lh), wrap: cs.whiteSpace !== "nowrap" });
+      for (const k of el.querySelectorAll("*")) lines(k);
+      return;
+    }
+    for (const k of kids) await walk(k);
+  }
+  for (const k of sec.children) await walk(k);
+  return pptx.write({ outputType: "base64" });
+};
 </script>
 </body>
 </html>
