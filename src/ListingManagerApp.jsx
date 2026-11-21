@@ -1817,7 +1817,9 @@ function BulkMarkSoldModal({ rows, skipped, onSave, onClose }) {
   const [err, setErr] = useState("");
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
   const uniques = rows.filter(l => l.type === "unique");
-  const otherLive = [...new Set(uniques.flatMap(l => PLATFORMS.filter(p => !p.coming && p.key !== form.platform && l.platforms?.[p.key]?.status === "active").map(p => p.label)))];
+  const liveKeys = new Set(uniques.flatMap(l => PLATFORMS.filter(p => !p.coming && p.key !== form.platform && l.platforms?.[p.key]?.status === "active").map(p => p.key)));
+  const otherLive = PLATFORMS.filter(p => liveKeys.has(p.key) && p.key !== "store").map(p => p.label);
+  const onStore = liveKeys.has("store");
   const nRep = rows.length - uniques.length;
   const save = async () => {
     setBusy(true); setErr("");
@@ -1890,11 +1892,11 @@ function BulkMarkSoldModal({ rows, skipped, onSave, onClose }) {
             </div>
           </div>
 
-          {uniques.length > 0 && otherLive.length > 0 && (
+          {uniques.length > 0 && (otherLive.length > 0 || onStore) && (
             <div style={{ background: C.amberBg, border: `1px solid ${C.amber}50`, borderRadius: 8, padding: "10px 14px", fontSize: 12, color: C.ink, lineHeight: 1.5 }}>
               <label style={{ display: "flex", alignItems: "flex-start", gap: 9, cursor: "pointer" }}>
                 <input type="checkbox" checked={!!form.remove_other_platforms} onChange={e => set("remove_other_platforms", e.target.checked)} style={{ marginTop: 2, accentColor: C.amber }} />
-                <span><strong>Unique items</strong> — remove the {uniques.length} unique piece{uniques.length === 1 ? "" : "s"} from <strong>{otherLive.join(", ")}</strong> after recording these sales.</span>
+                <span><strong>Unique items</strong> — after recording these sales, {otherLive.length > 0 && <>remove the {uniques.length} unique piece{uniques.length === 1 ? "" : "s"} from <strong>{otherLive.join(", ")}</strong>{onStore ? " and " : "."}</>}{onStore && <>keep {otherLive.length ? "them" : "them"} on show as <strong>Sold</strong> on the EE store.</>}</span>
               </label>
             </div>
           )}
@@ -11840,7 +11842,8 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
     else if (p.key === "shopify_aty") { action = "unpublish_shopify"; storeKey = "atyahara"; }
     else if (p.key === "shopify_earth") { action = "unpublish_shopify"; storeKey = "earth"; }
     else if (p.key === "trade") { if (tradeRefOnly(listing)) return; await hideTradeProduct(listing.platforms?.trade?.product_id).catch(e => console.warn("Trade hide failed:", e.message)); return; }
-    else if (p.key === "store") { await hideStoreProduct(listing.platforms?.store?.product_id).catch(e => console.warn("Store hide failed:", e.message)); return; }
+    // The store keeps a sold piece on show as Sold, as the order checklist does.
+    else if (p.key === "store") { await markStoreSold(listing.platforms?.store?.product_id).catch(e => console.warn("Store sold failed:", e.message)); return; }
     else if (p.key === "ebay") {
       const itemId = listing.platforms?.ebay?.item_id;
       if (!itemId) return;
@@ -11883,6 +11886,8 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
       notes:             saleForm.notes,
       created_at:        now(),
     };
+    // This sale marks the store copy Sold itself; the order-watching sync needn't too.
+    if (listing.type === "unique" && saleForm.remove_other_platforms) storeSoldDone.current.add(listing.id);
     await saveOrderItem(order, { prepend: true });
 
     // For unique items: remove from ALL live platforms in one state update
@@ -11895,7 +11900,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
       await patchListingItem(listing, current => {
         const updatedPlatforms = { ...current.platforms };
         for (const p of livePlatforms) {
-          updatedPlatforms[p.key] = { ...updatedPlatforms[p.key], status: "deleted" };
+          updatedPlatforms[p.key] = { ...updatedPlatforms[p.key], status: p.key === "store" ? "sold" : "deleted" };
         }
         return { ...current, platforms: updatedPlatforms, updated_at: now() };
       });
@@ -11936,6 +11941,9 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
       created_at:        now(),
     }));
     showToast(`Recording ${made.length} sale${made.length === 1 ? "" : "s"}…`, 60000);
+    // Marked Sold on the store below, in the one batched write; the order-watching
+    // sync would otherwise save each piece on its own as the orders land.
+    if (saleForm.remove_other_platforms) rows.forEach(l => { if (l.type === "unique") storeSoldDone.current.add(l.id); });
     // Newest first, as Record Sale prepends each new order.
     await upsertItemsK(ORDERS_KEY, [...made].reverse(), { prepend: true }).then(next => { if (Array.isArray(next)) setOrders(next); });
 
@@ -11953,7 +11961,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
       const patched = takeDown.map(({ l, plats }) => {
         const current = byId.get(l.id) || l;
         const platforms = { ...current.platforms };
-        for (const p of plats) platforms[p.key] = { ...platforms[p.key], status: "deleted" };
+        for (const p of plats) platforms[p.key] = { ...platforms[p.key], status: p.key === "store" ? "sold" : "deleted" };
         return { ...current, platforms, updated_at: now() };
       });
       const next = await upsertItemsK(LIST_KEY, patched, { prepend: false });
