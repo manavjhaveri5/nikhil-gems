@@ -20,12 +20,12 @@ for (const t of ["trade_buyers", "store_customers", "store_orders"])
     buyers.push(...data); if (data.length < 1000) break;
   }
 const host = u => { try { return new URL(/^https?:/.test(u) ? u : `https://${u}`).hostname.replace(/^www\./, "").toLowerCase(); } catch { return ""; } };
-const FREE = /^(gmail|googlemail|yahoo|ymail|hotmail|outlook|live|msn|icloud|me|mac|aol|proton|protonmail|gmx|web|t-online|btinternet|bigpond|xtra|orange|free|libero|wanadoo|comcast|att|verizon)\./;
+const FREE = /^(gmail|googlemail|yahoo|ymail|hotmail|outlook|live|msn|icloud|me|mac|aol|proton|protonmail|gmx|web|t-online|btinternet|bigpond|xtra|orange|free|libero|wanadoo|comcast|att|verizon|nifty|docomo|ezweb|softbank|i\.softbank|au|ocn|so-net|biglobe|excite)\./;
 const known = new Set();
 // Shops already marked on the Outreach page as our customer, a customer, not interested or bounced
 // stay out, even when they turn up again from another source (Etsy vs their website).
 const BLOCK = ["ours", "customer", "no", "bounced", "list"];
-const normName = n => String(n || "").toLowerCase().replace(/&amp;/g, "&").replace(/[^a-z0-9]+/g, "");
+const normName = n => String(n || "").toLowerCase().replace(/&amp;/g, "&").replace(/[^\p{L}\p{N}]+/gu, "");
 for (let from = 0; ; from += 1000) {
   const { data, error } = await sb.from("app_rows").select("data").eq("key", "outreach-leads-v1").eq("deleted", false).range(from, from + 999);
   if (error) throw new Error(error.message);
@@ -33,6 +33,20 @@ for (let from = 0; ; from += 1000) {
     for (const v of [String(o.email || "").toLowerCase(), host(o.website), String(o.instagram || "").toLowerCase(), `name:${normName(o.name)}`]) if (v && v !== "name:") known.add(v);
   }
   if (data.length < 1000) break;
+}
+// Everyone on the ERP's own mailing list (the Japan list, trade, show customers, store sign-ups).
+for (let from = 0; ; from += 1000) {
+  const { data, error } = await sb.from("app_rows").select("data").eq("key", "mail-contacts-v1").eq("deleted", false).range(from, from + 999);
+  if (error) throw new Error(error.message);
+  for (const { data: c } of data) { const e = String(c.email || "").toLowerCase(); if (e) { known.add(e); const d = e.split("@")[1]; if (d && !FREE.test(d)) known.add(d); } }
+  if (data.length < 1000) break;
+}
+// Tokyo Mineral Show exhibitors are fellow dealers who already know Nikhil Gems: never cold-email
+// them (Sir, 21 Nov 2026). The list is the show's 2026 exhibitor pages (tms-exhibitors.json).
+for (const e of JSON.parse(readFileSync(new URL("./tms-exhibitors.json", import.meta.url), "utf8"))) {
+  const h = host(e.website); if (h && !/lit\.link|instagram|linktr|facebook|ameblo|thebase|base\.shop|stores\.jp|creema|minne/.test(h)) known.add(h);
+  const m = String(e.email || "").toLowerCase(); if (m) { known.add(m); const d = m.split("@")[1]; if (d && !FREE.test(d)) known.add(d); }
+  known.add(`name:${normName(e.name)}`);
 }
 for (const b of buyers || []) { const e = String(b.email || "").toLowerCase(); if (e) { known.add(e); const d = e.split("@")[1]; if (d && !FREE.test(d)) known.add(d); } }
 
@@ -54,9 +68,6 @@ const SHAPES = ["spheres", "palm stones", "hearts", "tumbles", "towers"];
 // One honest line about the shop: hand-written for researched shops, otherwise built from their own Etsy facts.
 function hookFor(l) {
   const h = HOOKS[l.name] || HOOKS[l.display]; if (h) return h;
-  // Shops on the Tokyo Mineral Show exhibitor list: that is how we found them, so say so.
-  if (l.tms && l.country === "JP") return `東京ミネラルショーの出展者一覧で貴店を拝見し、ご連絡いたしました。`;
-  if (l.tms && l.country === "TW") return l.lang === "en" ? "I found you on the Tokyo Mineral Show exhibitor list." : "在東京礦物展的參展商名單上看到貴店，特此來信。";
   if (l.source === "etsy" && l.sold >= 500) {
     const n = l.sold >= 10000 ? `${Math.floor(l.sold / 1000)}k` : l.sold >= 1000 ? `${(Math.floor(l.sold / 100) / 10).toString()}k` : `${Math.floor(l.sold / 100) * 100}`;
     return l.since ? `${n}+ sales since ${String(l.since).slice(0, 4)} says a lot about how much your customers love your shop.` : `${n}+ sales says a lot about how much your customers love your shop.`;
@@ -89,11 +100,11 @@ function drafts(l, shapes) {
 
 突然のご連絡失礼いたします。インド・ムンバイで天然石の研磨工房を営んでおります、Earth Editions（Nikhil Gems）のセジャルと申します。
 
-${l.tms ? hook : `貴店のウェブサイトを拝見し、ご連絡いたしました。${hook ? hook : "石のセレクションの素晴らしさに惹かれました。"}`}
+貴店のウェブサイトを拝見し、ご連絡いたしました。${hook ? hook : "石のセレクションの素晴らしさに惹かれました。"}
 
 弊社では自社工房で研磨したスフィア、パームストーン、ハート、タンブル、タワー、彫刻品などを、1点からキロ単位まで卸売りしております。${pick(RARE_JA, 4, l.name).join("、")}など珍しい石も多く扱っており、特注品や彫刻のご依頼にも、ほぼどのような石でも対応いたします。
 
-また、日本の多くのお店で人気の、マニハール産・マニカラン産のヒマラヤ水晶やゴールデンルチルのロットも、入荷次第ご案内できます。${showOn("JP") ? `\n\n12月11日〜14日、池袋サンシャインシティの東京ミネラルショーに出展いたします（${SHOW.hall_ja}、ブース${SHOW.booth}）。${l.tms ? "会期中、ぜひブースにお立ち寄りください。" : "お越しの際は、ぜひ実物の石をご覧いただければ幸いです。"}\n` : ""}
+また、日本の多くのお店で人気の、マニハール産・マニカラン産のヒマラヤ水晶やゴールデンルチルのロットも、入荷次第ご案内できます。${showOn("JP") ? `\n\n12月11日〜14日、池袋サンシャインシティの東京ミネラルショーに出展いたします（${SHOW.hall_ja}、ブース${SHOW.booth}）。お越しの際は、ぜひ実物の石をご覧いただければ幸いです。\n` : ""}
 ・原石は鉱山主から直接（ツーソンやジャイプールにて）買い付け、自社工房で研磨しているため、仲介業者はおりません
 ・最低注文数はございません
 ・ご購入前に、実際のロットの写真や動画をお送りいたします
@@ -119,7 +130,7 @@ WhatsApp: ${WA}` },
     };
   }
   if (l.country === "TW" && l.lang !== "en") {
-    const show = showOn("TW") ? `\n\n12月11日至14日，我們將在東京池袋太陽城的東京礦物展（Tokyo Mineral Show）參展：${SHOW.hall_zh}，攤位 ${SHOW.booth}。${l.tms ? "展期間歡迎到我們的攤位看看。" : "如果您也會去，很希望能當面讓您看看實品。"}` : "";
+    const show = showOn("TW") ? `\n\n12月11日至14日，我們將在東京池袋太陽城的東京礦物展（Tokyo Mineral Show）參展：${SHOW.hall_zh}，攤位 ${SHOW.booth}。如果您也會去，很希望能當面讓您看看實品。` : "";
     return {
       language: "zh-TW",
       draft: { subject: `來自印度自家工坊的水晶批發（Earth Editions）`, body:

@@ -25,8 +25,8 @@ for (const l of leads) {
   l.site_ok = true;
   const links = [...home.matchAll(/href=["']([^"'#]+)["']/gi)].map(m => m[1]);
   // Japanese shops must publish an email on their 特定商取引法 page (often /law, /tokutei, /legal).
-  const LEGAL = /特定商取引|%E7%89%B9%E5%AE%9A%E5%95%86|tokutei|tokushoho|\/law|commerce-law|legal/i;
-  const extra = [...new Set(links.filter(h => /contact|about|wholesale|our-story|impressum|お問い合わせ|会社概要|company|特定商取引|%E7%89%B9%E5%AE%9A%E5%95%86|tokutei|tokushoho|\/law|legal/i.test(h))
+  const LEGAL = /特定商取引|mode=sk|%E7%89%B9%E5%AE%9A%E5%95%86|tokutei|tokushoho|\/law|commerce-law|legal/i;
+  const extra = [...new Set(links.filter(h => /contact|about|wholesale|our-story|impressum|お問い合わせ|会社概要|company|mode=sk|特定商取引|%E7%89%B9%E5%AE%9A%E5%95%86|tokutei|tokushoho|\/law|legal/i.test(h))
     .map(h => { try { return new URL(h, o).href; } catch { return ""; } }).filter(h => h.startsWith(o)))]
     .sort((x, y) => LEGAL.test(y) - LEGAL.test(x)).slice(0, 4);
   // Full-width ＠ and "info (at) shop.jp" are common on Japanese sites.
