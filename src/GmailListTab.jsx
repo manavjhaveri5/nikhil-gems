@@ -4,6 +4,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { C, FI, mob } from "./lmTheme.js";
 import { mailApi, useGmailRunner, ProgressBar } from "./GmailSend.jsx";
+import WeeklyCard from "./WeeklyCard.jsx";
 
 const fmt = v => {
   const d = new Date(v);
@@ -73,6 +74,8 @@ export default function GmailListTab({ showToast }) {
       </div>
       {scanMsg && <div style={{ fontSize: 11.5, color: C.inkMid }}>{scanMsg}</div>}
       {err && <div style={{ fontSize: 12, color: C.red }}>{err}</div>}
+
+      <WeeklyCard card={card} small={small} showToast={showToast} />
 
       <div style={card}>
         <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 10 }}>Sent from Gmail</div>

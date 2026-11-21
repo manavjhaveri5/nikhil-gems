@@ -30,6 +30,10 @@
   },
   "rewrites": [
     {
+      "source": "/join",
+      "destination": "/api/mail?action=join"
+    },
+    {
       "source": "/api/tiktok-callback",
       "destination": "/api/social?action=callback&p=tiktok"
     },

@@ -3,6 +3,7 @@ import { runInboxScan, SCAN_KEY } from "../lib/inbox-scan.js";
 import { outreachSend, outreachCheck, outreachCounts, outreachScan } from "../lib/outreach.js";
 import { tradeApproved, checkoutFollowup, orderShipped } from "../lib/mailTemplates.js";
 import * as list from "../lib/mailList.js";
+import * as weekly from "../lib/weekly.js";
 import { omniList, rowsOf, buildCampaignHtml } from "./omnisend.js";
 
 const STORE = "https://eartheditions.co";
@@ -15,6 +16,8 @@ const STORE = "https://eartheditions.co";
 export default async function handler(req, res) {
   // The unsubscribe link in Gmail campaigns: public, checked by its signed token.
   if (req.query?.action === "unsub") return unsub(req, res);
+  // The weekly "new pieces" list: the public sign-up page, its email confirmation, and the approve/skip links.
+  if (["join", "joined", "wk"].includes(req.query?.action)) return publicWeekly(req, res);
   // A product link in a Gmail campaign: note the click, then go to the product.
   if (req.query?.action === "c") {
     const c = list.readClickParams(req.query);
@@ -26,7 +29,13 @@ export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ error: "POST only" });
   // The 07:00 IST inbox scan comes from pg_cron with Raj's key; Sir can also run it from Home.
   if (req.body?.action === "gmail_scan" && await cronKeyOk(req, "raj")) return gmail(req, res);
-  if (!(await requireUser(req, res))) return;
+  if (req.body?.action === "weekly_tick" && await cronKeyOk(req, "raj")) {
+    try { return res.json(await weekly.tick({ bridge: bridgeCall() })); }
+    catch (e) { console.error("weekly tick", e.message); return res.status(502).json({ error: e.message }); }
+  }
+  const user = await requireUser(req, res);
+  if (!user) return;
+  req.user = user;
   if (String(req.body?.action || "").startsWith("gmail_")) return gmail(req, res);
   if (req.body?.template === "order_shipped") return shipStoreOrder(req, res);
   const key = process.env.RESEND_API_KEY;
@@ -86,6 +95,18 @@ export default async function handler(req, res) {
    a small Apps Script web app running in Nikhil Gems' own Google account
    (scripts/gmail-bridge.gs), so no Google Cloud app or token refresh is needed.
    The shared secret stays here on the server. Read-only: search and fetch. */
+function bridgeCall() {
+  const url = process.env.GMAIL_BRIDGE_URL, secret = process.env.GMAIL_BRIDGE_SECRET;
+  if (!url || !secret) return async () => { throw new Error("Gmail isn't connected yet (GMAIL_BRIDGE_URL / GMAIL_BRIDGE_SECRET)"); };
+  return async body => {
+    const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...body, secret }), redirect: "follow", signal: AbortSignal.timeout(60_000) });
+    const d = await r.json().catch(() => null);
+    if (!r.ok || !d) throw new Error(`Gmail bridge ${r.status}`);
+    if (d.error) throw new Error(d.error);
+    return d;
+  };
+}
+
 async function gmail(req, res) {
   const url = process.env.GMAIL_BRIDGE_URL, secret = process.env.GMAIL_BRIDGE_SECRET;
   const b = req.body;
@@ -95,13 +116,7 @@ async function gmail(req, res) {
     if (b.action === "gmail_scan") await adminClient().rpc("app_rows_upsert", { p_key: SCAN_KEY, p_item: { id: "last", at: new Date().toISOString(), ok: false, notConfigured: true, error }, p_prepend: false });
     return res.status(503).json({ error, notConfigured: true });
   }
-  const call = async body => {
-    const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...body, secret }), redirect: "follow", signal: AbortSignal.timeout(60_000) });
-    const d = await r.json().catch(() => null);
-    if (!r.ok || !d) throw new Error(`Gmail bridge ${r.status}`);
-    if (d.error) throw new Error(d.error);
-    return d;
-  };
+  const call = bridgeCall();
   try {
     if (b.action === "gmail_search") {
       const q = String(b.q || "").slice(0, 500);
@@ -182,6 +197,19 @@ async function gmail(req, res) {
     if (b.action === "gmail_campaign_batch") return res.json(await list.sendBatch({ id: b.id, start: !!b.start }, call));
     if (b.action === "gmail_campaign_status") return res.json(await list.setSendStatus({ id: b.id, status: b.status }));
     if (b.action === "gmail_campaign_scan") return res.json(await list.scan(call));
+    // The weekly "new pieces" email (lib/weekly.js).
+    if (b.action === "gmail_weekly_get") {
+      const week = weekly.weekKey();
+      const [settings, current, last, stats] = await Promise.all([weekly.getSettings(), weekly.getWeek(week), weekly.getWeek(weekly.weekKey(Date.now() - 7 * 864e5)), weekly.joinStats()]);
+      return res.json({ week, settings, current, last, stats, joinUrl: "https://studio.eartheditions.co/join" });
+    }
+    if (b.action === "gmail_weekly_set") return res.json(await weekly.setSettings({ ...b.settings, by: req.user?.email || "erp" }));
+    if (b.action === "gmail_weekly_build") return res.json(await weekly.build({ bridge: call, force: true, by: req.user?.email || "erp" }));
+    if (b.action === "gmail_weekly_preview") return res.json({ pieces: await weekly.newPieces({ days: 7 }) });
+    if (b.action === "gmail_weekly_decide") {
+      if (!["approve", "skip"].includes(b.act)) return res.status(400).json({ error: "approve or skip" });
+      return res.json(await weekly.decide({ week: String(b.week || weekly.weekKey()), act: b.act, via: "erp", by: req.user?.email || "" }));
+    }
     return res.status(400).json({ error: "Unknown Gmail action" });
   } catch (e) {
     return res.status(502).json({ error: e.message || "Gmail search failed" });
@@ -259,9 +287,73 @@ async function unsub(req, res) {
   if (req.method === "POST") {
     try { await list.unsubscribe(email, String(req.query.s || ""), "link"); }
     catch (e) { return page("Try again", `<p style="font-size:15px;">Something went wrong. Please try again, or reply "unsubscribe" to any of our emails.</p>`); }
-    return page("Unsubscribed", `<p style="font-size:17px;margin:0 0 10px;">You're unsubscribed.</p><p style="font-size:14px;color:#6b6152;line-height:1.6;margin:0;">${esc(email)} won't get our trade emails any more.</p>`);
+    return page("Unsubscribed", `<p style="font-size:17px;margin:0 0 10px;">You're unsubscribed.</p><p style="font-size:14px;color:#6b6152;line-height:1.6;margin:0;">${esc(email)} won't get our emails any more.</p>`);
   }
   const action = `/api/mail?${new URLSearchParams(req.query).toString()}`;
-  return page("Unsubscribe", `<p style="font-size:15px;line-height:1.6;margin:0 0 22px;">Stop trade emails to <strong>${esc(email)}</strong>?</p>
+  return page("Unsubscribe", `<p style="font-size:15px;line-height:1.6;margin:0 0 22px;">Stop our emails to <strong>${esc(email)}</strong>?</p>
 <form method="post" action="${esc(action)}"><button type="submit" style="background:#1a1308;color:#faf0dc;border:0;padding:12px 26px;font-size:13px;letter-spacing:1.5px;cursor:pointer;">UNSUBSCRIBE</button></form>`);
+}
+
+/* ── The weekly list's public pages ─────────────────────────────────────────
+   /join (rewritten here): the sign-up form, linked from the parcel card's QR
+   code and the store. ?s= says where they came from (etsy, ebay, card…).
+   Double opt-in: the form only emails a confirm link; pressing the button on
+   that link's page is what puts them on the list. GET pages only ever show a
+   button, so a mail scanner opening a link changes nothing. */
+const esc = v => String(v ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+function shell(res, code, title, body) {
+  return res.status(code).setHeader("Content-Type", "text/html; charset=utf-8").setHeader("Cache-Control", "no-store").send(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(title)} · Earth Editions</title><meta name="robots" content="noindex"></head>
+<body style="margin:0;background:#f6f3ee;font-family:Georgia,serif;color:#1a1308;"><div style="max-width:440px;margin:8vh auto;padding:32px 24px;background:#fff;border:1px solid #e6dfd3;">
+<div style="text-align:center;font-size:22px;letter-spacing:3px;font-weight:700;">EARTH</div><div style="text-align:center;font-size:10px;letter-spacing:4px;color:#8a7f6d;margin-bottom:26px;">EDITIONS</div>${body}</div></body></html>`);
+}
+const BTN = "background:#1a1308;color:#faf0dc;border:0;padding:13px 26px;font-size:13px;letter-spacing:1.5px;cursor:pointer;width:100%";
+const INPUT = "width:100%;box-sizing:border-box;padding:12px;border:1px solid #d9d0c1;font-size:16px;font-family:inherit;margin:0 0 12px";
+function joinForm(res, src, msg = "", vals = {}) {
+  return shell(res, msg ? 400 : 200, "New pieces", `<h1 style="font-weight:normal;font-size:26px;margin:0 0 10px;text-align:center">New pieces, first</h1>
+<p style="font-size:15px;line-height:1.6;color:#4a4033;margin:0 0 22px;text-align:center">One short email a week with the crystals and minerals we've just listed. Most are one of a kind.</p>
+${msg ? `<p style="color:#a3341f;font-size:14px">${esc(msg)}</p>` : ""}
+<form method="post" action="/api/mail?action=join&amp;s=${encodeURIComponent(src)}">
+<input name="email" type="email" required placeholder="Your email" value="${esc(vals.email || "")}" style="${INPUT}" autocomplete="email">
+<input name="name" type="text" placeholder="First name (optional)" value="${esc(vals.name || "")}" style="${INPUT}" autocomplete="given-name">
+<input name="website" type="text" tabindex="-1" autocomplete="off" style="position:absolute;left:-9999px" aria-hidden="true">
+<label style="display:flex;gap:10px;align-items:flex-start;font-size:14px;line-height:1.5;color:#4a4033;margin:4px 0 18px"><input type="checkbox" name="consent" value="yes" required style="margin-top:4px">${esc(weekly.CONSENT_TEXT)}</label>
+<button type="submit" style="${BTN}">JOIN</button></form>
+<p style="font-size:12px;color:#8a7f6d;line-height:1.5;margin:18px 0 0">We'll email you once to confirm. We never share your address. <a href="https://eartheditions.co/privacy" style="color:#8a7f6d">Privacy</a></p>`);
+}
+async function publicWeekly(req, res) {
+  const q = req.query || {}, a = q.action;
+  let b = req.body || {};
+  if (typeof b === "string") b = Object.fromEntries(new URLSearchParams(b));
+  try {
+    if (a === "join") {
+      const src = String(q.s || "web").toLowerCase().slice(0, 20);
+      if (req.method !== "POST") return joinForm(res, src);
+      if (b.website) return shell(res, 200, "Check your email", `<p style="font-size:16px;text-align:center">Thanks! Check your email to confirm.</p>`);
+      const r = await weekly.requestJoin({ email: b.email, name: b.name, src, consent: !!b.consent }, bridgeCall());
+      if (r.error) return joinForm(res, src, r.error, b);
+      return shell(res, 200, "Check your email", `<p style="font-size:17px;text-align:center;margin:0 0 10px">Nearly there.</p><p style="font-size:15px;line-height:1.6;text-align:center;color:#4a4033;margin:0">We've sent a confirm link to <strong>${esc(String(b.email).trim())}</strong>. Press the button in it and you're on the list. (No email? Check Promotions or spam.)</p>`);
+    }
+    if (a === "joined") {
+      const email = weekly.readJoinParams(q);
+      if (!email) return shell(res, 400, "Link not valid", `<p style="font-size:15px;text-align:center">This confirm link isn't valid. You can <a href="/join">sign up again here</a>.</p>`);
+      if (req.method !== "POST") return shell(res, 200, "Confirm", `<p style="font-size:15px;line-height:1.6;text-align:center;margin:0 0 20px">Send new pieces to <strong>${esc(email)}</strong>, about once a week?</p><form method="post" action="/api/mail?${esc(new URLSearchParams(q).toString())}"><button type="submit" style="${BTN}">YES, SIGN ME UP</button></form>`);
+      await weekly.confirmJoin(email);
+      return shell(res, 200, "You're on the list", `<p style="font-size:18px;text-align:center;margin:0 0 10px">You're on the list.</p><p style="font-size:15px;line-height:1.6;text-align:center;color:#4a4033;margin:0 0 18px">The next email of new pieces comes on Friday. Every email has a one-click unsubscribe.</p><p style="text-align:center"><a href="https://eartheditions.co" style="color:#9a6200">Visit eartheditions.co</a></p>`);
+    }
+    if (a === "wk") {
+      const week = String(q.w || ""), act = String(q.do || "");
+      if (!weekly.checkWeekToken(week, act, q.t)) return shell(res, 400, "Link not valid", `<p style="text-align:center">This link isn't valid.</p>`);
+      const w = await weekly.getWeek(week);
+      if (!w?.sendId) return shell(res, 404, "Not found", `<p style="text-align:center">There's no issue for ${esc(week)}.</p>`);
+      const label = act === "approve" ? "APPROVE AND SEND" : "SKIP THIS WEEK";
+      if (req.method !== "POST") return shell(res, 200, "Weekly email", `<p style="font-size:15px;line-height:1.6;margin:0 0 6px"><strong>${esc(w.subject)}</strong></p><p style="font-size:14px;color:#4a4033;margin:0 0 20px">${w.pieceCount} pieces · ${w.audience} subscribers · now: ${esc(w.state)}</p>${w.state === "sent" ? "" : `<form method="post" action="/api/mail?${esc(new URLSearchParams(q).toString())}"><button type="submit" style="${BTN}">${label}</button></form>`}`);
+      const r = await weekly.decide({ week, act, via: "email link" });
+      const when = new Date(r.sendAfter).toLocaleString("en-GB", { weekday: "long", hour: "2-digit", minute: "2-digit", timeZone: "Asia/Kolkata" });
+      return shell(res, 200, "Done", `<p style="font-size:16px;text-align:center">${r.state === "approved" ? `Approved. It goes out ${esc(when)} IST${Date.now() > Date.parse(r.sendAfter) ? " (that's passed, so within 15 minutes)" : ""}.` : r.state === "sent" ? "It has already been sent." : "Skipped. Nothing goes out this week."}</p>`);
+    }
+  } catch (e) {
+    console.error("weekly public", e.message);
+    return shell(res, 500, "Try again", `<p style="text-align:center">Something went wrong. Please try again in a minute.</p>`);
+  }
+  return shell(res, 404, "Not found", "");
 }
