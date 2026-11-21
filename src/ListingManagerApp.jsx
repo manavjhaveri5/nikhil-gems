@@ -11667,8 +11667,10 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
 
     let firstLive = false;
     await patchListingItem(listing, current => {
-      firstLive = (result.status || "active") === "active" && !current.platforms?.[pkey]?.live_at
-        && !(current.platforms?.[pkey]?.listing_id || current.platforms?.[pkey]?.item_id || current.platforms?.[pkey]?.product_id);
+      const was = current.platforms?.[pkey] || {};
+      firstLive = (result.status || "active") === "active" && !was.live_at
+        // On our own site a piece saved as a draft first already has its product id; going from draft to live is still its first time live.
+        && (!(was.listing_id || was.item_id || was.product_id) || (pkey === "store" && was.status !== "active"));
       return {
       ...current,
       listing_order_id: current.listing_order_id || listing.listing_order_id,
@@ -11679,8 +11681,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
         // When it went live here, for the Just listed stories.
         // Only the first time: putting an existing listing back up (an Etsy
         // renewal, a relist) isn't a new piece.
-        ...((result.status || "active") === "active" && !current.platforms?.[pkey]?.live_at
-          && !(current.platforms?.[pkey]?.listing_id || current.platforms?.[pkey]?.item_id || current.platforms?.[pkey]?.product_id) ? { live_at: now() } : {}),
+        ...(firstLive ? { live_at: now() } : {}),
         ...(result.videoStatus ? {
           videoStatusStartedAt: current.platforms?.[pkey]?.videoStatus === result.videoStatus
             ? (current.platforms?.[pkey]?.videoStatusStartedAt || now())
