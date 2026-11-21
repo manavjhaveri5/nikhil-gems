@@ -496,7 +496,7 @@ function WelcomeTemplate({ onClose, showToast, forCustomer }) {
         logoWidth: 150, font: "serif", cornerStyle: "square",
         pageBg: "#e5e6e6", cardBg: "#ffffff", ink: "#1a1308",
         tradeEyebrow: "Trade access", tradeLine: "View full catalogue & wholesale pricing",
-        tradeButton: "Log in to eartheditions.co", tradeUrl: "https://eartheditions.co/account/login",
+        tradeButton: "Log in to the trade site", tradeUrl: "https://trade.eartheditions.co/signin",
         shipIcon: "✈️", shipTitle: "Duty free worldwide shipping",
         shipNote: "All orders ship DDP — the price you see is the price you pay. No customs fees, no import duties, no surprise charges on delivery.",
         instagramUrl: "https://www.instagram.com/eartheditions_/?hl=fr",

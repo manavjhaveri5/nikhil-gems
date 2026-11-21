@@ -110,7 +110,7 @@ const DESIGN_DEFAULTS = () => ({
     shipIcon: "✈️", shipTitle: "Duty free worldwide shipping",
     shipNote: "All orders ship DDP — the price you see is the price you pay. No customs fees, no import duties, no surprise charges on delivery. Your order clears at our end, not yours.",
     tradeEyebrow: "Trade access", tradeLine: "View full catalogue & wholesale pricing",
-    tradeButton: "Log in to eartheditions.co", tradeUrl: "https://eartheditions.co/account/login",
+    tradeButton: "Log in to the trade site", tradeUrl: "https://trade.eartheditions.co/signin",
     instagramUrl: "https://www.instagram.com/eartheditions_/?hl=fr", addressLine: "",
 });
 
@@ -163,7 +163,12 @@ export default function CampaignComposer({ listings = [], onClose, showToast, dr
   const [priceMode, setPriceMode] = useState(ds.priceMode || "trade");
   /* Design lives in one object so preview and the created draft can never drift
      apart — both are rendered from payloadBase() by the same server function. */
-  const [design, setDesign] = useState(() => ({ ...DESIGN_DEFAULTS(), ...(ds.design || {}) }));
+  // Drafts saved before 21 Nov 2026 still carry the old Shopify-era button to the retail store's login.
+  const [design, setDesign] = useState(() => {
+    const d = { ...DESIGN_DEFAULTS(), ...(ds.design || {}) };
+    if (/^https?:\/\/(www\.)?eartheditions\.co\/account\/login/.test(d.tradeUrl || "")) { d.tradeUrl = "https://trade.eartheditions.co/signin"; if (/eartheditions\.co/.test(d.tradeButton || "")) d.tradeButton = "Log in to the trade site"; }
+    return d;
+  });
   const [designOpen, setDesignOpen] = useState(false);
   const [segments, setSegments] = useState([]);
   const [segIds, setSegIds] = useState(() => new Set(ds.segIds || []));
