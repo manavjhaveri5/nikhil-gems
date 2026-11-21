@@ -109,12 +109,20 @@ export function compareBoiSet({ purpose, invoices = [], sb = [], awb = [], adv =
       }
       const t = +inv.totalAmt || 0, ic = String(inv.currency || "").toUpperCase();
       let v = num(hit.value), hc = String(hit.currency || "").toUpperCase();
-      // A shipping bill states the value in INR as well: an INR figure is turned back at its rate, never called a currency mismatch.
-      if (hc === "INR" && ic && ic !== "INR") { v = num(hit.rate) ? num(hit.value || hit.valueInr) / num(hit.rate) : 0; hc = ic; }
+      const rate = num(hit.rate);
+      // A foreign-currency invoice filed on the shipping bill in INR at rate 1 (or
+      // near it): the courier typed the dollar figure into the rupee field, so
+      // customs holds the goods at a few hundred rupees. Banks reject that.
+      const inrAtPar = hc === "INR" && ic && ic !== "INR" && rate > 0 && rate < 5;
+      if (inrAtPar) flag(`${inv.invNo}: shipping bill filed in INR at rate ${hit.rate}`,
+        `The invoice is ${ic} ${t.toLocaleString("en-IN")}, but the shipping bill declares ₹${num(hit.valueInr || hit.value).toLocaleString("en-IN")} in INR at an exchange rate of ${hit.rate}, so customs values the goods at about ${ic} ${(num(hit.valueInr || hit.value) / 85).toFixed(0)}. The courier must amend the shipping bill to ${ic}.`);
+      // Otherwise a shipping bill's INR value is turned back at its rate, never called a currency mismatch.
+      if (hc === "INR" && ic && ic !== "INR") { const inr = num(hit.valueInr) || num(hit.value); v = rate ? inr / rate : 0; hc = ic; }
       const sameCcy = !hc || !ic || hc === ic;
       if (!sameCcy) flag(`${inv.invNo}: currency differs`, `Invoice is ${ic}, shipping bill ${hc}.`);
-      else if (v && t && Math.abs(v - t) > Math.max(1, t * 0.01)) flag(`${inv.invNo}: value differs`, `Invoice ${inv.currency || ""} ${t.toLocaleString("en-IN")} · shipping bill ${v.toLocaleString("en-IN")}.`);
-      else pass(`${inv.invNo} matches the shipping bill`, `${hit.sbNumber || "SB"}${v ? ` · ${v.toLocaleString("en-IN")}` : ""}`);
+      else if (!v || !t) flag(`${inv.invNo}: value not checked`, !t ? "The invoice has no total in Invoicing." : `No ${ic || "foreign-currency"} value could be read off ${hit.sbNumber || "the shipping bill"} — compare it by eye.`);
+      else if (Math.abs(v - t) > Math.max(1, t * 0.01)) flag(`${inv.invNo}: value differs`, `Invoice ${ic} ${t.toLocaleString("en-IN")} · shipping bill ${v.toLocaleString("en-IN")} (${(v - t > 0 ? "+" : "") + (v - t).toLocaleString("en-IN", { maximumFractionDigits: 2 })}). The bank needs these to be the same.`);
+      else if (!inrAtPar) pass(`${inv.invNo} matches the shipping bill`, `${hit.sbNumber || "SB"} · ${v.toLocaleString("en-IN")}`);
     }
     for (const x of sbInvs) {
       if (!invs.some(i => sameInvNo(i.invNo, x.no))) flag(`Shipping bill names ${x.no}`, "That invoice isn't on this form — wrong shipping bill, or an invoice is missing from the form.");

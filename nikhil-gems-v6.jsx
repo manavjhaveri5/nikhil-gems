@@ -24823,7 +24823,9 @@ function BoiRemittanceForm({showToast}){
         }
         const now=new Date().toISOString();
         const entry={id:setId,at:now,createdAt:prevSet?.createdAt||now,form:{...form,setId,docs:kept},picks:docPicks,
-          pdf:uploadedAtt?{url:uploadedAtt.url,fileName}:prevSet?.pdf||null,invoices:invoiceRefs.map(i=>i.no)};
+          pdf:uploadedAtt?{url:uploadedAtt.url,fileName}:prevSet?.pdf||null,invoices:invoiceRefs.map(i=>i.no),
+          // What the check said when this PDF was made, and whether it went anyway.
+          check:{at:now,flags:(chk?.flags||[]).map(f=>({ok:!!f.ok,title:String(f.title||""),detail:String(f.detail||"")})),overridden:bad.length>0}};
         const freshSets=await loadKFresh(BOI_SETS_KEY).catch(()=>sets);
         const nextSets=[entry,...(Array.isArray(freshSets)?freshSets:[]).filter(x=>x.id!==setId)];
         await saveK(BOI_SETS_KEY,nextSets);
@@ -25013,6 +25015,12 @@ function BoiRemittanceForm({showToast}){
                 <div key={x.id} style={{display:"flex",alignItems:"center",gap:8,padding:"6px 8px",borderRadius:7,background:on?C.goldLight:C.bg,fontSize:12}}>
                   <span style={{color:C.inkFaint,width:70,flexShrink:0}}>{fmtDate(String(x.at||"").slice(0,10))}</span>
                   <span style={{flex:1,minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",color:C.ink}}><b>{f.remName||"—"}</b> · {f.currency} {Number(f.amount||0).toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2})}{(x.invoices||[]).length?` · ${x.invoices.join(", ")}`:""}{f.bankRef?` · ${f.bankRef}`:""}</span>
+                  {(()=>{
+                    const ck=x.check,bad=(ck?.flags||[]).filter(fl=>!fl.ok);
+                    const tip=ck?(ck.flags.length?ck.flags.map(fl=>`${fl.ok?"✓":"✗"} ${fl.title}${fl.detail?` — ${fl.detail}`:""}`).join("\n"):"Nothing to compare"):"Made before the set check existed, or without it";
+                    const [t,fg,bg]=!ck?["not checked",C.inkFaint,"transparent"]:bad.length?[`⚠ ${bad.length} flag${bad.length>1?"s":""}${ck.overridden?" — sent anyway":""}`,C.red,C.redBg]:["✓ checked",C.green,C.greenBg];
+                    return <span title={tip} style={{fontSize:10.5,fontWeight:700,color:fg,background:bg,borderRadius:10,padding:"1px 7px",flexShrink:0,cursor:"help"}}>{t}</span>;
+                  })()}
                   {x.pdf?.url&&<a href={x.pdf.url} target="_blank" rel="noopener noreferrer" style={{fontSize:11.5,color:C.blue,flexShrink:0}}>PDF</a>}
                   {!on&&<button type="button" onClick={()=>openSet(x)} style={{fontSize:11.5,color:C.ink,background:C.surface,border:`1px solid ${C.border}`,borderRadius:5,padding:"3px 10px",cursor:"pointer",fontFamily:"inherit",flexShrink:0}}>Open</button>}
                   <button type="button" onClick={()=>deleteSet(x)} title="Delete this saved set" style={{background:"none",border:"none",cursor:"pointer",color:C.red,fontSize:15,padding:0,lineHeight:1,flexShrink:0}}>×</button>
