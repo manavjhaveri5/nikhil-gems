@@ -854,8 +854,11 @@ const AUTO_KEY = "ng-social-auto-v1", QUEUE_KEY = "ng-social-queue-v1";
 const AUTO_DEFAULT = {
   listings: { on: false, platforms: ["instagram", "pinterest", "threads"], afterHours: 1, since: null },
   instagram: { on: false, platforms: ["tiktok", "youtube"], since: null },
+  // A one-of-a-kind piece live on eartheditions.co goes up as an Instagram story.
+  stories: { on: false, platforms: ["instagram"], afterHours: 0, since: null },
 };
-async function autoSettings() { const a = await appData(AUTO_KEY); return { listings: { ...AUTO_DEFAULT.listings, ...(a?.listings || {}) }, instagram: { ...AUTO_DEFAULT.instagram, ...(a?.instagram || {}) } }; }
+const AUTO_JOBS = Object.keys(AUTO_DEFAULT);
+async function autoSettings() { const a = await appData(AUTO_KEY); return Object.fromEntries(AUTO_JOBS.map(k => [k, { ...AUTO_DEFAULT[k], ...(a?.[k] || {}) }])); }
 const saveData = (key, value) => sb().from("app_data").upsert({ key, value });
 
 // Written by OpenAI's best writer, in the journal's voice (lib/captionWriter.js).
@@ -935,7 +938,40 @@ async function runAutopilot() {
     }
   }
 
-  // 3. New Instagram posts, sent on.
+  // 3. New one-of-a-kind pieces on eartheditions.co, as an Instagram story on
+  // @eartheditions_: the video when there is one (a story suits it best), else
+  // the cover photo. One a run per piece, three pieces at most; a piece whose
+  // story was ticked by hand in Stories is left alone.
+  if (auto.stories.on && time() && await connected("instagram")) {
+    const since = Date.parse(auto.stories.since || "") || Date.now();
+    const storyDone = new Set(((await appData("ng-stories-v1")) || []).map(r => r.id));
+    const onStore = l => { const st = l.platforms?.store; return st?.status === "active" ? Date.parse(st.live_at || "") || 0 : 0; };
+    const ready = ((await appData("ng-listings-v1")) || [])
+      .filter(l => l.type === "unique" && !l.deleted)
+      .map(l => ({ l, at: onStore(l) }))
+      .filter(({ l, at }) => at > since && Date.now() - at >= (+auto.stories.afterHours || 0) * 36e5
+        && !posted.has(`story:${l.id}|instagram`) && !storyDone.has(`listed:${l.id}`))
+      .sort((a, b) => a.at - b.at);
+    for (const { l } of ready.slice(0, 3)) {
+      if (!time()) break;
+      const photo = (l.images || []).find(u => typeof u === "string" && /^https:/.test(u));
+      const video = /^https:.*\.(mp4|mov)(\?|$)/i.test(l.video || "") ? l.video : "";
+      if (!photo && !video) { await addLog({ platform: "instagram", source: `story:${l.id}`, title: l.title, note: "story skipped — no photo or video" }); continue; }
+      let out, how = video ? "video" : "photo";
+      try { out = await postInstagram({ story: true, video, images: photo ? [photo] : [] }); }
+      catch (e) {
+        // A video Instagram won't take (too long, odd format) still gets the photo.
+        if (video && photo) { try { out = await postInstagram({ story: true, images: [photo] }); how = "photo"; } catch (e2) { e = e2; } }
+        if (!out) { await addLog({ platform: "instagram", source: `story:${l.id}`, title: l.title, note: `story failed: ${e.message}` }); done.push(`story failed: ${e.message}`); continue; }
+      }
+      await addLog({ platform: "instagram", source: `story:${l.id}`, title: l.title, url: out.url || "", note: `autopilot story (${how})` });
+      // Ticked in Stories too, so nobody posts it again by hand.
+      try { await sb().rpc("app_data_upsert_item", { p_key: "ng-stories-v1", p_item: { id: `listed:${l.id}`, kind: "listed", listing_id: l.id, how: "auto", at: new Date().toISOString() }, p_prepend: true }); } catch {}
+      done.push(`story: ${l.title}`);
+    }
+  }
+
+  // 4. New Instagram posts, sent on.
   if (auto.instagram.on && time() && await connected("instagram")) {
     const since = Date.parse(auto.instagram.since || "") || Date.now();
     const media = (await igMedia()).filter(m => Date.parse(m.timestamp) > since);
@@ -1016,8 +1052,8 @@ export default async function handler(req, res) {
     if (action === "auto_set") {
       const cur = await autoSettings(), next = body.auto || {};
       // Switching a job on starts it from now: nothing older is posted.
-      for (const k of ["listings", "instagram"]) if (next[k]?.on && !cur[k].on) next[k].since = new Date().toISOString();
-      const merged = { listings: { ...cur.listings, ...(next.listings || {}) }, instagram: { ...cur.instagram, ...(next.instagram || {}) } };
+      for (const k of AUTO_JOBS) if (next[k]?.on && !cur[k].on) next[k].since = new Date().toISOString();
+      const merged = Object.fromEntries(AUTO_JOBS.map(k => [k, { ...cur[k], ...(next[k] || {}) }]));
       await saveData(AUTO_KEY, merged);
       return res.json({ auto: merged });
     }

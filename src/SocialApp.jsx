@@ -609,6 +609,12 @@ function Autopilot({ st, showToast }) {
           <select value={a.listings.afterHours} onChange={e => save({ listings: { ...a.listings, afterHours: +e.target.value } })} style={{ ...FI(), width: "auto", padding: "4px 8px" }}>
             {[0, 1, 3, 6, 24].map(h => <option key={h} value={h}>{h ? `${h} hour${h > 1 ? "s" : ""}` : "no time"}</option>)}
           </select> after it goes live (time to fix anything first)</label>)}
+      {a.stories && job("stories", "📸 Story for each new piece", "When a one-of-a-kind piece goes live on eartheditions.co, it goes up as a story on @eartheditions_ — its video if it has one, else the cover photo. Repeatable stock is left out. It's ticked in Stories too.",
+        ["instagram"],
+        <label style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 12.5, marginTop: 10, flexWrap: "wrap" }}>Wait
+          <select value={a.stories.afterHours} onChange={e => save({ stories: { ...a.stories, afterHours: +e.target.value } })} style={{ ...FI(), width: "auto", padding: "4px 8px" }}>
+            {[0, 1, 3, 6].map(h => <option key={h} value={h}>{h ? `${h} hour${h > 1 ? "s" : ""}` : "no time"}</option>)}
+          </select> after it goes live</label>)}
       {job("instagram", "🔁 New Instagram posts", "Whatever you post on Instagram goes on to these too — Reels to TikTok (as a draft) and YouTube Shorts, photos to Pinterest, everything to Threads and X.",
         ["tiktok", "youtube", "threads", "x", "pinterest"])}
       <div style={card}>
