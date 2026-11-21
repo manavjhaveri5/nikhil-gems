@@ -39,7 +39,8 @@ for (const b of buyers || []) { const e = String(b.email || "").toLowerCase(); i
 const WA = "+91 96192 48797", SITE = "https://trade.eartheditions.co";
 // Tokyo Mineral Show, Sunshine City, Ikebukuro, from 11 Dec 2026. Mentioned to Japan and Taiwan
 // until UNTIL; leads built after that date leave it out (rebuild and re-push to drop it from old drafts).
-const SHOW = { from: "2026-12-11", until: "2026-12-15" };
+// 35th Tokyo Mineral Show, 11–14 Dec 2026; Nikhil Gems at 2F (Hall D), booth A4.
+const SHOW = { from: "2026-12-11", until: "2026-12-14", booth: "A4", hall: "2F (Hall D)", hall_ja: "2階 Dホール", hall_zh: "2樓 D廳" };
 const todayIST = new Date(Date.now() + 5.5 * 36e5).toISOString().slice(0, 10);
 const showOn = c => ["JP", "TW"].includes(c) && todayIST <= SHOW.until;
 const NO_COLD_EMAIL = new Set(["DE", "AT"]); // UWG: B2B cold email needs presumed consent
@@ -53,6 +54,9 @@ const SHAPES = ["spheres", "palm stones", "hearts", "tumbles", "towers"];
 // One honest line about the shop: hand-written for researched shops, otherwise built from their own Etsy facts.
 function hookFor(l) {
   const h = HOOKS[l.name] || HOOKS[l.display]; if (h) return h;
+  // Shops on the Tokyo Mineral Show exhibitor list: that is how we found them, so say so.
+  if (l.tms && l.country === "JP") return `東京ミネラルショーの出展者一覧で貴店を拝見し、ご連絡いたしました。`;
+  if (l.tms && l.country === "TW") return l.lang === "en" ? "I found you on the Tokyo Mineral Show exhibitor list." : "在東京礦物展的參展商名單上看到貴店，特此來信。";
   if (l.source === "etsy" && l.sold >= 500) {
     const n = l.sold >= 10000 ? `${Math.floor(l.sold / 1000)}k` : l.sold >= 1000 ? `${(Math.floor(l.sold / 100) / 10).toString()}k` : `${Math.floor(l.sold / 100) * 100}`;
     return l.since ? `${n}+ sales since ${String(l.since).slice(0, 4)} says a lot about how much your customers love your shop.` : `${n}+ sales says a lot about how much your customers love your shop.`;
@@ -85,11 +89,11 @@ function drafts(l, shapes) {
 
 突然のご連絡失礼いたします。インド・ムンバイで天然石の研磨工房を営んでおります、Earth Editions（Nikhil Gems）のセジャルと申します。
 
-貴店のウェブサイトを拝見し、ご連絡いたしました。${hook ? hook : "石のセレクションの素晴らしさに惹かれました。"}
+${l.tms ? hook : `貴店のウェブサイトを拝見し、ご連絡いたしました。${hook ? hook : "石のセレクションの素晴らしさに惹かれました。"}`}
 
 弊社では自社工房で研磨したスフィア、パームストーン、ハート、タンブル、タワー、彫刻品などを、1点からキロ単位まで卸売りしております。${pick(RARE_JA, 4, l.name).join("、")}など珍しい石も多く扱っており、特注品や彫刻のご依頼にも、ほぼどのような石でも対応いたします。
 
-また、日本の多くのお店で人気の、マニハール産・マニカラン産のヒマラヤ水晶やゴールデンルチルのロットも、入荷次第ご案内できます。${showOn("JP") ? "\n\n12月11日から池袋サンシャインシティで開催される東京ミネラルショーに参加いたします。お越しの際は、ぜひ実物の石をご覧いただければ幸いです。\n" : ""}
+また、日本の多くのお店で人気の、マニハール産・マニカラン産のヒマラヤ水晶やゴールデンルチルのロットも、入荷次第ご案内できます。${showOn("JP") ? `\n\n12月11日〜14日、池袋サンシャインシティの東京ミネラルショーに出展いたします（${SHOW.hall_ja}、ブース${SHOW.booth}）。${l.tms ? "会期中、ぜひブースにお立ち寄りください。" : "お越しの際は、ぜひ実物の石をご覧いただければ幸いです。"}\n` : ""}
 ・原石は鉱山主から直接（ツーソンやジャイプールにて）買い付け、自社工房で研磨しているため、仲介業者はおりません
 ・最低注文数はございません
 ・ご購入前に、実際のロットの写真や動画をお送りいたします
@@ -107,10 +111,48 @@ function drafts(l, shapes) {
 セジャル
 Earth Editions / Nikhil Gems（インド・ムンバイ）
 WhatsApp: ${WA}` },
-      dm: `はじめまして。インド・ムンバイの天然石工房 Earth Editions のセジャルと申します。素敵な石のセレクションですね。弊社は原石を直接買い付け、自社工房で研磨したスフィアやパームストーンなどを、珍しい石も含め1点からキロ単位で卸売りしております。マニハール・マニカラン産のヒマラヤ水晶やゴールデンルチルのロットも入荷次第ご案内でき、ご購入前に実際のロットの動画をお送りしています。${showOn("JP") ? "12月11日からの池袋・東京ミネラルショーにも参加いたします。" : ""}よろしければ、在庫の写真をお送りしてもよろしいでしょうか？`,
+      dm: `はじめまして。インド・ムンバイの天然石工房 Earth Editions のセジャルと申します。素敵な石のセレクションですね。弊社は原石を直接買い付け、自社工房で研磨したスフィアやパームストーンなどを、珍しい石も含め1点からキロ単位で卸売りしております。マニハール・マニカラン産のヒマラヤ水晶やゴールデンルチルのロットも入荷次第ご案内でき、ご購入前に実際のロットの動画をお送りしています。${showOn("JP") ? `12月11日〜14日の池袋・東京ミネラルショーにも出展いたします（ブース${SHOW.booth}）。` : ""}よろしければ、在庫の写真をお送りしてもよろしいでしょうか？`,
       followups: [
         { day: 4, body: `${name} ご担当者様\n\n先日はご案内をお送りし、失礼いたしました。もしご興味がございましたら、現在の在庫（ヒマラヤ水晶のロット、スフィア・パームストーンなど）の短い動画をお送りいたします。\n\nセジャル / Earth Editions` },
         { day: 10, body: `${name} ご担当者様\n\nこちらが最後のご連絡となります。今後、インドからの仕入れをご検討の際は ${SITE} からいつでもご登録いただけます。WhatsApp（${WA}）でも承ります。新しいロットのご案内だけをご希望の場合は、「登録希望」とご返信ください。\n\n貴店のますますのご発展をお祈り申し上げます。\nセジャル / Earth Editions` },
+      ],
+    };
+  }
+  if (l.country === "TW" && l.lang !== "en") {
+    const show = showOn("TW") ? `\n\n12月11日至14日，我們將在東京池袋太陽城的東京礦物展（Tokyo Mineral Show）參展：${SHOW.hall_zh}，攤位 ${SHOW.booth}。${l.tms ? "展期間歡迎到我們的攤位看看。" : "如果您也會去，很希望能當面讓您看看實品。"}` : "";
+    return {
+      language: "zh-TW",
+      draft: { subject: `來自印度自家工坊的水晶批發（Earth Editions）`, body:
+`${name} 您好，
+
+冒昧來信。我是 Sejal，來自印度孟買的家族水晶研磨工坊 Earth Editions（Nikhil Gems）。
+
+${hook || "看到貴店的水晶選品，非常喜歡，所以想跟您聯繫。"}
+
+我們以公斤或單件批發自家工坊研磨的水晶球、掌心石、愛心、滾石、水晶柱與雕刻件。我們也做很多少見的礦石，例如 ${pick(RARE, 5, l.name).join("、")}，客製訂單與雕刻幾乎任何礦石都能找來。
+
+另外，喜馬拉雅水晶的批次（馬尼哈爾 Manihar、馬尼卡蘭 Manikaran）以及金髮晶，到貨時都可以第一時間通知您，這也是許多日本和台灣店家常備的貨。${show}
+
+店家喜歡跟我們合作的原因：
+・沒有中間商：原石由我們自己在圖森（Tucson），有時在齋浦爾（Jaipur）直接向礦主採購，並在自家工坊切磨
+・沒有最低訂購量
+・付款前會先傳實際批次的照片或影片
+・出貨當天提供追蹤號碼
+
+批發目錄在 ${SITE.replace("https://", "")}，申請一次即可看到批發價。或者直接回信告訴我們哪些賣得最好，我會傳相應庫存的照片給您。我們主要以英文溝通，中文來信我們也會翻譯閱讀。
+
+目前沒有採購計畫？回覆「訂閱」即可，有新批次到貨時我們會寄一封簡短通知給您。
+
+祝 生意興隆
+Sejal
+Earth Editions · Nikhil Gems，孟買
+WhatsApp ${WA}
+
+附註：如果不需要這類訊息，回覆「不用了」，我們就不會再打擾。` },
+      dm: "",
+      followups: [
+        { day: 4, body: `${name} 您好，\n\n再跟您打聲招呼。如果有興趣，我可以傳一段目前喜馬拉雅水晶批次（或水晶球、掌心石）的短片給您參考。\n\nSejal / Earth Editions` },
+        { day: 10, body: `${name} 您好，\n\n這是我最後一次來信。日後若考慮從印度直接進貨，隨時可在 ${SITE.replace("https://", "")} 申請，或 WhatsApp ${WA}。只想收到新批次通知的話，回覆「訂閱」即可。\n\n祝 生意興隆\nSejal / Earth Editions` },
       ],
     };
   }
@@ -129,7 +171,7 @@ ${opener}
 
 I'm Sejal from Earth Editions, a family crystal workshop in Mumbai. We supply shops by the kilo or by the piece: ${list(shapeList)}, plus carvings.${live ? " We also put together mixed kilo lots that work well for live sales." : ""}
 
-We work in a lot of uncommon stones, like ${list(rare)}, and we can source almost any stone for custom orders and carvings.${himalaya ? `\n\n${himTxt}` : ""}${showOn(l.country) ? "\n\nWe'll also be at the Tokyo Mineral Show at Sunshine City, Ikebukuro, from 11 December. If you're there, it would be lovely to meet and show you the stones in person." : ""}
+We work in a lot of uncommon stones, like ${list(rare)}, and we can source almost any stone for custom orders and carvings.${himalaya ? `\n\n${himTxt}` : ""}${showOn(l.country) ? `\n\nWe're also exhibiting at the Tokyo Mineral Show at Sunshine City, Ikebukuro, 11–14 December: ${SHOW.hall}, booth ${SHOW.booth}. If you're there, it would be lovely to meet and show you the stones in person.` : ""}
 
 A few things shops like about buying from us:
 - no middleman: we buy the rough ourselves from miners in Tucson and sometimes Jaipur, and cut it in our own lapidary

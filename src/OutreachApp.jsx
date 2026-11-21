@@ -293,7 +293,9 @@ export default function OutreachApp({ onHome }) {
   if (tab === "today") {
     const due = leads.filter(l => isDue(l, today));
     const usedE = sentToday(leads, "email", today, /^sent$/);
-    const fresh = leads.filter(l => l.stage === "new").sort((a, b) => (a.tier || "C").localeCompare(b.tier || "C") || (b.score || 0) - (a.score || 0));
+    // Until the Tokyo Mineral Show (Ikebukuro, 11–14 Dec 2026) is over, Japan and Taiwan go first.
+    const showFirst = l => today <= "2026-12-14" && ["JP", "TW"].includes(l.country) ? 0 : 1;
+    const fresh = leads.filter(l => l.stage === "new").sort((a, b) => showFirst(a) - showFirst(b) || (a.tier || "C").localeCompare(b.tier || "C") || (b.score || 0) - (a.score || 0));
     const pickE = fresh.filter(l => l.email && l.channel !== "instagram" && !NO_COLD_EMAIL.includes(l.country)).slice(0, Math.max(0, CAP.email - usedE));
         return shell(<>
       {kpis}

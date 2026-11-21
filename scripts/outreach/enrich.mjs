@@ -6,7 +6,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 const [inp, out] = process.argv.slice(2);
 const leads = JSON.parse(readFileSync(inp, "utf8"));
 const UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36";
-const BADMAIL = /\.(png|jpe?g|gif|webp|svg)$|example\.|sentry|wixpress|domain\.com|email\.com|@2x|godaddy|shopify\.com|squarespace|yourname|name@/i;
+const BADMAIL = /^(example|youremail|your-?email|email|test|abc|xxx)@|\.(png|jpe?g|gif|webp|svg)$|example\.|sentry|wixpress|domain\.com|email\.com|@2x|godaddy|shopify\.com|squarespace|yourname|name@/i;
 const SKIPIG = new Set(["p", "reel", "explore", "accounts", "stories", "instagram", "share", "tv"]);
 const SIG = { spheres: /sphere|球|kugel/i, palm: /palm ?stone|worry stone|flat ?stone|handsmeichler/i, tumbled: /tumble|さざれ|trommel/i, hearts: /heart|ハート/i, towers: /tower|point|generator/i,
   himalayan: /himalayan|ヒマラヤ/i, zeolite: /apophyllite|zeolite|stilbite|okenite|cavansite/i, wholesale: /wholesale|trade account|卸/i, live: /live sale|whatnot|tiktok live|live show|ライブ/i, workshop: /workshop|reiki|sound bath|class/i };
@@ -24,10 +24,15 @@ for (const l of leads) {
   if (!home) { l.site_ok = false; continue; }
   l.site_ok = true;
   const links = [...home.matchAll(/href=["']([^"'#]+)["']/gi)].map(m => m[1]);
-  const extra = [...new Set(links.filter(h => /contact|about|wholesale|our-story|impressum|お問い合わせ|会社概要|特定商取引|tokushoho|legal/i.test(h))
-    .map(h => { try { return new URL(h, o).href; } catch { return ""; } }).filter(h => h.startsWith(o)))].slice(0, 3);
-  let html = home;
-  for (const u of extra) html += await page(u);
+  // Japanese shops must publish an email on their 特定商取引法 page (often /law, /tokutei, /legal).
+  const LEGAL = /特定商取引|%E7%89%B9%E5%AE%9A%E5%95%86|tokutei|tokushoho|\/law|commerce-law|legal/i;
+  const extra = [...new Set(links.filter(h => /contact|about|wholesale|our-story|impressum|お問い合わせ|会社概要|company|特定商取引|%E7%89%B9%E5%AE%9A%E5%95%86|tokutei|tokushoho|\/law|legal/i.test(h))
+    .map(h => { try { return new URL(h, o).href; } catch { return ""; } }).filter(h => h.startsWith(o)))]
+    .sort((x, y) => LEGAL.test(y) - LEGAL.test(x)).slice(0, 4);
+  // Full-width ＠ and "info (at) shop.jp" are common on Japanese sites.
+  const deobf = t => t.replace(/＠/g, "@").replace(/\s*[\[(（]\s*(?:at|アット)\s*[\])）]\s*/gi, "@").replace(/[\[(（]\s*dot\s*[\])）]/gi, ".");
+  let html = deobf(home);
+  for (const u of extra) html += deobf(await page(u));
   const text = html.replace(/<script[\s\S]*?<\/script>|<style[\s\S]*?<\/style>/gi, " ").replace(/<[^>]+>/g, " ").replace(/&nbsp;|&amp;/g, " ").replace(/\s+/g, " ");
   const mails = [...new Set([...html.matchAll(/(?:mailto:)?([A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,})/gi)].map(m => m[1].toLowerCase())
     // Some themes hide the address in ROT13 (support@shop.com shows as fhccbeg@fubc.pbz).
