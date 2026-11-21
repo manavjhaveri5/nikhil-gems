@@ -48,6 +48,7 @@ const OutreachApp        = React.lazy(() => import("./src/OutreachApp.jsx"));
 const BillsReceipts     = React.lazy(() => import("./src/BillsReceipts.jsx"));
 const RajCard           = React.lazy(() => import("./src/RajCard.jsx"));
 const InboxCard         = React.lazy(() => import("./src/InboxCard.jsx"));
+const WeeklyHomeCard    = React.lazy(() => import("./src/WeeklyHomeCard.jsx"));
 const SocialApp         = React.lazy(() => import("./src/SocialApp.jsx"));
 const LabelsApp         = React.lazy(() => import("./src/LabelsApp.jsx"));
 const ShowLabelImport=React.lazy(()=>import("./src/LabelsApp.jsx").then(m=>({default:m.ShowLabelImport})));
@@ -1392,6 +1393,8 @@ function Welcome({onEnter,onSignOut,allowedMods,todoKey="ng-todos-v1",isAdmin=tr
               Everyone who works the shop sees it — Manav, and staff with Etsy or Orders. */}
           {/* This morning: bills, remittance advices and shipping papers the 07:00 Gmail scan found, to approve. Admin only. */}
           {isAdmin&&<React.Suspense fallback={null}><InboxCard/></React.Suspense>}
+          {/* Friday's new-pieces email: sends by itself, shown here first to edit or skip. Admin only. */}
+          {isAdmin&&<React.Suspense fallback={null}><WeeklyHomeCard/></React.Suspense>}
           {/* Raj: today's briefing headline and the follow-ups due. Admin only. */}
           {isAdmin&&<React.Suspense fallback={null}><RajCard onEnter={onEnter}/></React.Suspense>}
 

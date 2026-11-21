@@ -206,6 +206,8 @@ async function gmail(req, res) {
     if (b.action === "gmail_weekly_set") return res.json(await weekly.setSettings({ ...b.settings, by: req.user?.email || "erp" }));
     if (b.action === "gmail_weekly_build") return res.json(await weekly.build({ bridge: call, force: true, by: req.user?.email || "erp" }));
     if (b.action === "gmail_weekly_preview") return res.json({ pieces: await weekly.newPieces({ days: 7 }) });
+    if (b.action === "gmail_weekly_edit") return res.json(await weekly.edit({ week: String(b.week || ""), subject: b.subject, note: b.note, drop: b.drop || [], by: req.user?.email || "" }));
+    if (b.action === "gmail_weekly_test") return res.json(await weekly.testIssue({ week: String(b.week || ""), to: b.to }, call));
     if (b.action === "gmail_weekly_decide") {
       if (!["approve", "skip"].includes(b.act)) return res.status(400).json({ error: "approve or skip" });
       return res.json(await weekly.decide({ week: String(b.week || weekly.weekKey()), act: b.act, via: "erp", by: req.user?.email || "" }));
