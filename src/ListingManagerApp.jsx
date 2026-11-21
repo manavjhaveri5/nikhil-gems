@@ -11665,7 +11665,11 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
       }
     }
 
-    await patchListingItem(listing, current => ({
+    let firstLive = false;
+    await patchListingItem(listing, current => {
+      firstLive = (result.status || "active") === "active" && !current.platforms?.[pkey]?.live_at
+        && !(current.platforms?.[pkey]?.listing_id || current.platforms?.[pkey]?.item_id || current.platforms?.[pkey]?.product_id);
+      return {
       ...current,
       listing_order_id: current.listing_order_id || listing.listing_order_id,
       platforms: { ...current.platforms, [pkey]: {
@@ -11684,7 +11688,22 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
         } : {}),
       } },
       updated_at: now(),
-    }));
+    };
+    });
+    // A new one-of-a-kind piece on our own site goes straight up as an Instagram story (Social → Autopilot).
+    if (pkey === "store" && firstLive && listing.type === "unique") {
+      // The "Just listed" story image is drawn here (fonts and canvas live in the browser), then posted by the server.
+      (async () => {
+        let image = "";
+        try {
+          const [{ renderListedStory }, { uploadToStorage }] = await Promise.all([import("./StoryStudio.jsx"), import("./storageUtils.js")]);
+          const blob = await renderListedStory(listing);
+          image = await uploadToStorage(`social-stories/${Date.now().toString(36)}-${listing.id}.jpg`, new File([blob], "just-listed.jpg", { type: "image/jpeg" }));
+        } catch (e) { console.warn("story image:", e?.message || e); }
+        const d = await fetch("/api/social", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "story_now", id: listing.id, image }) }).then(r => r.json());
+        if (d.posting) showToast("📸 Just listed story going up on Instagram");
+      })().catch(() => {});
+    }
     if (isEtsyKey(pkey) && !syncOnly) {
       if (queueIt) {
         const id = result.listing_id || listing.platforms?.[pkey]?.listing_id;

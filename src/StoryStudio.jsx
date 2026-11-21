@@ -199,6 +199,25 @@ function drawStory(ctx, bmp, { kind, name, place, tone, frame }) {
   return sticker;
 }
 
+/* The "Just listed" story, made without the studio open: the cover photo
+   framed and lettered the way the studio first shows it. Used when a piece
+   first goes live on eartheditions.co, so its story goes up by itself. */
+export async function renderListedStory(l) {
+  const src = (l.images || []).find(u => typeof u === "string" && /^https?:/.test(u));
+  if (!src) throw new Error("no photo");
+  let title = "";
+  try { const row = await loadStoreProduct(l.id); title = row?.title || ""; } catch {}
+  const [b] = await Promise.all([loadBitmap(src), loadFonts()]);
+  const edge = edgeOf(b);
+  const frame = { zoom: edge.plain ? Math.max(minZoom(b), W / b.width / coverScale(b)) : 1, ox: 0, oy: 0, bg: edge.bg };
+  const r = readPhoto(b, frame);
+  const place = r.top.spread <= r.bottom.spread ? "top" : "bottom";
+  const cv = document.createElement("canvas");
+  cv.width = W; cv.height = H;
+  drawStory(cv.getContext("2d"), b, { kind: "listed", name: storyName(l, title) || " ", place, tone: r[place].mean > .55 ? "dark" : "light", frame });
+  return new Promise((ok, no) => cv.toBlob(x => x ? ok(x) : no(new Error("Couldn't make the image")), "image/jpeg", .93));
+}
+
 const pill = on => ({ padding: "7px 14px", borderRadius: 20, fontSize: 12.5, fontWeight: 700, cursor: "pointer",
   border: `1.5px solid ${on ? C.ink : C.border}`, background: on ? C.ink : C.surface, color: on ? "#FAF0DC" : C.ink });
 

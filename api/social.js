@@ -1,3 +1,4 @@
+import { waitUntil } from "@vercel/functions";
 /* Social: posting to every platform from the ERP, on each platform's own free
    API. One file, because the platforms share most of the work: an OAuth
    login, a token kept safe and refreshed, then "post this media with this
@@ -883,6 +884,48 @@ const payloadFor = (k, l, cap, link) => ({
 });
 const canTake = (k, pl) => !((k === "tiktok" || k === "youtube") && !pl.video) && !(k === "pinterest" && (!pl.images.length || !pl.link)) && !(k !== "threads" && k !== "x" && !pl.images.length && !pl.video);
 
+/* ── new-piece stories ── */
+const storeLiveAt = l => { const st = l.platforms?.store; return st?.status === "active" ? Date.parse(st.live_at || "") || 0 : 0; };
+const storiesDone = async () => new Set(((await appData("ng-stories-v1")) || []).map(r => r.id));
+// The piece's video when it has one (a story suits it best), else the cover
+// photo; a video Instagram refuses (too long, odd format) still gets the photo.
+async function postStory(l, image = "") {
+  // The "Just listed" image drawn by Listing Manager when there is one; else the plain cover photo, or the video.
+  const ours = /^https:\/\/[a-z0-9]+\.supabase\.co\/storage\/v1\/object\/public\//.test(image || "") ? image : "";
+  const photo = ours || (l.images || []).find(u => typeof u === "string" && /^https:/.test(u));
+  // A photo always wins (Sir, 21 Nov): the video only for a piece with no photo.
+  const video = photo ? "" : /^https:.*\.(mp4|mov)(\?|$)/i.test(l.video || "") ? l.video : "";
+  if (!photo && !video) { await addLog({ platform: "instagram", source: `story:${l.id}`, title: l.title, note: "story skipped — no photo or video" }); return { ok: false, error: "no photo or video" }; }
+  let out, how = ours ? "Just listed photo" : video ? "video" : "photo", err;
+  try { out = await postInstagram({ story: true, video, images: photo ? [photo] : [] }); }
+  catch (e) {
+    err = e;
+    if (video && photo) { try { out = await postInstagram({ story: true, images: [photo] }); how = "photo"; } catch (e2) { err = e2; } }
+  }
+  if (!out) { await addLog({ platform: "instagram", source: `story:${l.id}`, title: l.title, note: `story failed: ${err.message}` }); return { ok: false, error: err.message }; }
+  await addLog({ platform: "instagram", source: `story:${l.id}`, title: l.title, url: out.url || "", note: `story (${how}) — went live on eartheditions.co` });
+  // Ticked in Stories too, so nobody posts it again by hand.
+  try { await sb().rpc("app_data_upsert_item", { p_key: "ng-stories-v1", p_item: { id: `listed:${l.id}`, kind: "listed", listing_id: l.id, how: "auto", at: new Date().toISOString() }, p_prepend: true }); } catch {}
+  return { ok: true, how, url: out.url };
+}
+/* Called by Listing Manager the moment a piece first goes live on the site.
+   Answers at once; the post (a video takes a minute or two at Instagram)
+   carries on after the reply. */
+async function storyNow(id, image) {
+  const auto = await autoSettings();
+  if (!auto.stories.on) return { skipped: "Story autopilot is off" };
+  if (auto.stories.afterHours > 0) return { skipped: `Waits ${auto.stories.afterHours}h — the hourly run posts it` };
+  if (!(await getSecret("tok_instagram"))?.access_token) return { skipped: "Instagram isn't connected" };
+  const { data } = await sb().from("app_rows").select("data").eq("key", "ng-listings-v1").eq("id", String(id)).eq("deleted", false).maybeSingle();
+  const l = data?.data;
+  if (!l) return { skipped: "Piece not found" };
+  if (l.type !== "unique") return { skipped: "Not one of a kind" };
+  if (!storeLiveAt(l)) return { skipped: "Not live on eartheditions.co" };
+  if ((await storiesDone()).has(`listed:${l.id}`) || (await readLog()).some(e => e.source === `story:${l.id}` && /^story \(/.test(e.note || ""))) return { skipped: "Story already posted" };
+  waitUntil(postStory(l, image).catch(e => console.error("story_now", e.message)));
+  return { posting: true };
+}
+
 async function runAutopilot() {
   const done = [], started = Date.now(), budget = 200000;
   const time = () => Date.now() - started < budget;
@@ -938,36 +981,21 @@ async function runAutopilot() {
     }
   }
 
-  // 3. New one-of-a-kind pieces on eartheditions.co, as an Instagram story on
-  // @eartheditions_: the video when there is one (a story suits it best), else
-  // the cover photo. One a run per piece, three pieces at most; a piece whose
-  // story was ticked by hand in Stories is left alone.
+  // 3. New one-of-a-kind pieces on eartheditions.co as stories. Normally posted
+  // the moment the piece goes live (action "story_now"); this hourly pass
+  // catches any that went live some other way, or whose post failed.
   if (auto.stories.on && time() && await connected("instagram")) {
     const since = Date.parse(auto.stories.since || "") || Date.now();
-    const storyDone = new Set(((await appData("ng-stories-v1")) || []).map(r => r.id));
-    const onStore = l => { const st = l.platforms?.store; return st?.status === "active" ? Date.parse(st.live_at || "") || 0 : 0; };
+    const storyDone = await storiesDone();
     const ready = ((await appData("ng-listings-v1")) || [])
-      .filter(l => l.type === "unique" && !l.deleted)
-      .map(l => ({ l, at: onStore(l) }))
-      .filter(({ l, at }) => at > since && Date.now() - at >= (+auto.stories.afterHours || 0) * 36e5
+      .map(l => ({ l, at: storeLiveAt(l) }))
+      .filter(({ l, at }) => l.type === "unique" && !l.deleted && at > since && Date.now() - at >= (+auto.stories.afterHours || 0) * 36e5
         && !posted.has(`story:${l.id}|instagram`) && !storyDone.has(`listed:${l.id}`))
       .sort((a, b) => a.at - b.at);
     for (const { l } of ready.slice(0, 3)) {
       if (!time()) break;
-      const photo = (l.images || []).find(u => typeof u === "string" && /^https:/.test(u));
-      const video = /^https:.*\.(mp4|mov)(\?|$)/i.test(l.video || "") ? l.video : "";
-      if (!photo && !video) { await addLog({ platform: "instagram", source: `story:${l.id}`, title: l.title, note: "story skipped — no photo or video" }); continue; }
-      let out, how = video ? "video" : "photo";
-      try { out = await postInstagram({ story: true, video, images: photo ? [photo] : [] }); }
-      catch (e) {
-        // A video Instagram won't take (too long, odd format) still gets the photo.
-        if (video && photo) { try { out = await postInstagram({ story: true, images: [photo] }); how = "photo"; } catch (e2) { e = e2; } }
-        if (!out) { await addLog({ platform: "instagram", source: `story:${l.id}`, title: l.title, note: `story failed: ${e.message}` }); done.push(`story failed: ${e.message}`); continue; }
-      }
-      await addLog({ platform: "instagram", source: `story:${l.id}`, title: l.title, url: out.url || "", note: `autopilot story (${how})` });
-      // Ticked in Stories too, so nobody posts it again by hand.
-      try { await sb().rpc("app_data_upsert_item", { p_key: "ng-stories-v1", p_item: { id: `listed:${l.id}`, kind: "listed", listing_id: l.id, how: "auto", at: new Date().toISOString() }, p_prepend: true }); } catch {}
-      done.push(`story: ${l.title}`);
+      const r = await postStory(l);
+      done.push(r.ok ? `story: ${l.title}` : `story failed: ${r.error}`);
     }
   }
 
@@ -1023,6 +1051,7 @@ export default async function handler(req, res) {
     }
 
     if (!(await requireUser(req, res))) return;
+    if (action === "story_now") return res.json(await storyNow(body.id, String(body.image || "")));
     /* A listing photo, passed through so the browser may save it (Etsy's image
        host sends no CORS headers). Only the hosts our listing photos live on. */
     if (action === "image") {
