@@ -10,7 +10,7 @@ const fmt = v => {
   return isNaN(d) ? "—" : `${d.toLocaleDateString("en-GB", { day: "numeric", month: "short" })} · ${d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}`;
 };
 const TONE = { subscribed: [C.green, C.greenBg], unsubscribed: [C.red, C.redBg], bounced: [C.red, C.redBg], nonSubscribed: [C.inkFaint, C.card] };
-const KIND = { no: "unsubscribe", list: "interested", auto: "auto-reply", reply: "reply" };
+const KIND = { no: "unsubscribe", list: "interested", interested: "🔥 interested", auto: "auto-reply", reply: "reply" };
 
 export default function GmailListTab({ showToast }) {
   const [sum, setSum] = useState(null);
@@ -92,11 +92,15 @@ export default function GmailListTab({ showToast }) {
                 </div>
                 {p.status !== "ready" ? <ProgressBar p={p} /> : <div style={{ fontSize: 11.5, color: C.inkFaint }}>Prepared, not sent{s.testedAt ? " (test sent)" : ""}.</div>}
                 <div style={{ fontSize: 11.5, color: C.inkMid, display: "flex", gap: 12, flexWrap: "wrap" }}>
-                  <span>💬 {replies.filter(r => r.kind !== "auto").length} replies</span>
+                  <span>💬 {replies.filter(r => r.kind !== "auto").length} replies{replies.some(r => r.kind === "interested") ? ` (${replies.filter(r => r.kind === "interested").length} interested)` : ""}</span>
+                  <span>👆 {s.clicks?.people || 0} clicked</span>
                   <span>🚫 {(s.unsubs || []).length} unsubscribed</span>
                   <span>↩ {(s.bounces || []).length} bounced</span>
                   {replies.length > 0 && <button onClick={() => setOpen(o => o === s.id ? "" : s.id)} style={{ ...small, padding: "2px 9px" }}>{open === s.id ? "Hide replies" : "Show replies"}</button>}
                 </div>
+                {s.clicks?.top?.length > 0 && (
+                  <div style={{ fontSize: 11.5, color: C.inkMid }}>Most clicked: {s.clicks.top.map(([t, n]) => `${t} (${n})`).join(" · ")}</div>
+                )}
                 {open === s.id && (
                   <div style={{ display: "grid", gap: 6 }}>
                     {replies.slice().reverse().map(r => (
@@ -110,6 +114,33 @@ export default function GmailListTab({ showToast }) {
               </div>
             );
           })}
+        </div>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: m ? "1fr" : "1fr 1fr", gap: 16 }}>
+        <div style={card}>
+          <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 4 }}>Most engaged</div>
+          <div style={{ fontSize: 11, color: C.inkFaint, marginBottom: 8 }}>Who replies and clicks. They get each new send first, and the tags "replied" / "clicked" pick them as an audience.</div>
+          {!sum?.engaged?.length && <div style={{ fontSize: 12, color: C.inkFaint }}>No one yet — this fills in after the first send.</div>}
+          {(sum?.engaged || []).map(c => {
+            const g = c.eng || {}, likes = Object.entries(g.interests || {}).sort((a, b) => b[1] - a[1]).slice(0, 3).map(x => x[0]);
+            return (
+              <div key={c.id} style={{ fontSize: 12, padding: "5px 0", borderBottom: `1px solid ${C.border}` }}>
+                <strong>{c.name || c.id}</strong>{c.name && <span style={{ color: C.inkFaint }}> · {c.id}</span>}
+                <div style={{ color: C.inkMid, fontSize: 11 }}>💬 {g.replies || 0} · 👆 {g.clicks || 0} · sent {g.sent || 0}{likes.length ? ` · liked ${likes.join(", ")}` : ""}</div>
+              </div>
+            );
+          })}
+        </div>
+        <div style={card}>
+          <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 4 }}>Unsubscribed and bounced</div>
+          <div style={{ fontSize: 11, color: C.inkFaint, marginBottom: 8 }}>Taken off automatically — from the link, Gmail's unsubscribe button, a "remove me" reply, or a bounce. They're never sent to again.</div>
+          {(sum?.unsubs || []).map(c => (
+            <div key={c.id} style={{ fontSize: 12, padding: "5px 0", borderBottom: `1px solid ${C.border}`, display: "flex", gap: 8 }}>
+              <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>{c.id}</span>
+              <span style={{ color: c.status === "bounced" ? C.red : C.inkFaint, fontSize: 11 }}>{c.status === "bounced" ? "bounced" : c.why || "unsubscribed"} · {fmt(c.at)}</span>
+            </div>
+          ))}
         </div>
       </div>
 

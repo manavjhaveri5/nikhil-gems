@@ -15,6 +15,14 @@ const STORE = "https://eartheditions.co";
 export default async function handler(req, res) {
   // The unsubscribe link in Gmail campaigns: public, checked by its signed token.
   if (req.query?.action === "unsub") return unsub(req, res);
+  // A product link in a Gmail campaign: note the click, then go to the product.
+  if (req.query?.action === "c") {
+    const c = list.readClickParams(req.query);
+    if (!c) return res.status(400).send("This link isn't valid.");
+    try { await list.recordClick(c, String(req.headers["user-agent"] || "")); } catch (e) { console.error("click", e.message); }
+    res.setHeader("Cache-Control", "no-store");
+    return res.redirect(302, c.url);
+  }
   if (req.method !== "POST") return res.status(405).json({ error: "POST only" });
   // The 07:00 IST inbox scan comes from pg_cron with Raj's key; Sir can also run it from Home.
   if (req.body?.action === "gmail_scan" && await cronKeyOk(req, "raj")) return gmail(req, res);
@@ -128,7 +136,15 @@ async function gmail(req, res) {
     // Campaigns from our own Gmail (lib/mailList.js).
     if (b.action === "gmail_list_summary") {
       const contacts = await list.allContacts();
-      return res.json({ ...list.listSummary(contacts), sends: await list.listSends(), dayCap: list.DAY_CAP, from: list.FROM_EMAIL });
+      const sends = await list.listSends();
+      const clicks = await list.clickStats(sends.map(x => x.id)).catch(() => ({}));
+      const engaged = contacts.filter(c => c.status === "subscribed" && list.engagementScore(c) > 0)
+        .map(c => ({ id: c.id, name: c.firstName || "", score: list.engagementScore(c), eng: c.eng }))
+        .sort((x, y) => y.score - x.score).slice(0, 25);
+      const unsubs = contacts.filter(c => c.status === "unsubscribed" || c.status === "bounced")
+        .sort((x, y) => String(y.updated || "").localeCompare(String(x.updated || ""))).slice(0, 40)
+        .map(c => ({ id: c.id, status: c.status, why: c.unsubVia || c.bounceWhy || "", at: c.unsubAt || c.bouncedAt || c.updated }));
+      return res.json({ ...list.listSummary(contacts), sends: sends.map(x => ({ ...x, clicks: clicks[x.id] || null })), engaged, unsubs, dayCap: list.DAY_CAP, from: list.FROM_EMAIL });
     }
     if (b.action === "gmail_list_contacts") {
       const q = String(b.q || "").toLowerCase().trim();
@@ -146,8 +162,17 @@ async function gmail(req, res) {
     }
     if (b.action === "gmail_campaign_create") {
       if (!Array.isArray(b.products) || !b.products.length) return res.status(400).json({ error: "Pick at least one product" });
-      const html = buildCampaignHtml(b);
-      return res.json(await list.createSend({ html, subject: b.subject, preheader: b.preheader, senderName: b.senderName, tags: b.tags || [], excludeTags: b.excludeTags || [], draftId: b.draftId }));
+      const style = b.style === "personal" ? "personal" : "catalogue";
+      if (style === "personal" && !String(b.note || "").trim()) return res.status(400).json({ error: "Write the short note first" });
+      const html = style === "personal" ? list.buildPersonalHtml(b) : buildCampaignHtml(b);
+      // Which product each link is, so a click teaches us what that person liked.
+      const links = {};
+      for (const p of b.products) for (const u of [p.url, p.video]) if (/^https:\/\//.test(u || "")) links[u] = String(p.title || "").slice(0, 120);
+      return res.json(await list.createSend({ html, style, links, subject: b.subject, preheader: b.preheader, senderName: b.senderName, tags: b.tags || [], excludeTags: b.excludeTags || [], draftId: b.draftId }));
+    }
+    if (b.action === "gmail_campaign_preview") {
+      const html = list.buildPersonalHtml(b);
+      return res.json({ html: list.fillName(html, { firstName: String(b.sampleName || "Sejal") }).replace(/\[\[unsubscribe_link\]\]/g, "#") });
     }
     if (b.action === "gmail_campaign_audience") {
       const n = list.audienceOf(await list.allContacts(), b.tags || [], b.excludeTags || []).length;

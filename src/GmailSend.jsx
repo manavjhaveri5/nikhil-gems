@@ -13,7 +13,7 @@ export const mailApi = async payload => {
   return d;
 };
 const sleep = ms => new Promise(ok => setTimeout(ok, ms));
-const GAP = 20_000; // between batches of 12: a 400-person list takes ~12 minutes
+const GAP = 20_000; // fallback; the server says how long to wait for each style
 
 /* Runs a send batch by batch until it finishes, pauses or is stopped. */
 export function useGmailRunner({ onProgress, onDone, onError }) {
@@ -34,7 +34,7 @@ export function useGmailRunner({ onProgress, onDone, onError }) {
         onProgress?.(p);
         if (["done", "paused", "cancelled"].includes(p.status)) { if (p.status === "done") onDone?.(id, p); break; }
         if (stop.current) { onProgress?.(await mailApi({ action: "gmail_campaign_status", id, status: "paused" })); break; }
-        await sleep(p.busy ? 15_000 : GAP);
+        await sleep(p.busy ? 15_000 : (p.waitMs || GAP));
         if (stop.current) { onProgress?.(await mailApi({ action: "gmail_campaign_status", id, status: "paused" })); break; }
       }
     } catch (e) { onError?.(e); }
@@ -59,7 +59,12 @@ export function ProgressBar({ p }) {
   );
 }
 
-const tagLabel = t => t.startsWith("seg:") ? `${t.slice(4)} (Omnisend segment)` : t;
+const tagLabel = t => t.startsWith("seg:") ? `${t.slice(4)} (Omnisend segment)` : t === "replied" ? "💬 replied before" : t === "clicked" ? "👆 clicked before" : t;
+const NOTE = "A few new pieces came in this week and I picked out the ones I thought you'd like.\n\nEach one is a single piece, so once it's gone it's gone.";
+const STYLES = [
+  ["personal", "✉️ Personal note", "Looks like an email typed in Gmail: Hi [name], a short note, small photos, your signature. Best for the inbox and for replies."],
+  ["catalogue", "🗞 Designed catalogue", "The designed email above, as built. Gmail usually files it under Promotions."],
+];
 
 export default function GmailSend({ payload, subject, preheader, senderName, draftId, testTo, setTestTo, onDone, showToast, ready }) {
   const [summary, setSummary] = useState(null);
@@ -71,7 +76,14 @@ export default function GmailSend({ payload, subject, preheader, senderName, dra
   const [prog, setProg] = useState(null);
   const [busy, setBusy] = useState("");
   const [err, setErr] = useState("");
+  const [style, setStyle] = useState("personal");
+  const [note, setNote] = useState(NOTE);
+  const [ask, setAsk] = useState("If any of these are right for you, just reply to this email and I'll send more photos, a video or a price.");
+  const [signoff, setSignoff] = useState(`Warm regards,\n${senderName || "Nikhil Gems"}`);
+  const [preview, setPreview] = useState("");
   const m = mob();
+  const personal = style === "personal";
+  const extra = () => personal ? { style, note, ask, signoff } : { style };
 
   useEffect(() => {
     mailApi({ action: "gmail_list_summary" }).then(s => {
@@ -84,7 +96,7 @@ export default function GmailSend({ payload, subject, preheader, senderName, dra
     mailApi({ action: "gmail_campaign_audience", tags: [...tags] }).then(d => setCount(d.count)).catch(() => setCount(null));
   }, [summary, tags]);
 
-  const nowSig = JSON.stringify([payload(), subject, preheader, senderName, [...tags].sort()]);
+  const nowSig = JSON.stringify([payload(), subject, preheader, senderName, [...tags].sort(), extra()]);
   const stale = sendId && sig !== nowSig && !prog;
   const { running, run, stop } = useGmailRunner({
     onProgress: setProg,
@@ -95,7 +107,7 @@ export default function GmailSend({ payload, subject, preheader, senderName, dra
   const create = async () => {
     setBusy("create"); setErr("");
     try {
-      const d = await mailApi({ action: "gmail_campaign_create", ...payload(), subject, preheader, senderName, tags: [...tags], draftId });
+      const d = await mailApi({ action: "gmail_campaign_create", ...payload(), ...extra(), subject, preheader, senderName, tags: [...tags], draftId });
       setSendId(d.id); setSig(nowSig); setTested(false); setProg(null);
       showToast?.(`✓ Ready for ${d.total} people — send yourself a test`);
     } catch (e) { setErr(e.message); } finally { setBusy(""); }
@@ -105,9 +117,14 @@ export default function GmailSend({ payload, subject, preheader, senderName, dra
     try { await mailApi({ action: "gmail_campaign_test", id: sendId, to: testTo }); setTested(true); showToast?.(`✓ Gmail test sent to ${testTo}`); }
     catch (e) { setErr(e.message); } finally { setBusy(""); }
   };
+  const showPreview = async () => {
+    if (preview) { setPreview(""); return; }
+    try { const d = await mailApi({ action: "gmail_campaign_preview", ...payload(), ...extra() }); setPreview(d.html); }
+    catch (e) { setErr(e.message); }
+  };
   const send = async () => {
     const n = count ?? "the list";
-    if (!window.confirm(`Send "${subject}" from ${summary?.from || "Gmail"} to ${n} people?\n\nOne email each, a batch every 20 seconds. Keep this window open until it finishes (pausing is safe — it resumes from the Gmail list tab).`)) return;
+    if (!window.confirm(`Send "${subject}" from ${summary?.from || "Gmail"} to ${n} people?\n\nOne email each, ${personal ? "6 every 30 seconds" : "12 every 20 seconds"}, the people who reply and click most going first. Keep this window open until it finishes (pausing is safe — it resumes from the Gmail list tab).`)) return;
     if (window.prompt("Type SEND to confirm:") !== "SEND") { showToast?.("Cancelled — nothing sent"); return; }
     setErr(""); run(sendId);
   };
@@ -126,6 +143,27 @@ export default function GmailSend({ payload, subject, preheader, senderName, dra
           {summary && !summary.total && <strong style={{ color: C.amber }}> The list is empty — import it from Omnisend on the Gmail list tab first.</strong>}
         </div>
       </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: m ? "1fr" : "1fr 1fr", gap: 8 }}>
+        {STYLES.map(([k, l, d]) => (
+          <button key={k} type="button" disabled={!!running} onClick={() => setStyle(k)} style={{ textAlign: "left", background: style === k ? C.tealBg : C.card, border: `1.5px solid ${style === k ? C.teal : C.border}`, borderRadius: 10, padding: "9px 11px", cursor: "pointer", color: C.ink }}>
+            <div style={{ fontSize: 12.5, fontWeight: 700 }}>{l}</div>
+            <div style={{ fontSize: 10.5, color: C.inkFaint, marginTop: 2, lineHeight: 1.45 }}>{d}</div>
+          </button>
+        ))}
+      </div>
+      {personal && (
+        <div style={{ display: "grid", gap: 6 }}>
+          <div style={{ fontSize: 11, color: C.inkFaint }}>Starts with "Hi [their first name]," (or "Hi there,"). Put <code>[[first_name]]</code> in the subject to use it there too. The first 4 products get a small photo, the rest are listed as links.</div>
+          <textarea value={note} onChange={e => setNote(e.target.value)} rows={4} placeholder="The short note, in your own words" style={{ ...FI(), fontFamily: "inherit", resize: "vertical" }} />
+          <input value={ask} onChange={e => setAsk(e.target.value)} placeholder="What to reply about" style={FI()} />
+          <div style={{ display: "flex", gap: 8, alignItems: "flex-start", flexWrap: "wrap" }}>
+            <textarea value={signoff} onChange={e => setSignoff(e.target.value)} rows={2} placeholder="Signature" style={{ ...FI(), fontFamily: "inherit", width: m ? "100%" : 260, resize: "vertical" }} />
+            <button type="button" onClick={showPreview} style={btn(C.card, C.ink, C.border)}>{preview ? "Hide preview" : "Preview the note"}</button>
+          </div>
+          {preview && <iframe title="Personal note preview" srcDoc={preview} style={{ width: "100%", height: 520, border: `1px solid ${C.border}`, borderRadius: 8, background: "#fff" }} />}
+        </div>
+      )}
 
       {tagList.length > 0 && (
         <div>
