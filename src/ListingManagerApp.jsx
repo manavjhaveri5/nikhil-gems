@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo, lazy, Suspense } from "react";
-import { loadK, loadKFresh, saveK, uid, onCacheRefresh, upsertItemK, deleteItemK } from "./utils.js";
+import { loadK, loadKFresh, saveK, uid, onCacheRefresh, upsertItemK, upsertItemsK, deleteItemK } from "./utils.js";
 import { uploadToStorage } from "./storageUtils.js";
 import { classify } from "./aiClient.js";
 import { CUSTOMS_DESCS_KEY, DEFAULT_CUSTOMS_DESCS } from "./DatasetsApp.jsx";
@@ -1798,6 +1798,125 @@ function ImagePicker({ material, shape, selectedUrls, onChange, video, onVideoCh
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+/* Mark several sold from the grid's selection bar: Record Sale's own fields,
+   asked once for the lot, with a sale price per piece. It is the confirm too —
+   it names the count and lists every title before anything is written. */
+function BulkMarkSoldModal({ rows, skipped, onSave, onClose }) {
+  const priceOf = (l, key) => {
+    const p = PLATFORMS.find(x => x.key === key) || PLATFORMS.find(x => !x.coming && l.platforms?.[x.key]?.status === "active");
+    return p ? (l[p.priceField] || "") : "";
+  };
+  const [form, setForm] = useState({ platform: "manual", platform_order_id: "", buyer_name: "", buyer_country: "",
+    date: new Date().toISOString().slice(0, 10), notes: "", remove_other_platforms: true });
+  const [prices, setPrices] = useState(() => Object.fromEntries(rows.map(l => [l.id, priceOf(l, null)])));
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
+  const uniques = rows.filter(l => l.type === "unique");
+  const otherLive = [...new Set(uniques.flatMap(l => PLATFORMS.filter(p => !p.coming && p.key !== form.platform && l.platforms?.[p.key]?.status === "active").map(p => p.label)))];
+  const nRep = rows.length - uniques.length;
+  const save = async () => {
+    setBusy(true); setErr("");
+    try { await onSave(rows, form, prices); }
+    catch (e) { setErr(e.message || String(e)); setBusy(false); }
+  };
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.55)", zIndex: 300,
+      display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
+      <div style={{ background: C.bg, borderRadius: 14, width: "100%", maxWidth: 620, maxHeight: "92vh", display: "flex", flexDirection: "column",
+        boxShadow: "0 24px 80px rgba(0,0,0,.3)", overflow: "hidden" }}>
+        <div style={{ background: C.surface, borderBottom: `1px solid ${C.border}`,
+          padding: "14px 20px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <div>
+            <div style={{ fontWeight: 700, fontSize: 15 }}>Mark {rows.length} as sold</div>
+            <div style={{ fontSize: 11, color: C.inkFaint, marginTop: 2 }}>
+              Records a sale for each, as Record Sale does{skipped ? ` · ${skipped} already sold, skipped` : ""}
+            </div>
+          </div>
+          <button onClick={onClose} disabled={busy} style={{ background: "none", border: "none", cursor: "pointer", color: C.inkFaint, fontSize: 20 }}>×</button>
+        </div>
+
+        <div style={{ padding: "16px 20px", display: "flex", flexDirection: "column", gap: 12, overflowY: "auto" }}>
+          <Grid cols={2}>
+            <div>
+              <Label>Platform sold on</Label>
+              <select value={form.platform} onChange={e => {
+                const key = e.target.value;
+                set("platform", key);
+                if (PLATFORMS.some(x => x.key === key)) setPrices(Object.fromEntries(rows.map(l => [l.id, priceOf(l, key)])));
+              }} style={FI()}>
+                {PLATFORMS.filter(p => !p.coming).map(p => <option key={p.key} value={p.key}>{p.icon} {p.label}</option>)}
+                <option value="manual">✏️ Manual / Other</option>
+              </select>
+            </div>
+            <div>
+              <Label>Date</Label>
+              <input type="date" value={form.date} onChange={e => set("date", e.target.value)} style={FI()} />
+            </div>
+            <div>
+              <Label>Platform order ID (optional)</Label>
+              <input value={form.platform_order_id} onChange={e => set("platform_order_id", e.target.value)} style={FI()} placeholder="e.g. 3456789012" />
+            </div>
+            <div>
+              <Label>Buyer name (optional)</Label>
+              <input value={form.buyer_name} onChange={e => set("buyer_name", e.target.value)} style={FI()} />
+            </div>
+            <div>
+              <Label>Buyer country (optional)</Label>
+              <input value={form.buyer_country} onChange={e => set("buyer_country", e.target.value)} style={FI()} placeholder="India, USA…" />
+            </div>
+            <div>
+              <Label>Notes</Label>
+              <input value={form.notes} onChange={e => set("notes", e.target.value)} style={FI()} />
+            </div>
+          </Grid>
+
+          <div>
+            <Label>Pieces · sale price (INR)</Label>
+            <div style={{ border: `1px solid ${C.border}`, borderRadius: 8, maxHeight: 240, overflowY: "auto" }}>
+              {rows.map((l, i) => (
+                <div key={l.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "6px 10px", borderTop: i ? `1px solid ${C.border}` : "none", fontSize: 12.5 }}>
+                  <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={l.title}>{l.title || l.id}</span>
+                  {l.type === "repeatable" && <span style={{ fontSize: 10.5, color: C.blue }}>🔁</span>}
+                  <input type="number" value={prices[l.id] ?? ""} onChange={e => setPrices(p => ({ ...p, [l.id]: e.target.value }))}
+                    style={{ ...FI(), width: 110, padding: "5px 8px" }} placeholder="0" />
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {uniques.length > 0 && otherLive.length > 0 && (
+            <div style={{ background: C.amberBg, border: `1px solid ${C.amber}50`, borderRadius: 8, padding: "10px 14px", fontSize: 12, color: C.ink, lineHeight: 1.5 }}>
+              <label style={{ display: "flex", alignItems: "flex-start", gap: 9, cursor: "pointer" }}>
+                <input type="checkbox" checked={!!form.remove_other_platforms} onChange={e => set("remove_other_platforms", e.target.checked)} style={{ marginTop: 2, accentColor: C.amber }} />
+                <span><strong>Unique items</strong> — remove the {uniques.length} unique piece{uniques.length === 1 ? "" : "s"} from <strong>{otherLive.join(", ")}</strong> after recording these sales.</span>
+              </label>
+            </div>
+          )}
+          {nRep > 0 && (
+            <div style={{ background: C.blueBg, border: `1px solid ${C.blue}30`, borderRadius: 8, padding: "10px 14px", fontSize: 12, color: C.ink }}>
+              🔁 {nRep} repeatable item{nRep === 1 ? "" : "s"} — remaining stock stays listed on all platforms.
+            </div>
+          )}
+          {err && <div style={{ color: C.red, fontSize: 12.5 }}>⚠ {err}</div>}
+        </div>
+
+        <div style={{ background: C.surface, borderTop: `1px solid ${C.border}`, padding: "14px 20px", display: "flex", gap: 10 }}>
+          <button onClick={save} disabled={busy}
+            style={{ flex: 1, background: C.green, color: "#fff", border: "none", borderRadius: 8, padding: "11px 0", fontSize: 14, fontWeight: 700, cursor: busy ? "wait" : "pointer", opacity: busy ? .7 : 1 }}>
+            {busy ? "Recording…" : `✓ Record ${rows.length} sale${rows.length === 1 ? "" : "s"}`}
+          </button>
+          <button onClick={onClose} disabled={busy}
+            style={{ padding: "11px 20px", background: C.surface, border: `1.5px solid ${C.border}`, borderRadius: 8, fontSize: 13, cursor: "pointer", color: C.ink }}>
+            Cancel
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -10555,6 +10674,7 @@ export default function ListingManagerApp({ onHome, startTab = "listings", onOpe
   const pickEtsyTabShop = k => { setEtsyTabShop(k); try { localStorage.setItem("lm-etsy-shop", k); } catch { /* fine */ } };
   useEffect(() => { try { localStorage.setItem("lm-etsy-view", etsyView); } catch { /* fine */ } }, [etsyView]);
   const [soldModal,  setSoldModal]  = useState(null);
+  const [bulkSold,   setBulkSold]   = useState(null);   // { rows, skipped, done }
   const [view,       setView]       = useState(() => { try { return localStorage.getItem("lm-view") || "grid"; } catch { return "grid"; } });
   useEffect(() => { try { localStorage.setItem("lm-view", view); } catch {} }, [view]);
   const [tradeAsk,   setTradeAsk]   = useState(null);   // { listing, initial, res } while the trade form is open
@@ -11711,6 +11831,32 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
     await patchListingItem(listing, current => ({ ...current, platforms: { ...current.platforms, [pkey]: { status: "deleted" } }, updated_at: now() }));
   };
 
+  /* Take a sold unique piece down from one other platform it was live on —
+     the single Record Sale and the bulk Mark sold both go through here. */
+  const takeDownForSale = async (listing, p) => {
+    let action, storeKey, etsyShop;
+    if (p.key === "etsy") { action = "unpublish_etsy"; }
+    else if (p.key === "etsy_ee") { action = "unpublish_etsy"; etsyShop = "earth"; }
+    else if (p.key === "shopify_aty") { action = "unpublish_shopify"; storeKey = "atyahara"; }
+    else if (p.key === "shopify_earth") { action = "unpublish_shopify"; storeKey = "earth"; }
+    else if (p.key === "trade") { if (tradeRefOnly(listing)) return; await hideTradeProduct(listing.platforms?.trade?.product_id).catch(e => console.warn("Trade hide failed:", e.message)); return; }
+    else if (p.key === "store") { await hideStoreProduct(listing.platforms?.store?.product_id).catch(e => console.warn("Store hide failed:", e.message)); return; }
+    else if (p.key === "ebay") {
+      const itemId = listing.platforms?.ebay?.item_id;
+      if (!itemId) return;
+      const r = await fetch(`/api/ebay?action=end_item&item_id=${itemId}`, { method: "POST" });
+      const d = await r.json();
+      if (!d.ok) console.warn("Auto-unpublish failed for ebay:", d.error);
+      return;
+    } else return;
+    const r = await fetch("/api/listing-manager", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action, listing: await withShopifyCreds(listing, storeKey), store_key: storeKey, etsy_shop: etsyShop }),
+    });
+    const d = await lmJson(r);
+    if (!d.ok) console.warn(`Auto-unpublish failed for ${p.key}:`, d.error);
+  };
+
   /* mark sold */
   const handleMarkSold = async saleForm => {
     const listing = soldModal;
@@ -11743,29 +11889,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
     if (listing.type === "unique" && saleForm.remove_other_platforms) {
       const livePlatforms = PLATFORMS.filter(p => !p.coming && p.key !== saleForm.platform && listing.platforms?.[p.key]?.status === "active");
       // Fire API calls in parallel for all live platforms
-      await Promise.allSettled(livePlatforms.map(async p => {
-        let action, storeKey, etsyShop;
-        if (p.key === "etsy") { action = "unpublish_etsy"; }
-        else if (p.key === "etsy_ee") { action = "unpublish_etsy"; etsyShop = "earth"; }
-        else if (p.key === "shopify_aty") { action = "unpublish_shopify"; storeKey = "atyahara"; }
-        else if (p.key === "shopify_earth") { action = "unpublish_shopify"; storeKey = "earth"; }
-        else if (p.key === "trade") { if (tradeRefOnly(listing)) return; await hideTradeProduct(listing.platforms?.trade?.product_id).catch(e => console.warn("Trade hide failed:", e.message)); return; }
-        else if (p.key === "store") { await hideStoreProduct(listing.platforms?.store?.product_id).catch(e => console.warn("Store hide failed:", e.message)); return; }
-        else if (p.key === "ebay") {
-          const itemId = listing.platforms?.ebay?.item_id;
-          if (!itemId) return;
-          const r = await fetch(`/api/ebay?action=end_item&item_id=${itemId}`, { method: "POST" });
-          const d = await r.json();
-          if (!d.ok) console.warn("Auto-unpublish failed for ebay:", d.error);
-          return;
-        } else return;
-        const r = await fetch("/api/listing-manager", {
-          method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ action, listing: await withShopifyCreds(listing, storeKey), store_key: storeKey, etsy_shop: etsyShop }),
-        });
-        const d = await lmJson(r);
-        if (!d.ok) console.warn(`Auto-unpublish failed for ${p.key}:`, d.error);
-      }));
+      await Promise.allSettled(livePlatforms.map(p => takeDownForSale(listing, p)));
 
       // Mark all live platforms as deleted in one shot, merged onto the latest row.
       await patchListingItem(listing, current => {
@@ -11780,6 +11904,63 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
     setSoldModal(null);
     showToast(`✓ Sale recorded — ${order.order_number}`);
     setTab("orders");
+  };
+
+  /* Mark several sold at once: exactly what Record Sale does for each piece —
+     an order each, and a unique piece taken off its other live platforms —
+     but the orders go in one write and the listings in one batched write,
+     never a save per piece. */
+  const handleBulkMarkSold = async (rows, saleForm, prices) => {
+    const yr = new Date().getFullYear();
+    let n = (orders || []).filter(o => o.order_number?.startsWith(`NG-${yr}-`)).length;
+    const date = saleForm.date || new Date().toISOString().slice(0, 10);
+    const made = rows.map(listing => ({
+      id:                uid(),
+      order_number:      `NG-${yr}-${String(++n).padStart(3, "0")}`,
+      listing_id:        listing.id,
+      listing_title:     listing.title,
+      listing_material:  listing.material,
+      listing_shape:     listing.shape,
+      listing_sku:       listing.sku || "",
+      listing_order_id:  listing.listing_order_id || "",
+      listing_image:     listing.images?.[0] || "",
+      platform:          saleForm.platform,
+      platform_order_id: saleForm.platform_order_id,
+      sale_price:        prices[listing.id] ?? "",
+      currency:          "INR",
+      buyer_name:        saleForm.buyer_name,
+      buyer_country:     saleForm.buyer_country,
+      status:            "sold",
+      date,
+      notes:             saleForm.notes,
+      created_at:        now(),
+    }));
+    showToast(`Recording ${made.length} sale${made.length === 1 ? "" : "s"}…`, 60000);
+    // Newest first, as Record Sale prepends each new order.
+    await upsertItemsK(ORDERS_KEY, [...made].reverse(), { prepend: true }).then(next => { if (Array.isArray(next)) setOrders(next); });
+
+    const takeDown = saleForm.remove_other_platforms
+      ? rows.filter(l => l.type === "unique").map(l => ({ l, plats: PLATFORMS.filter(p => !p.coming && p.key !== saleForm.platform && l.platforms?.[p.key]?.status === "active") })).filter(x => x.plats.length)
+      : [];
+    for (const [i, { l, plats }] of takeDown.entries()) {
+      if (takeDown.length > 1) showToast(`Taking down ${i + 1} of ${takeDown.length}…`, 60000);
+      await Promise.allSettled(plats.map(p => takeDownForSale(l, p)));
+    }
+    if (takeDown.length) {
+      // One batched write for every piece, each merged onto its latest row.
+      const fresh = await loadKFresh(LIST_KEY).catch(() => null);
+      const byId = new Map((Array.isArray(fresh) ? fresh : listings).map(x => [x.id, x]));
+      const patched = takeDown.map(({ l, plats }) => {
+        const current = byId.get(l.id) || l;
+        const platforms = { ...current.platforms };
+        for (const p of plats) platforms[p.key] = { ...platforms[p.key], status: "deleted" };
+        return { ...current, platforms, updated_at: now() };
+      });
+      const next = await upsertItemsK(LIST_KEY, patched, { prepend: false });
+      if (Array.isArray(next)) setListings(next);
+    }
+    const first = made[0]?.order_number, last = made[made.length - 1]?.order_number;
+    return `✓ ${made.length} sale${made.length === 1 ? "" : "s"} recorded${first ? ` — ${first}${last !== first ? `…${last}` : ""}` : ""}${takeDown.length ? ` · ${takeDown.length} taken off their other platforms` : ""}`;
   };
 
   /* filtered listings */
@@ -11934,6 +12115,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
                 onMarkSold={setSoldModal}
                 onDelete={handleDelete}
                 onBulkDelete={handleBulkDelete}
+                onBulkMarkSold={(rows, skipped) => new Promise(done => setBulkSold({ rows, skipped, done }))}
                 onBulkPrice={bulkPrice}
                 onBulkPricePost={bulkPricePost}
                 onBulkTradePost={bulkTradePost} onDetectOrigin={detectOrigin}
@@ -12179,6 +12361,15 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
       {tradeAsk && (
         <TradeAskModal listing={tradeAsk.listing} initial={tradeAsk.initial}
           onDone={a => { tradeAsk.res(a); setTradeAsk(null); }} />
+      )}
+      {bulkSold && (
+        <BulkMarkSoldModal rows={bulkSold.rows} skipped={bulkSold.skipped}
+          onSave={async (rows, form, prices) => {
+            const msg = await handleBulkMarkSold(rows, form, prices);
+            showToast(bulkSold.skipped ? `${msg} · ${bulkSold.skipped} already sold, skipped` : msg, 8000);
+            bulkSold.done(true); setBulkSold(null);
+          }}
+          onClose={() => { bulkSold.done(false); setBulkSold(null); }} />
       )}
       {soldModal && (
         <MarkSoldModal

@@ -609,6 +609,32 @@ export const upsertItemK=async(k,item,{prepend=true}={})=>{
   return next;
 };
 
+/* Many items in one write, for bulk actions. A row key goes in app_rows_apply
+   calls of at most 200; anything else is one merge-and-save of the array.
+   Never loop upsertItemK over a selection: chained per-item saves froze
+   Supabase twice. */
+export const upsertItemsK=async(k,items,{prepend=true}={})=>{
+  if(DEMO_MODE)return [];
+  const list=(items||[]).filter(x=>x?.id);
+  if(!list.length)return _arrayValue(_cache.get(k));
+  const curr=_cache.has(k)?_cache.get(k):(await loadK(k).catch(()=>[]));
+  let optimistic=_arrayValue(curr);
+  // Prepending one at a time in reverse keeps the batch in its given order at the top.
+  [...list].reverse().forEach(x=>{optimistic=_upsertLocalItem(optimistic,x,{prepend});});
+  if(!navigator.onLine){
+    _setCachedValue(k,optimistic);
+    _enqueueWrite(k,optimistic,curr);
+    return optimistic;
+  }
+  if(_isRowKey(k)){
+    _setCachedValue(k,optimistic);
+    if(await _applyRows(k,list,[]))return _arrayValue(_cache.get(k));
+  }
+  await saveK(k,optimistic);
+  _notifyRefresh([k]);
+  return _arrayValue(_cache.get(k));
+};
+
 export const deleteItemK=async(k,id)=>{
   if(DEMO_MODE)return [];
   if(!id)throw new Error("deleteItemK requires id");

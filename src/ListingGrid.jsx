@@ -456,7 +456,7 @@ function Check({ checked, onChange, label, count, color }) {
   );
 }
 
-export default function ListingGrid({ listings, orders, stock = [], loadStoreFacts, tradeFacts: trade = null, onEdit, onPrice, onLocation, onBulkMove, onSavePhotos, onMarkSold, onDelete, onBulkDelete, renderManage, onBulkPrice, onBulkPricePost, onBulkTradePost, onDetectOrigin }) {
+export default function ListingGrid({ listings, orders, stock = [], loadStoreFacts, tradeFacts: trade = null, onEdit, onPrice, onLocation, onBulkMove, onSavePhotos, onMarkSold, onDelete, onBulkDelete, onBulkMarkSold, renderManage, onBulkPrice, onBulkPricePost, onBulkTradePost, onDetectOrigin }) {
   const [q, setQ] = useState("");
   const [status, setStatus] = useState(new Set());   // live | notlive | sold
   const [liveOn, setLiveOn] = useState(new Set());   // platform keys: live on any of these
@@ -624,6 +624,13 @@ export default function ListingGrid({ listings, orders, stock = [], loadStoreFac
             {onBulkTradePost && <button onClick={() => setTradePost(true)} style={{ ...chip(false), borderColor: "#1F8F4E", color: "#1F8F4E", fontWeight: 750 }}>🤝 Post to trade site…</button>}
             <button onClick={() => onBulkPrice(selected).then(refreshStore)} style={chip(false)}>Change prices by %…</button>
             {onBulkMove && <button onClick={() => onBulkMove(selected)} style={chip(false)}>📍 Move to…</button>}
+            {onBulkMarkSold && <button onClick={async () => {
+              // Pieces the Sold filter already counts are left alone, as the confirm says.
+              const fresh = selected.filter(l => !soldOut(l, orders, facts));
+              const skipped = selected.length - fresh.length;
+              if (!fresh.length) { alert(`All ${selected.length} selected ${selected.length === 1 ? "is" : "are"} already sold — nothing to mark.`); return; }
+              if (await onBulkMarkSold(fresh, skipped)) { setSel(new Set()); refreshStore(); }
+            }} style={{ ...chip(false), borderColor: C.green, color: C.green, fontWeight: 750 }}>✓ Mark as sold</button>}
             <button onClick={() => setSel(new Set(list.map(l => l.id)))} style={chip(false)}>Select all {list.length}</button>
             <button onClick={() => setSel(new Set())} style={chip(false)} title="Untick them all">Clear</button>
             {onBulkDelete && (
