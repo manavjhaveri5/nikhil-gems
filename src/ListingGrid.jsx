@@ -6,7 +6,7 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, lazy, Suspense } from "react";
 import { C, FI } from "./lmTheme.js";
 import { locationOf, needsLocation, knownLocations, tradeRowOf, defaultPieces, defaultUnit, tradeTitleFor, tradeRefOnly, tradeMatches } from "./listingChannels.js";
-import { useStoriesDone, listedAt } from "./storyState.js";
+import { useStoriesDone, listedAt, newAt } from "./storyState.js";
 import { sbThumb } from "./photoUrls.js";
 import { loadK } from "./utils.js";
 import { QUEUE_KEY as ETSY_QUEUE_KEY } from "./etsyQueue.jsx";
@@ -423,7 +423,7 @@ const round = { width: 26, height: 26, borderRadius: 13, border: "none", backgro
 /* ── the whole view ────────────────────────────────────────────────────── */
 const SORTS = {
   // By when a piece was first listed: an Etsy renewal doesn't make it new.
-  new: ["Newest", (a, b) => listedAt(b) - listedAt(a)],
+  new: ["Newest", (a, b) => newAt(b) - newAt(a)],
   old: ["Oldest", (a, b) => (listedAt(a) || Infinity) - (listedAt(b) || Infinity)],
   etsyHigh: ["Etsy price ↓", (a, b) => (+b.price_etsy || 0) - (+a.price_etsy || 0)],
   etsyLow: ["Etsy price ↑", (a, b) => (+a.price_etsy || 1e12) - (+b.price_etsy || 1e12)],
@@ -456,7 +456,7 @@ function Check({ checked, onChange, label, count, color }) {
   );
 }
 
-export default function ListingGrid({ listings, orders, stock = [], loadStoreFacts, tradeFacts: trade = null, onEdit, onPrice, onLocation, onBulkMove, onSavePhotos, onMarkSold, onDelete, onBulkDelete, onBulkMarkSold, renderManage, onBulkPrice, onBulkPricePost, onBulkTradePost, onDetectOrigin }) {
+export default function ListingGrid({ listings, orders, stock = [], loadStoreFacts, tradeFacts: trade = null, onEdit, onPrice, onLocation, onBulkMove, onBulkTopOfNew, onSavePhotos, onMarkSold, onDelete, onBulkDelete, onBulkMarkSold, renderManage, onBulkPrice, onBulkPricePost, onBulkTradePost, onDetectOrigin }) {
   const [q, setQ] = useState("");
   const [status, setStatus] = useState(new Set());   // live | notlive | sold
   const [liveOn, setLiveOn] = useState(new Set());   // platform keys: live on any of these
@@ -624,6 +624,7 @@ export default function ListingGrid({ listings, orders, stock = [], loadStoreFac
             {onBulkTradePost && <button onClick={() => setTradePost(true)} style={{ ...chip(false), borderColor: "#1F8F4E", color: "#1F8F4E", fontWeight: 750 }}>🤝 Post to trade site…</button>}
             <button onClick={() => onBulkPrice(selected).then(refreshStore)} style={chip(false)}>Change prices by %…</button>
             {onBulkMove && <button onClick={() => onBulkMove(selected)} style={chip(false)}>📍 Move to…</button>}
+            {onBulkTopOfNew && <button title="Puts them first in New on eartheditions.co and in Newest here, as if just listed. No Just listed story." onClick={async () => { if (await onBulkTopOfNew(selected)) setSel(new Set()); }} style={chip(false)}>⬆ Top of New</button>}
             {onBulkMarkSold && <button onClick={async () => {
               // Pieces the Sold filter already counts are left alone, as the confirm says.
               const fresh = selected.filter(l => !soldOut(l, orders, facts));

@@ -157,7 +157,11 @@ function rowFromListing(l, { fx, rounding, discount, existing, live }) {
     status: live ? "active" : existing?.status === "sold" ? "sold" : (existing?.status || "hidden"),
     ...(live && existing?.status === "sold" ? { sold_at: null } : {}),
     sku: l.sku || "",
-    source: { listing_id: l.id, etsy_id: l.platforms?.etsy?.listing_id || null },
+    /* refreshed_at: when the piece was last reshot (or brought to the top by
+       hand). The store's New ordering takes the later of it and created_at;
+       it lives in source so no column is needed. */
+    source: { listing_id: l.id, etsy_id: l.platforms?.etsy?.listing_id || null,
+      ...((l.refreshed_at || existing?.source?.refreshed_at) ? { refreshed_at: l.refreshed_at || existing.source.refreshed_at } : {}) },
     updated_at: new Date().toISOString(),
   };
 }
@@ -253,6 +257,15 @@ export async function markStoreSold(productId) {
   if (!productId) throw new Error("Not on the store");
   await q(supabase.from("store_products").update({ status: "sold", sold_at: new Date().toISOString(), updated_at: new Date().toISOString() }).eq("id", productId));
   handleOf(productId).then(h => refreshSitePages(h)).catch(() => {});
+}
+/* "Bring to top of New": the store product takes the listing's refreshed_at
+   without a full sync (only its source changes). */
+export async function markStoreRefreshed(productId, at) {
+  if (!productId) throw new Error("Not on the store");
+  const cur = await q(supabase.from("store_products").select("source,handle").eq("id", productId).maybeSingle());
+  if (!cur) throw new Error("Not on the store");
+  await q(supabase.from("store_products").update({ source: { ...(cur.source || {}), refreshed_at: at } }).eq("id", productId));
+  refreshSitePages(cur.handle);
 }
 export async function hideStoreProduct(productId) {
   if (!productId) throw new Error("Not on the store");

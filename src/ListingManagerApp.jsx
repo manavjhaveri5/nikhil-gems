@@ -32,7 +32,7 @@ const isVideoUrl = u => typeof u === "string" && /\.(mp4|mov|avi|webm|mkv)(\?|$)
 /* ─── theme ──────────────────────────────────────────────────────────────── */
 import { C, mob, FI } from "./lmTheme.js";
 import { TradeProductsPanel, publishListingToTrade, hideTradeProduct, refreshTradePhotos, findTradeLinks, loadTradeFacts } from "./TradeSiteApp.jsx";
-import { StoreProductsPanel, publishListingToStore, hideStoreProduct, markStoreSold, loadStoreFacts, storeSettings, loadStoreProduct, storePriceFor, listStoreProducts, linkStoreProduct } from "./StoreApp.jsx";
+import { StoreProductsPanel, publishListingToStore, hideStoreProduct, markStoreSold, markStoreRefreshed, loadStoreFacts, storeSettings, loadStoreProduct, storePriceFor, listStoreProducts, linkStoreProduct } from "./StoreApp.jsx";
 import ListingGrid from "./ListingGrid.jsx";
 import ListSteps from "./ListSteps.jsx";
 import RenewalQueue from "./RenewalQueue.jsx";
@@ -11131,6 +11131,16 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
       }
     }
     const exists = listings.find(l => l.id === listing.id);
+    /* A reshoot brings a piece that's already on sale back to the top of New
+       (refreshed_at). Only new photos or a new video count — a price, a
+       renewal or a sync never does, nor reordering or removing photos. Its
+       go-live date (live_at) stays as it was, so no "Just listed" story. */
+    if (exists && Object.values(exists.platforms || {}).some(p => p?.status === "active")) {
+      const had = new Set((exists.images || []).filter(u => typeof u === "string"));
+      const newPhoto = (savedListing.images || []).some(u => typeof u === "string" && !had.has(u));
+      const newVideo = !!savedListing.video && savedListing.video !== exists.video;
+      if (newPhoto || newVideo) savedListing = { ...savedListing, refreshed_at: new Date().toISOString() };
+    }
     try {
       await saveListingItem(savedListing, { prepend: !exists });
     } catch (e) {
@@ -11333,6 +11343,25 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
     await saveListingItem(withLocationLog({ ...current, officeLocation: place, updated_at: now() }, current.officeLocation, who));
     showToast(place ? `📍 ${place}` : "Location cleared");
   };
+  /* "Top of New": the same as a reshoot, by hand. refreshed_at on the
+     listing, and on its store product without a full sync. */
+  const bulkTopOfNew = async sel => {
+    const at = new Date().toISOString();
+    // One batched write for every piece, each merged onto its latest row.
+    const fresh = await loadKFresh(LIST_KEY).catch(() => null);
+    const byId = new Map((Array.isArray(fresh) ? fresh : listings).map(x => [x.id, x]));
+    const patched = sel.map(l => ({ ...(byId.get(l.id) || l), refreshed_at: at }));
+    try {
+      const next = await upsertItemsK(LIST_KEY, patched, { prepend: false });
+      if (Array.isArray(next)) setListings(next);
+    } catch (e) { showToast(`⚠ ${e.message}`, 8000); return false; }
+    const onStore = patched.filter(l => l.platforms?.store?.product_id && l.platforms.store.status === "active");
+    const res = await Promise.allSettled(onStore.map(l => markStoreRefreshed(l.platforms.store.product_id, at)));
+    const fails = res.filter(r => r.status === "rejected").length;
+    showToast(fails ? `⚠ ${patched.length} moved to the top of Newest; ${fails} didn't update on eartheditions.co` : `✓ ${patched.length} brought to the top of New${onStore.length ? ` (${onStore.length} on eartheditions.co)` : ""}`, 6000);
+    return true;
+  };
+
   const bulkMove = async sel => {
     const place = (prompt(`Move ${sel.length} piece${sel.length === 1 ? "" : "s"} to which location?`) || "").trim();
     if (!place) return;
@@ -12136,7 +12165,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
             {view === "grid" && loaded && listings.length > 0 ? (
               <ListingGrid listings={listings} orders={orders} stock={stock} loadStoreFacts={loadStoreFacts} tradeFacts={tradeMap}
                 onLocation={setListingLocation}
-                onBulkMove={bulkMove}
+                onBulkMove={bulkMove} onBulkTopOfNew={bulkTopOfNew}
                 onEdit={l => { setEditing(l); setShowForm(true); }}
                 onPrice={quickPrice}
                 onSavePhotos={(l, images) => handleSave({ ...l, images })}

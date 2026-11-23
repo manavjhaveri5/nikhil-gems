@@ -19,6 +19,10 @@ export const listedAt = l => {
   const dates = [t(l.created_at), t(l.platforms?.etsy?.first_listed_at)].filter(Boolean);
   return dates.length ? Math.min(...dates) : 0;
 };
+/* Where a piece sits in "Newest": when it went live, or when it was last
+   reshot (refreshed_at), whichever is later. Stories keep listedAt alone, so
+   a reshoot never re-queues a "Just listed" story. */
+export const newAt = l => Math.max(listedAt(l), t(l.refreshed_at));
 const dead = o => /cancel|refund/i.test(o.status || "") || !!o.cancelled_at || !!o.refunded;
 export const ago = ms => {
   const s = (Date.now() - ms) / 1000;
