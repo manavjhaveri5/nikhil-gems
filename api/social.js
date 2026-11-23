@@ -114,6 +114,7 @@ async function unifiedInstagramToken(req, code) {
     const sc = (dbg.data?.granular_scopes || []).map(g => `${g.scope}${g.target_ids ? `[${g.target_ids.length}]` : ""}`).join(",");
     fail(400, `No Instagram account found on the login (type ${dbg.data?.type || "?"}; scopes ${sc || dbg.data?.scopes?.join(",") || "none"}; pages ${(pages.data || []).length}; businesses ${(biz.data || []).length}; tried ${cands.length}${pages.error ? `; ${pages.error.message}` : ""})`);
   }
+  try { await linkFacebookPage(s.access_token); } catch (e) { console.warn(e.message); } // the Page is optional
   return { access_token: s.access_token, host: FB, user_id, refreshed_at: Date.now(), name: me.username ? `@${me.username}` : "" };
 }
 
@@ -340,6 +341,55 @@ async function postInstagram({ text, images = [], video, story = false, account 
   return { url: link.permalink || "" };
 }
 
+/* Facebook: the Earth Editions Page (made 23 Nov 2026). It rides on the
+   Instagram connection (Unified login): the login's configuration grants
+   pages_manage_posts on the Page, and the Page's own token is kept as
+   tok_facebook. Linked on each Instagram connect, or by action "fb_link". */
+async function linkFacebookPage(userToken) {
+  const at = encodeURIComponent(userToken);
+  const get = async path => json(await fetch(`${FB}/${path}${path.includes("?") ? "&" : "?"}access_token=${at}`));
+  const dbg = await json(await fetch(`${FB}/debug_token?input_token=${at}&access_token=${encodeURIComponent(`${env("IG_APP_ID")}|${env("IG_APP_SECRET")}`)}`));
+  const ids = new Set([env("FB_PAGE_ID"), ...(dbg.data?.granular_scopes || []).filter(g => /^pages_/.test(g.scope)).flatMap(g => g.target_ids || [])].filter(Boolean));
+  const pages = (await get("me/accounts?fields=id,name,access_token")).data || [];
+  for (const id of ids) if (!pages.some(x => x.id === id)) { const x = await get(`${id}?fields=id,name,access_token`); if (x.id) pages.push(x); }
+  const page = pages.find(x => env("FB_PAGE_ID") ? x.id === env("FB_PAGE_ID") : /earth\s*editions/i.test(x.name || ""));
+  if (!page?.access_token) fail(400, `Facebook: the Earth Editions Page isn't on the login (scopes ${(dbg.data?.granular_scopes || []).map(g => g.scope).filter(s => /^pages_/.test(s)).join(",") || "no pages_*"}; pages seen ${pages.map(x => x.name).join(", ") || "none"})`);
+  const t = { access_token: page.access_token, page_id: page.id, name: page.name, host: FB, linked_at: Date.now() };
+  await setSecret("tok_facebook", t);
+  return t;
+}
+
+// A photo, several photos (one post), a video, or text with a link.
+async function postFacebook({ text = "", images = [], video, link }) {
+  const t = await getSecret("tok_facebook");
+  if (!t?.access_token) fail(400, "facebook isn't connected");
+  const g = async (path, params) => {
+    const d = await json(await fetch(`${FB}/${path}`, { method: "POST", body: form({ ...params, access_token: t.access_token }) }));
+    if (d.error) fail(502, `Facebook: ${d.error.message}`);
+    return d;
+  };
+  const page = t.page_id;
+  if (video) {
+    const d = await g(`${page}/videos`, { file_url: video, description: text });
+    return { url: `https://www.facebook.com/${page}/videos/${d.id}`, note: "Facebook processes the video for a few minutes" };
+  }
+  if (images.length > 1) {
+    const ids = [];
+    for (const u of images.slice(0, 10)) ids.push((await g(`${page}/photos`, { url: u, published: "false" })).id);
+    const params = { message: text };
+    ids.forEach((id, i) => { params[`attached_media[${i}]`] = JSON.stringify({ media_fbid: id }); });
+    const d = await g(`${page}/feed`, params);
+    return { url: `https://www.facebook.com/${d.id}` };
+  }
+  if (images[0]) {
+    const d = await g(`${page}/photos`, { url: images[0], caption: text });
+    return { url: `https://www.facebook.com/${d.post_id || d.id}` };
+  }
+  if (!text) fail(400, "Facebook needs a photo, a video or some text");
+  const d = await g(`${page}/feed`, link ? { message: text, link } : { message: text });
+  return { url: `https://www.facebook.com/${d.id}` };
+}
+
 async function postThreads({ text, images = [], video }) {
   const t = await token("threads");
   const g = async (path, params) => {
@@ -496,7 +546,7 @@ async function postX({ text, images = [] }) {
   return { url: `https://x.com/i/web/status/${d.data?.id}`, note: images.length && !media_ids.length ? "posted without photos — X wouldn't take them" : "" };
 }
 
-const POST = { instagram: postInstagram, threads: postThreads, tiktok: postTikTok, youtube: postYouTube, pinterest: postPinterest, x: postX };
+const POST = { instagram: postInstagram, facebook: postFacebook, threads: postThreads, tiktok: postTikTok, youtube: postYouTube, pinterest: postPinterest, x: postX };
 
 /* ── Reddit: posting what was approved ─────────────────────────────────────
    An image post (the photo goes to Reddit's own image host, so it shows in
@@ -877,9 +927,9 @@ async function captionsFor(l, link) {
 const storeLink = l => { const s = l.platforms?.store; const u = s?.storefront_url || s?.url || ""; return u ? `${u}${u.includes("?") ? "&" : "?"}utm_source=social&utm_medium=autopilot` : ""; };
 const wentLive = l => Math.min(...Object.values(l.platforms || {}).filter(x => x?.status === "active").map(x => Date.parse(x.live_at || x.first_listed_at || "") || Infinity));
 const payloadFor = (k, l, cap, link) => ({
-  text: cap[k] || "", title: k === "youtube" ? cap.youtube_title : k === "pinterest" ? cap.pinterest_title : l.title,
+  text: cap[k] || (k === "facebook" ? cap.instagram || "" : ""), title: k === "youtube" ? cap.youtube_title : k === "pinterest" ? cap.pinterest_title : l.title,
   images: (l.images || []).filter(u => typeof u === "string" && /^https?:/.test(u)).slice(0, 10),
-  video: ["tiktok", "youtube", "instagram", "threads"].includes(k) && l.video && /^https?:/.test(l.video) ? l.video : "",
+  video: ["tiktok", "youtube", "instagram", "facebook", "threads"].includes(k) && l.video && /^https?:/.test(l.video) ? l.video : "",
   link, mode: k === "tiktok" ? "draft" : "", source: `listing:${l.id}`,
 });
 const canTake = (k, pl) => !((k === "tiktok" || k === "youtube") && !pl.video) && !(k === "pinterest" && (!pl.images.length || !pl.link)) && !(k !== "threads" && k !== "x" && !pl.images.length && !pl.video);
@@ -1113,6 +1163,7 @@ export default async function handler(req, res) {
         out[k] = { ready: ready(k), connected: !!t?.access_token, name: t?.name || "", redirect: redirectUri(req, k), canPost: k !== "tiktok" || /video\.publish/.test(t?.scope || ""), ...(k === "tiktok" && t?.access_token ? { insights: /video\.list/.test(t.scope || "") } : {}) };
       }
 
+      { const f = await getSecret("tok_facebook"); out.facebook = { ready: ready("instagram"), connected: !!f?.access_token, name: f?.name || "", redirect: redirectUri(req, "instagram"), canPost: true, via: "instagram" }; }
       out.journal = { ready: !!env("GITHUB_BLOG_TOKEN") };
       return res.json(out);
     }
@@ -1127,6 +1178,7 @@ export default async function handler(req, res) {
       return res.json({ url: P[p].login(req, state, challenge) });
     }
 
+    if (action === "fb_link") return res.json({ ok: true, page: (({ page_id, name }) => ({ page_id, name }))(await linkFacebookPage((await token("instagram")).access_token)) });
     if (action === "disconnect") { await setSecret(`tok_${p}`, null); return res.json({ ok: true }); }
 
     if (action === "log") return res.json({ log: await readLog() });

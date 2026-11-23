@@ -39,6 +39,7 @@ const ago = t => { const m = (Date.now() - Date.parse(t)) / 6e4; return m < 60 ?
 
 export const PLATFORMS = [
   { k: "instagram", label: "Instagram", icon: "📸", media: "photo or video", limit: 2200 },
+  { k: "facebook", label: "Facebook", icon: "📘", media: "any", limit: 5000 },
   { k: "tiktok", label: "TikTok", icon: "🎵", media: "video", limit: 2200 },
   { k: "youtube", label: "YouTube Shorts", icon: "▶️", media: "video", limit: 4900 },
   { k: "pinterest", label: "Pinterest", icon: "📌", media: "photo", limit: 500 },
@@ -47,6 +48,7 @@ export const PLATFORMS = [
 ];
 const SETUP = {
   instagram: ["developers.facebook.com → Create app → \"Manage messaging & content on Instagram\" → link the business portfolio → \"API setup with Unified login\" → create a configuration and save the redirect link. Set its Configuration ID as IG_CONFIG_ID.", "IG_APP_ID", "IG_APP_SECRET"],
+  facebook: ["Rides on the Instagram connection. The Meta app's Unified login configuration must include Pages (pages_show_list, pages_read_engagement, pages_manage_posts); on Connect, tick the Earth Editions Page as well as both Instagram accounts.", "IG_APP_ID", "IG_APP_SECRET"],
   threads: ["developers.facebook.com → Create app → use case \"Access the Threads API\". Add your Threads account as a tester.", "THREADS_APP_ID", "THREADS_APP_SECRET"],
   tiktok: ["developers.tiktok.com → Manage apps → Connect an app → add Login Kit, Display API (user.info.profile, user.info.stats, video.list) and Content Posting API (Direct Post on). Add your account as a target user.", "TIKTOK_CLIENT_KEY", "TIKTOK_CLIENT_SECRET"],
   youtube: ["console.cloud.google.com → new project → enable \"YouTube Data API v3\" → OAuth consent screen (External, add yourself as test user) → Credentials → OAuth client ID (Web).", "GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET"],
@@ -55,6 +57,7 @@ const SETUP = {
 };
 const LIMITS = {
   instagram: "", threads: "",
+  facebook: "Posts to the Earth Editions Page. Connecting goes through Instagram's login, so it reconnects Instagram too.",
   tiktok: "Until TikTok reviews the app, \"Post now\" only works while the TikTok account itself is private — drafts work fully (you post from the TikTok app). Autopilot and Cross-post only ever send TikTok drafts.",
   youtube: "Uploads go out public. Google hasn't verified the app yet, so it could start making uploads private; if that happens, publish them from YouTube Studio.",
   pinterest: "Trial access can't create pins at all. Pinterest has to grant Standard access (an application to Pinterest) before posting works.",
@@ -130,14 +133,14 @@ function Compose({ st, showToast, only }) {
 The Instagram caption:
 ${instagramShape(HASHTAG_ENDING)}`, 1800, INSTAGRAM_VOICE, "journal"));
       if (!out) throw new Error("The AI's reply couldn't be read — try again");
-      setTxt(out);
+      setTxt({ ...out, facebook: out.facebook || out.instagram || "" }); // the Page takes the Instagram caption
     } catch (e) { showToast(`⚠ ${e.message}`); }
     setBusy("");
   };
 
   const payload = k => ({
     text: txt[k] || "", title: k === "youtube" ? txt.youtube_title : k === "pinterest" ? txt.pinterest_title : pick.title,
-    images: imgs, video: ["tiktok", "youtube"].includes(k) || (["instagram", "threads"].includes(k) && video) ? video : "",
+    images: imgs, video: ["tiktok", "youtube"].includes(k) || (["instagram", "facebook", "threads"].includes(k) && video) ? video : "",
     link, board, mode: k === "tiktok" ? tiktokMode : "", source: `listing:${pick.id}`,
     ...(k === "tiktok" && tiktokMode === "post" ? { tt: tt.settings } : {}),
   });
@@ -604,7 +607,7 @@ function Autopilot({ st, showToast }) {
     <div style={{ display: "grid", gap: 12 }}>
       <div style={{ fontSize: 12.5, color: C.inkMid }}>Runs every hour by itself (a free GitHub job), even with the ERP closed. Each job only posts to platforms that are connected; everything it does shows in Log.</div>
       {job("listings", "🆕 New listings", "When a piece goes live in Listing Manager, captions are written for each platform and it's posted — Instagram as photos (or a Reel if it has a video), TikTok as a draft, Pinterest with its store link.",
-        ["instagram", "pinterest", "threads", "x", "tiktok", "youtube"],
+        ["instagram", "facebook", "pinterest", "threads", "x", "tiktok", "youtube"],
         <label style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 12.5, marginTop: 10, flexWrap: "wrap" }}>Wait
           <select value={a.listings.afterHours} onChange={e => save({ listings: { ...a.listings, afterHours: +e.target.value } })} style={{ ...FI(), width: "auto", padding: "4px 8px" }}>
             {[0, 1, 3, 6, 24].map(h => <option key={h} value={h}>{h ? `${h} hour${h > 1 ? "s" : ""}` : "no time"}</option>)}
@@ -615,8 +618,8 @@ function Autopilot({ st, showToast }) {
           <select value={a.stories.afterHours} onChange={e => save({ stories: { ...a.stories, afterHours: +e.target.value } })} style={{ ...FI(), width: "auto", padding: "4px 8px" }}>
             {[0, 1, 3, 6].map(h => <option key={h} value={h}>{h ? `${h} hour${h > 1 ? "s" : ""}` : "no time"}</option>)}
           </select> after it goes live</label>)}
-      {job("instagram", "🔁 New Instagram posts", "Whatever you post on Instagram goes on to these too — Reels to TikTok (as a draft) and YouTube Shorts, photos to Pinterest, everything to Threads and X.",
-        ["tiktok", "youtube", "threads", "x", "pinterest"])}
+      {job("instagram", "🔁 New Instagram posts", "Whatever you post on Instagram goes on to these too — everything to the Facebook Page, Threads and X, Reels to TikTok (as a draft) and YouTube Shorts, photos to Pinterest.",
+        ["facebook", "tiktok", "youtube", "threads", "x", "pinterest"])}
       <div style={card}>
         <b style={{ fontSize: 15 }}>🗓 Scheduled</b>
         <div style={{ fontSize: 12.5, color: C.inkMid, marginBottom: 6 }}>Posts set for later from Compose.</div>
@@ -651,7 +654,7 @@ function Accounts({ st, reload, showToast }) {
             <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
               <b style={{ fontSize: 15, flex: 1 }}>{p.icon} {p.label}</b>
               {s.connected ? <><span style={{ color: C.green, fontSize: 13, fontWeight: 650 }}>✓ {s.name || "connected"}</span><button onClick={() => disconnect(p.k)} style={btn()}>Disconnect</button></>
-                : s.ready ? <button onClick={() => connect(p.k)} style={btn(C.ink, "#FAF0DC")}>Connect</button>
+                : s.ready ? <button onClick={() => connect(p.k === "facebook" ? "instagram" : p.k)} style={btn(C.ink, "#FAF0DC")}>Connect</button>
                 : <span style={{ fontSize: 12, color: C.inkFaint }}>needs setting up</span>}
               <button onClick={() => setOpen(o => o === p.k ? "" : p.k)} style={btn()}>{open === p.k ? "Close" : "How to"}</button>
             </div>
