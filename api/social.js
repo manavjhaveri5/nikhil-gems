@@ -1023,6 +1023,7 @@ async function runAutopilot() {
       try { cap = await captionsFor(l, link); } catch (e) { done.push(`captions for ${l.title}: ${e.message}`); continue; }
       for (const k of auto.listings.platforms) {
         if (posted.has(`listing:${l.id}|${k}`) || !(await connected(k)) || !time()) continue;
+        if (wentLive(l) <= (Date.parse(auto.listings.added?.[k] || "") || 0)) continue;
         const pl = payloadFor(k, l, cap, link);
         if (!canTake(k, pl)) { await addLog({ platform: k, source: `listing:${l.id}`, title: l.title, note: "autopilot skipped — not the right media" }); continue; }
         try { const out = await POST[k](pl); await addLog({ platform: k, source: pl.source, title: l.title, url: out.url || "", note: `autopilot${out.note ? ` · ${out.note}` : ""}` }); done.push(`${k}: ${l.title}`); }
@@ -1057,6 +1058,7 @@ async function runAutopilot() {
       for (const k of auto.instagram.platforms) {
         const vid = m.media_type === "VIDEO";
         if (posted.has(`ig:${m.id}|${k}`) || !time() || !(await connected(k))) continue;
+        if (Date.parse(m.timestamp) <= (Date.parse(auto.instagram.added?.[k] || "") || 0)) continue; // older than when this platform was added
         if ((k === "tiktok" || k === "youtube") && !vid) continue;
         if (k === "pinterest" && vid) continue;
         const caption = m.caption || "";
@@ -1132,6 +1134,12 @@ export default async function handler(req, res) {
       const cur = await autoSettings(), next = body.auto || {};
       // Switching a job on starts it from now: nothing older is posted.
       for (const k of AUTO_JOBS) if (next[k]?.on && !cur[k].on) next[k].since = new Date().toISOString();
+      // So does a platform added to a running job: it gets only what comes after (no backfill).
+      for (const k of AUTO_JOBS) if (next[k]?.platforms) {
+        const added = { ...(cur[k].added || {}) };
+        for (const p of next[k].platforms) if (!cur[k].platforms.includes(p)) added[p] = new Date().toISOString();
+        next[k].added = added;
+      }
       const merged = Object.fromEntries(AUTO_JOBS.map(k => [k, { ...cur[k], ...(next[k] || {}) }]));
       await saveData(AUTO_KEY, merged);
       return res.json({ auto: merged });
