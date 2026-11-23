@@ -7457,6 +7457,7 @@ function EtsyLiveView({ onCrossPost, onPushEE, shop = "atyahara" }) {
   // The grid shows 100 at a time; a new filter or search starts again at page one.
   const LIVE_PAGE = 100;
   const [livePage, setLivePage] = useState(0);
+  const [etsySort, setEtsySort] = useState("");
   useEffect(() => { setLivePage(0); }, [stFilter, filterSection, filterTags, search]);
   const [activeSales,    setActiveSales]    = useState([]);
   const [orderFilter,    setOrderFilter]    = useState("all");
@@ -8109,6 +8110,19 @@ function EtsyLiveView({ onCrossPost, onPushEE, shop = "atyahara" }) {
     return true;
   });
 
+  // The sort chosen above the grid; Etsy's own order (newest edit first) by default.
+  const etsyPrice = l => (+l.price?.amount || 0) / (+l.price?.divisor || 100);
+  const ETSY_SORTS = {
+    "": null,
+    price_desc: (a, b) => etsyPrice(b) - etsyPrice(a),
+    price_asc: (a, b) => etsyPrice(a) - etsyPrice(b),
+    views: (a, b) => (+b.views || 0) - (+a.views || 0),
+    qty_desc: (a, b) => (+b.quantity || 0) - (+a.quantity || 0),
+    newest: (a, b) => (+b.original_creation_timestamp || +b.creation_timestamp || 0) - (+a.original_creation_timestamp || +a.creation_timestamp || 0),
+    title: (a, b) => String(a.title || "").localeCompare(String(b.title || "")),
+  };
+  if (ETSY_SORTS[etsySort]) visListings.sort(ETSY_SORTS[etsySort]);
+
   // Pending = not shipped AND not already completed/canceled by Etsy
   const DONE_STATUSES = ["completed","canceled","fully_refunded","partially_refunded"];
   const pendingOrders   = orders.filter(o => !o.is_shipped && !DONE_STATUSES.includes(o.status));
@@ -8378,6 +8392,16 @@ function EtsyLiveView({ onCrossPost, onPushEE, shop = "atyahara" }) {
                     {visListings.length>LIVE_PAGE && ` · showing ${livePage*LIVE_PAGE+1}–${Math.min((livePage+1)*LIVE_PAGE,visListings.length)}`}
                     {filterSection!==null && ` · ${sections.find(s=>s.shop_section_id===filterSection)?.title||"section"}`}
                     {filterTags.size>0 && ` · ${filterTags.size} tag filter${filterTags.size!==1?"s":""}`}
+                    <select value={etsySort} onChange={e=>{setEtsySort(e.target.value);setLivePage(0);}} aria-label="Sort listings"
+                      style={{...FI(),width:"auto",fontSize:11.5,padding:"3px 8px",marginLeft:10,borderRadius:14,display:"inline-block"}}>
+                      <option value="">Sort: Etsy's order</option>
+                      <option value="price_desc">Price: high to low</option>
+                      <option value="price_asc">Price: low to high</option>
+                      <option value="views">Most views</option>
+                      <option value="qty_desc">Most in stock</option>
+                      <option value="newest">Newest listed</option>
+                      <option value="title">Title A–Z</option>
+                    </select>
                   </div>
                   {/* Best active discount percentage across all running sales */}
                   {(()=>{
