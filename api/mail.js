@@ -38,6 +38,8 @@ export default async function handler(req, res) {
   const user = await requireUser(req, res);
   if (!user) return;
   req.user = user;
+  // Staff can send a store email too (a missed order confirmation), with the same buyer-only check.
+  if (req.body?.action === "store_mail") return storeMail(req, res);
   if (String(req.body?.action || "").startsWith("gmail_")) return gmail(req, res);
   if (req.body?.template === "order_shipped") return shipStoreOrder(req, res);
   const key = process.env.RESEND_API_KEY;
