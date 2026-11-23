@@ -184,7 +184,7 @@ function PriceByWeight({ form, weightKg: givenKg, onWeight, costPerKg, costPerPi
   );
 }
 
-export default function ListSteps({ form, orders, stock = [], weightKg: weightKgIn = 0, comparables = [], rate = 88, start = "where", renderWhere, renderPlatform, onAI, aiBusy, onApply, onPublishOne, onRemove, renderLink, onUnlink, onClose, onDone, research = false }) {
+export default function ListSteps({ form, orders, stock = [], weightKg: weightKgIn = 0, comparables = [], rate = 88, start = "where", renderWhere, renderPlatform, onAI, aiBusy, onApply, onPublishOne, onRemove, renderLink, onUnlink, onUnhide, onClose, onDone, research = false }) {
   const [removing, setRemoving] = useState("");
   const [linking, setLinking] = useState("");
   const [step, setStep] = useState(start);
@@ -600,7 +600,15 @@ export default function ListSteps({ form, orders, stock = [], weightKg: weightKg
                     <span style={{ display: "flex", gap: 6 }} onClick={e => e.stopPropagation()}>
                       {(ln.live || ln.admin) && <a href={ln.live || ln.admin} target="_blank" rel="noreferrer"
                         style={{ fontSize: 12, fontWeight: 700, color: C.ink, textDecoration: "none", border: `1px solid ${C.border}`, borderRadius: 7, padding: "4px 9px", background: "#fff" }}>View ↗</a>}
-                      {onRemove && !ln.ref && <button type="button" disabled={!!removing}
+                      {onUnhide && c.key === "store" && ln.status === "hidden" && <button type="button" disabled={!!removing}
+                        onClick={async () => {
+                          setRemoving(`show-${c.key}`);
+                          try { await onUnhide(c.key); setPick(x => ({ ...x, [c.key]: true })); } catch (e) { alert(e.message); }
+                          setRemoving("");
+                        }}
+                        style={{ fontSize: 12, fontWeight: 700, color: C.green, border: `1px solid ${C.border}`, borderRadius: 7, padding: "4px 9px", background: "#fff", cursor: removing ? "wait" : "pointer" }}>
+                        {removing === `show-${c.key}` ? "Unhiding…" : "Unhide"}</button>}
+                      {onRemove && !ln.ref && ln.status !== "hidden" && <button type="button" disabled={!!removing}
                         onClick={async () => {
                           if (!confirm(`Remove "${form.title || "this piece"}" from ${c.label}?`)) return;
                           setRemoving(c.key);

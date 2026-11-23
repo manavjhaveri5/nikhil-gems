@@ -32,7 +32,7 @@ const isVideoUrl = u => typeof u === "string" && /\.(mp4|mov|avi|webm|mkv)(\?|$)
 /* ─── theme ──────────────────────────────────────────────────────────────── */
 import { C, mob, FI } from "./lmTheme.js";
 import { TradeProductsPanel, publishListingToTrade, hideTradeProduct, refreshTradePhotos, findTradeLinks, loadTradeFacts } from "./TradeSiteApp.jsx";
-import { StoreProductsPanel, publishListingToStore, hideStoreProduct, markStoreSold, markStoreRefreshed, loadStoreFacts, storeSettings, loadStoreProduct, storePriceFor, listStoreProducts, linkStoreProduct } from "./StoreApp.jsx";
+import { StoreProductsPanel, publishListingToStore, hideStoreProduct, showStoreProduct, markStoreSold, markStoreRefreshed, loadStoreFacts, storeSettings, loadStoreProduct, storePriceFor, listStoreProducts, linkStoreProduct } from "./StoreApp.jsx";
 import ListingGrid from "./ListingGrid.jsx";
 import ListSteps from "./ListSteps.jsx";
 import RenewalQueue from "./RenewalQueue.jsx";
@@ -3889,7 +3889,14 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
 
       </div>
       {steps && (
-        <ListSteps research={admin} form={{ ...siteForm, tags, _stockCost: stockCost, _lotCost: lotCost, _costPerKg: costPerKg, _tradeUnit: tradeRowOf(tradeFactsMap, form)?.unit || "", _loc: loc }} orders={orders} stock={stock} weightKg={pieceKg} comparables={comparables} rate={liveUsdRate} start={steps} renderWhere={pieceCard} renderPlatform={platformStep} renderLink={renderLink} onUnlink={unlink} onAI={generateAI} aiBusy={generating} onPublishOne={onPublishOne ? publishOneFromSteps : null}
+        <ListSteps research={admin} form={{ ...siteForm, tags, _stockCost: stockCost, _lotCost: lotCost, _costPerKg: costPerKg, _tradeUnit: tradeRowOf(tradeFactsMap, form)?.unit || "", _loc: loc }} orders={orders} stock={stock} weightKg={pieceKg} comparables={comparables} rate={liveUsdRate} start={steps} renderWhere={pieceCard} renderPlatform={platformStep} renderLink={renderLink} onUnlink={unlink}
+          onUnhide={async pkey => {
+            if (pkey !== "store") return;
+            await showStoreProduct(form.platforms?.store?.product_id);
+            setStoreLive(r => r ? { ...r, status: "active" } : r);
+            setForm(f => ({ ...f, platforms: { ...f.platforms, store: { ...f.platforms?.store, status: "active" } } }));
+          }}
+          onAI={generateAI} aiBusy={generating} onPublishOne={onPublishOne ? publishOneFromSteps : null}
           onRemove={onUnpublish ? async pkey => {
             await onUnpublish(form, pkey);
             // Our two sites hide it (a draft); the marketplaces end it.

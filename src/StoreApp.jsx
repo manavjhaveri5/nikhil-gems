@@ -273,6 +273,17 @@ export async function hideStoreProduct(productId) {
   handleOf(productId).then(h => refreshSitePages(h)).catch(() => {});
 }
 
+// Puts a hidden piece back on sale (only from "hidden": a sold piece stays sold).
+export async function showStoreProduct(productId) {
+  if (!productId) throw new Error("Not on the store");
+  const { data } = await supabase.from("store_products").select("qty,status").eq("id", productId).maybeSingle();
+  if (!data) throw new Error("It isn't on the store any more");
+  if (data.status !== "hidden") throw new Error(`It's ${data.status} on the site, not hidden`);
+  if (!(+data.qty > 0)) throw new Error("Its quantity on the site is 0. Set the stock first");
+  await q(supabase.from("store_products").update({ status: "active", updated_at: new Date().toISOString() }).eq("id", productId).eq("status", "hidden"));
+  handleOf(productId).then(h => refreshSitePages(h)).catch(() => {});
+}
+
 /* ── the app ────────────────────────────────────────────────────────────── */
 export default function StoreApp({ onHome }) {
   const [tab, setTab] = useState("orders");
