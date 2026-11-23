@@ -7411,7 +7411,7 @@ const defaultNgDraft = o => ({ qty: String(o._ngAllocatedQty || o._ngDeductedQty
 // can no longer be trusted. It is the only thing that should force a cold load.
 const ETSY_CACHE_BASE = "ng-etsy-v4";
 
-function EtsyLiveView({ onCrossPost, onPushEE, shop = "atyahara" }) {
+function EtsyLiveView({ onCrossPost, onPushEE, shop = "atyahara", erpListings = [], onEditLocal }) {
   /* One view, either Etsy shop. For EarthEditions every /api/etsy call here
      names the shop, and Atyahara's browser token is never sent (that shop's
      login lives on the server); its cache and its listings' platform entry
@@ -7798,6 +7798,10 @@ function EtsyLiveView({ onCrossPost, onPushEE, shop = "atyahara" }) {
   }, []);
 
   const openEdit = l => {
+    /* Edit opens the piece's main listing editor, so every channel stays
+       uniform; only an Etsy listing the ERP doesn't know gets the quick Etsy editor. */
+    const own = onEditLocal && erpListings.find(x => String(x?.platforms?.[pkey]?.listing_id || "") === String(l.listing_id));
+    if (own) { onEditLocal(own); return; }
     const price = l.price ? (l.price.amount / (l.price.divisor||100)) : 0;
     setEditL(l);
     setEditForm({ title: l.title||"", description: l.description||"", price: price.toFixed(2),
@@ -12330,7 +12334,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
           ? <Suspense fallback={<div style={{ padding: 40, color: C.inkFaint }}>Loading…</div>}><CustomersApp orders={orders} listings={listings} /></Suspense>
           : tab === "etsy" && currentUser?.role === "admin" && etsyView === "tracker"
           ? <Suspense fallback={<div style={{ padding: 40, color: C.inkFaint }}>Loading…</div>}><AdsTracker listings={listings} onEdit={l => { setEditing(l); setShowForm(true); }} /></Suspense>
-          : tab === "etsy" && <EtsyLiveView key={etsyTabShop} shop={etsyTabShop} onCrossPost={(l, k) => crossPostEtsyToShopify(l, k, etsyTabShop === "earth" ? "etsy_ee" : "etsy")} onPushEE={etsyTabShop === "earth" ? null : pushEtsyToEE} />}
+          : tab === "etsy" && <EtsyLiveView key={etsyTabShop} shop={etsyTabShop} erpListings={listings} onEditLocal={l => { setEditing(l); setShowForm(true); }} onCrossPost={(l, k) => crossPostEtsyToShopify(l, k, etsyTabShop === "earth" ? "etsy_ee" : "etsy")} onPushEE={etsyTabShop === "earth" ? null : pushEtsyToEE} />}
         {tab === "ebay" && <EbayLiveView />}
         {tab === "shopify_earth" && (
           <ShopifyStoreView
@@ -12353,7 +12357,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
         {tab === "trade" && <TradeProductsPanel showToast={showToast} />}
         {tab === "store" && <StoreProductsPanel showToast={showToast} />}
         {/* The EarthEditions Etsy shop's own tab: what's on that shop now, as the Etsy tab shows it. */}
-        {tab === "etsy_ee" && <EtsyLiveView key="earth" shop="earth" onCrossPost={(l, k) => crossPostEtsyToShopify(l, k, "etsy_ee")} />}
+        {tab === "etsy_ee" && <EtsyLiveView key="earth" shop="earth" erpListings={listings} onEditLocal={l => { setEditing(l); setShowForm(true); }} onCrossPost={(l, k) => crossPostEtsyToShopify(l, k, "etsy_ee")} />}
         {activePlatform && tab !== "etsy" && tab !== "etsy_ee" && tab !== "ebay" && tab !== "shopify_earth" && tab !== "shopify_aty" && tab !== "trade" && tab !== "store" && (
           <PlatformView
             platform={activePlatform}
