@@ -8,11 +8,10 @@ import { omniList, rowsOf, buildCampaignHtml } from "./omnisend.js";
 
 const STORE = "https://eartheditions.co";
 
-/* Emails the ERP sends itself, through Resend, from the eartheditions.co
-   domain (SPF/DKIM/DMARC verified in Resend) so they land in inboxes rather
-   than junk. Only fixed templates can be sent — no free-form mail — and only
-   by a signed-in staff member. Answers 503 until RESEND_API_KEY is set, and the
-   caller falls back (the Omnisend automation, or a draft in the mail app). */
+/* Emails the ERP sends itself (order shipped, checkout follow-up, trade
+   approval): from team@eartheditions.co through the Gmail bridge, or Resend if
+   RESEND_API_KEY is ever set (sendTx). Only fixed templates can be sent — no
+   free-form mail — and only by a signed-in staff member. */
 export default async function handler(req, res) {
   // The unsubscribe link in Gmail campaigns: public, checked by its signed token.
   if (req.query?.action === "unsub") return unsub(req, res);
@@ -42,8 +41,6 @@ export default async function handler(req, res) {
   if (req.body?.action === "store_mail") return storeMail(req, res);
   if (String(req.body?.action || "").startsWith("gmail_")) return gmail(req, res);
   if (req.body?.template === "order_shipped") return shipStoreOrder(req, res);
-  const key = process.env.RESEND_API_KEY;
-  if (!key) return res.status(503).json({ error: "Email isn't set up yet (RESEND_API_KEY)", notConfigured: true });
   let b = req.body;
   if (typeof b === "string") { try { b = JSON.parse(b); } catch { b = {}; } }
   let to = String(b?.to || "").trim();
@@ -73,18 +70,8 @@ export default async function handler(req, res) {
   } else return res.status(400).json({ error: "Unknown template" });
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to)) return res.status(400).json({ error: "Bad recipient" });
 
-  const r = await fetch("https://api.resend.com/emails", {
-    method: "POST",
-    headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
-    body: JSON.stringify({
-      from: process.env.MAIL_FROM || "Earth Editions <hello@eartheditions.co>",
-      to: [to],
-      ...(replyTo ? { reply_to: replyTo } : {}),
-      subject: mail.subject, html: mail.html, text: mail.text,
-    }),
-  });
-  const d = await r.json().catch(() => ({}));
-  if (!r.ok) return res.status(502).json({ error: d?.message || `Resend ${r.status}` });
+  const d = await sendTx({ to, replyTo, ...mail });
+  if (d.error) return res.status(502).json({ error: d.error });
   // Noted on the order (the status stays "pending", so a late payment still lands).
   let notes;
   if (order) {
@@ -99,6 +86,26 @@ export default async function handler(req, res) {
    a small Apps Script web app running in Nikhil Gems' own Google account
    (scripts/gmail-bridge.gs), so no Google Cloud app or token refresh is needed.
    The shared secret stays here on the server. Read-only: search and fetch. */
+/* One transactional email to one person (shipped, checkout follow-up, trade
+   approval): Resend if it's ever set up, otherwise from team@eartheditions.co
+   through the Gmail bridge. Runs on the server, so nobody's laptop is needed. */
+async function sendTx({ to, subject, html, text, replyTo }) {
+  const key = process.env.RESEND_API_KEY;
+  try {
+    if (key) {
+      const r = await fetch("https://api.resend.com/emails", {
+        method: "POST", headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ from: process.env.MAIL_FROM || "Earth Editions <hello@eartheditions.co>", to: [to], reply_to: replyTo || process.env.MAIL_REPLY_TO || "team@eartheditions.co", subject, html, text }),
+      });
+      const d = await r.json().catch(() => ({}));
+      return r.ok ? { id: d.id, via: "resend" } : { error: d?.message || `Resend ${r.status}` };
+    }
+    const r = await bridgeCall()({ action: "send_raw", messages: [{ raw: list.raw(list.simpleMime({ to, subject, html, senderName: "Earth Editions" })) }] });
+    const x = (r.results || [])[0] || {};
+    return x.error ? { error: x.error } : { id: x.id || "", via: "gmail" };
+  } catch (e) { return { error: e.message }; }
+}
+
 function bridgeCall() {
   const url = process.env.GMAIL_BRIDGE_URL, secret = process.env.GMAIL_BRIDGE_SECRET;
   if (!url || !secret) return async () => { throw new Error("Gmail isn't connected yet (GMAIL_BRIDGE_URL / GMAIL_BRIDGE_SECRET)"); };
@@ -261,20 +268,13 @@ async function shipStoreOrder(req, res) {
 
   // Parcels abroad go Delivered Duty Paid; an order within India has no customs to mention.
   const ddp = String(o.shipping?.country || "").toUpperCase() !== "IN";
-  const key = process.env.RESEND_API_KEY;
   const to = String(o.email || "").trim();
   if (already) return res.json({ ok: true, emailed: false, already: true, to, tracking_url: url, notes });
-  if (!key) return res.json({ ok: true, emailed: false, notConfigured: true, to, tracking_url: url, ddp, notes });
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to)) return res.json({ ok: true, emailed: false, error: "The order has no valid buyer email", tracking_url: url, notes });
   const pieces = (o.lines || []).map(l => `${l.title}${(+l.qty || 1) > 1 ? ` × ${l.qty}` : ""}`);
   const mail = orderShipped({ name: o.name, number: o.number, pieces, ddp, carrier, tracking, trackingUrl: url, note: String(b.note || "").slice(0, 300), siteUrl: STORE, logoUrl: process.env.MAIL_LOGO_URL || `${STORE}/logo.png` });
-  const r = await fetch("https://api.resend.com/emails", {
-    method: "POST",
-    headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ from: process.env.MAIL_FROM || "Earth Editions <hello@eartheditions.co>", to: [to], reply_to: process.env.MAIL_REPLY_TO || "team@eartheditions.co", subject: mail.subject, html: mail.html, text: mail.text }),
-  });
-  const d = await r.json().catch(() => ({}));
-  if (!r.ok) return res.json({ ok: true, emailed: false, error: d?.message || `Resend ${r.status}`, to, tracking_url: url, notes });
+  const d = await sendTx({ to, ...mail });
+  if (d.error) return res.json({ ok: true, emailed: false, error: d.error, to, tracking_url: url, notes });
   notes = [notes, `Shipped email sent ${day} (${carrier || "carrier"} ${tracking}).`].filter(Boolean).join(" ");
   await db.from("store_orders").update({ notes }).eq("id", o.id);
   return res.json({ ok: true, emailed: true, id: d.id, to, tracking_url: url, notes });
