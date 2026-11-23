@@ -1,4 +1,4 @@
-import { requireUser, adminClient, cronKeyOk } from "../lib/auth.js";
+import { requireUser, adminClient, cronKeyOk, hasStoreSecret } from "../lib/auth.js";
 import { runInboxScan, SCAN_KEY } from "../lib/inbox-scan.js";
 import { outreachSend, outreachCheck, outreachCounts, outreachScan } from "../lib/outreach.js";
 import { tradeApproved, checkoutFollowup, orderShipped } from "../lib/mailTemplates.js";
@@ -29,6 +29,8 @@ export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ error: "POST only" });
   // The 07:00 IST inbox scan comes from pg_cron with Raj's key; Sir can also run it from Home.
   if (req.body?.action === "gmail_scan" && await cronKeyOk(req, "raj")) return gmail(req, res);
+  // eartheditions.co's own emails (order confirmation, password reset), sent from our Gmail.
+  if (req.body?.action === "store_mail" && hasStoreSecret(req)) return storeMail(req, res);
   if (req.body?.action === "weekly_tick" && await cronKeyOk(req, "raj")) {
     try { return res.json(await weekly.tick({ bridge: bridgeCall() })); }
     catch (e) { console.error("weekly tick", e.message); return res.status(502).json({ error: e.message }); }
@@ -358,4 +360,35 @@ async function publicWeekly(req, res) {
     return shell(res, 500, "Try again", `<p style="text-align:center">Something went wrong. Please try again in a minute.</p>`);
   }
   return shell(res, 404, "Not found", "");
+}
+
+/* The store's transactional emails go out from team@eartheditions.co through
+   the Gmail bridge (Resend isn't set up). The store renders the email; this
+   only sends it, and only to someone it belongs to: the buyer on a recent paid
+   order (kind "order", with its number), or an account holder (kind "account").
+   So a leaked store secret can't turn this into a way to mail strangers. */
+async function storeMail(req, res) {
+  const b = typeof req.body === "string" ? JSON.parse(req.body || "{}") : (req.body || {});
+  const to = String(b.to || "").trim().toLowerCase();
+  const subject = String(b.subject || "").slice(0, 200), html = String(b.html || "");
+  if (!list.OK.test(to) || !subject || !html || html.length > 200_000) return res.status(400).json({ error: "Bad email" });
+  const db = adminClient();
+  let ok = false;
+  if (b.kind === "order") {
+    const { data: o } = await db.from("store_orders").select("email,status,created_at").eq("number", String(b.number || "")).maybeSingle();
+    ok = !!o && String(o.email || "").trim().toLowerCase() === to && !["pending", "cancelled"].includes(o.status) && Date.now() - Date.parse(o.created_at) < 30 * 864e5;
+  } else if (b.kind === "account") {
+    const { data: c } = await db.from("store_customers").select("id").ilike("email", to).limit(1);
+    ok = !!c?.length;
+  }
+  if (!ok) return res.status(403).json({ error: "Not a customer email" });
+  try {
+    const r = await bridgeCall()({ action: "send_raw", messages: [{ raw: list.raw(list.simpleMime({ to, subject, html, senderName: "Earth Editions" })) }] });
+    const x = (r.results || [])[0] || {};
+    if (x.error) throw new Error(x.error);
+    return res.json({ ok: true, id: x.id || "" });
+  } catch (e) {
+    console.error("store mail", e.message);
+    return res.status(502).json({ error: e.message });
+  }
 }
