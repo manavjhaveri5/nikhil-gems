@@ -5588,7 +5588,7 @@ const defaultNgDraft = o => ({ qty: String(o._ngAllocatedQty || o._ngDeductedQty
     return listings.find(l => o.listing_id && l.id === o.listing_id)
       || listings.find(l => o.etsy_listing_id && pid(l, o.etsy_shop === "earth" ? "etsy_ee" : "etsy").includes(String(o.etsy_listing_id)))
       || listings.find(l => ebayId && pid(l, "ebay").includes(ebayId))
-      || listings.find(l => code && (norm(l.order_id) === code || norm(l.sku) === code))
+      || listings.find(l => code && (norm(l.listing_order_id) === code || norm(l.order_id) === code || norm(l.sku) === code))
       || listings.find(l => o.listing_sku && norm(l.sku) === norm(o.listing_sku)) || null;
   };
   const liveElsewhere = (o, l) => PLATFORMS.filter(p => !p.coming && p.key !== soldOnKey(o) && l.platforms?.[p.key]?.status === "active"
