@@ -662,14 +662,19 @@ async function fbFeed() {
   const t = await getSecret("tok_facebook");
   if (!t?.access_token) fail(400, "facebook isn't connected");
   const at = encodeURIComponent(t.access_token);
-  const d = await json(await fetch(`${FB}/${t.page_id}/published_posts?fields=id,message,created_time,permalink_url,full_picture,attachments{media_type},shares,reactions.summary(total_count).limit(0),comments.summary(total_count).limit(0)&limit=25&access_token=${at}`));
+  // Reactions and comments need pages_read_user_content; without it the posts still list, with shares only.
+  const list = fields => fetch(`${FB}/${t.page_id}/published_posts?fields=${fields}&limit=25&access_token=${at}`).then(json);
+  const base = "id,message,created_time,permalink_url,full_picture,attachments{media_type},shares";
+  let d = await list(`${base},reactions.summary(total_count).limit(0),comments.summary(total_count).limit(0)`), counts = true;
+  if (d.error?.code === 10) { d = await list(base); counts = false; }
   if (d.error) fail(502, `Facebook: ${d.error.message}`);
   const a = await json(await fetch(`${FB}/${t.page_id}?fields=name,link,followers_count,fan_count&access_token=${at}`));
   const kind = x => { const m = x.attachments?.data?.[0]?.media_type || ""; return /video/i.test(m) ? "Video" : /album/i.test(m) ? "Album" : /photo/i.test(m) ? "Photo" : m ? "Link" : "Post"; };
   return {
     posts: (d.data || []).map(x => ({ id: x.id, url: x.permalink_url || `https://www.facebook.com/${x.id}`, thumb: x.full_picture || "", text: x.message || "", at: x.created_time, type: kind(x),
-      stats: { likes: num(x.reactions?.summary?.total_count), comments: num(x.comments?.summary?.total_count), shares: num(x.shares?.count ?? 0) }, canDelete: true })),
+      stats: counts ? { likes: num(x.reactions?.summary?.total_count), comments: num(x.comments?.summary?.total_count), shares: num(x.shares?.count ?? 0) } : { shares: num(x.shares?.count ?? 0) }, canDelete: true })),
     account: { name: a.name || t.name, followers: num(a.followers_count ?? a.fan_count), posts: (d.data || []).length, url: a.link || `https://www.facebook.com/${t.page_id}` },
+    note: counts ? "" : "Likes and comments need Facebook's pages_read_user_content permission — add it to the Meta login, then reconnect.",
   };
 }
 const FEED = { instagram: igFeed, facebook: fbFeed, tiktok: ttFeed, youtube: ytFeed, pinterest: pinFeed };
