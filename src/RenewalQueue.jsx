@@ -11,7 +11,7 @@
    same stone and shape, near its price — say whether a listing that hasn't
    sold yet is still worth a term. */
 import { useEffect, useMemo, useRef, useState } from "react";
-import { C, mob } from "./lmTheme.js";
+import { C, FI, mob } from "./lmTheme.js";
 import { loadK, upsertItemK, deleteItemK } from "./utils.js";
 
 export const RENEWALS_KEY = "ng-etsy-renewals-v1";   // [{ id: Etsy listing id, decision: "skip" | "renewed", at, by, title }]
@@ -316,6 +316,7 @@ export default function RenewalQueue({ listings = [], stock = [], getToken, onRe
   const [sort, setSort] = useState("recent");       // recent | best
   const [only, setOnly] = useState("all");          // all | renew | maybe | skip
   const [shown, setShown] = useState(PAGE);
+  const [q, setQ] = useState("");                   // search: title, SKU, stock card or listing id
   const [opening, setOpening] = useState("");
   const alive = useRef(true);
   useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
@@ -498,8 +499,12 @@ export default function RenewalQueue({ listings = [], stock = [], getToken, onRe
   const counts = judged.reduce((m, j) => (m[j.v] = (m[j.v] || 0) + 1, m), {});
   // Recent sales count most, but a listing that has sold for years isn't buried under one good month.
   const rank = j => (j.st?.u120 || 0) * 1000 + (j.st?.u365 || 0) * 100 + (j.st?.units || 0) * 10 + (j.row.favs || 0) / 10;
+  // Every word must appear somewhere: title, Etsy id, SKU, stock card, ERP title.
+  const terms = q.toLowerCase().split(/\s+/).filter(Boolean);
+  const hits = (...v) => !terms.length || (h => terms.every(t => h.includes(t)))(v.filter(Boolean).join(" ").toLowerCase());
   const visible = judged
     .filter(j => only === "all" || j.v === only)
+    .filter(j => hits(unescape(j.row.title || ""), j.row.id, j.row.sku, j.card?.sku, j.card?.material, j.card?.location, j.erp?.title, j.erp?.material))
     .sort((a, b) => sort === "best" ? rank(b) - rank(a) || b.row.ends - a.row.ends
       : view === "ending" ? a.row.ends - b.row.ends : b.row.ends - a.row.ends);
 
@@ -627,7 +632,11 @@ export default function RenewalQueue({ listings = [], stock = [], getToken, onRe
           {chip("ending", `Ending in ${data.days} days`, lists.ending.length)}
           {chip("skipped", "Skipped", lists.skipped.length)}
           {chip("renewed", "Renewed", lists.renewed.length)}
+          <div style={{ flex: 1 }} />
+          <input value={q} onChange={e => { setQ(e.target.value); setShown(PAGE); }} placeholder="Search title, SKU, stone…"
+            style={{ ...FI(), width: 230, fontSize: 12.5, padding: "6px 12px", borderRadius: 20 }} />
         </div>
+        {q && (view === "expired" || view === "ending") && <div style={{ ...small, marginBottom: 8 }}>{visible.length} match{visible.length === 1 ? "" : "es"} for “{q}” <button type="button" onClick={() => setQ("")} style={{ border: "none", background: "none", color: C.blue, cursor: "pointer", fontSize: 12, padding: 0 }}>clear</button></div>}
 
         {(view === "expired" || view === "ending") && <>
           <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", marginBottom: 6 }}>
@@ -686,7 +695,7 @@ export default function RenewalQueue({ listings = [], stock = [], getToken, onRe
         {(view === "skipped" || view === "renewed") && (
           <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12 }}>
             {!lists[view].length && <div style={{ padding: 24, textAlign: "center", color: C.inkMid, fontSize: 13 }}>{view === "skipped" ? "Nothing skipped." : "Nothing renewed from here yet."}</div>}
-            {lists[view].map((d, i) => {
+            {lists[view].filter(d => { const r = rowById.get(String(d.id)); return hits(unescape(d.title || r?.title || ""), d.id, r?.sku); }).map((d, i) => {
               const row = rowById.get(String(d.id));
               return (
                 <div key={d.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "11px 14px", borderTop: i ? `1px solid ${C.border}` : "none" }}>
