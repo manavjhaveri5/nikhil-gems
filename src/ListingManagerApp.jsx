@@ -5580,8 +5580,15 @@ const defaultNgDraft = o => ({ qty: String(o._ngAllocatedQty || o._ngDeductedQty
   const soldOnKey = o => o.platform === "store" ? "store" : isEtsyOrder(o) ? (o.etsy_shop === "earth" ? "etsy_ee" : "etsy") : isEbayOrder(o) ? "ebay" : isAtyahOrder(o) ? "shopify_aty" : o.platform || "";
   const findOrderListing = o => {
     const norm = v => String(v || "").trim().toLowerCase();
+    // eBay orders carry the eBay item id in listing_id and our NG-LST code in
+    // listing_sku, so match those too — and ids kept after a platform was ended.
+    const pid = (l, k) => [l.platforms?.[k]?.listing_id, l.platforms?.[k]?.item_id, l.platforms?.[k]?.ended_id, l.platforms?.[k]?.ended_item_id].filter(Boolean).map(String);
+    const code = norm(o.listing_order_id || o.listing_sku);
+    const ebayId = String(o.ebay_item_id || (isEbayOrder(o) ? o.listing_id : "") || "");
     return listings.find(l => o.listing_id && l.id === o.listing_id)
-      || listings.find(l => o.etsy_listing_id && String(l.platforms?.[o.etsy_shop === "earth" ? "etsy_ee" : "etsy"]?.listing_id || "") === String(o.etsy_listing_id))
+      || listings.find(l => o.etsy_listing_id && pid(l, o.etsy_shop === "earth" ? "etsy_ee" : "etsy").includes(String(o.etsy_listing_id)))
+      || listings.find(l => ebayId && pid(l, "ebay").includes(ebayId))
+      || listings.find(l => code && (norm(l.order_id) === code || norm(l.sku) === code))
       || listings.find(l => o.listing_sku && norm(l.sku) === norm(o.listing_sku)) || null;
   };
   const liveElsewhere = (o, l) => PLATFORMS.filter(p => !p.coming && p.key !== soldOnKey(o) && l.platforms?.[p.key]?.status === "active"
@@ -11905,7 +11912,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
       const r = await fetch(`/api/ebay?action=end_item&item_id=${itemId}`, { method: "POST" });
       const d = await r.json();
       if (!d.ok) throw new Error(d.error || "eBay delete failed");
-      await patchListingItem(listing, current => ({ ...current, platforms: { ...current.platforms, ebay: { status: "deleted" } }, updated_at: now() }));
+      await patchListingItem(listing, current => ({ ...current, platforms: { ...current.platforms, ebay: { status: "deleted", ended_at: now(), ended_item_id: String(itemId) } }, updated_at: now() }));
       return;
     }
     else throw new Error("Not supported");
@@ -11917,7 +11924,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
     const d = await lmJson(r);
     if (!d.ok) throw new Error(d.error || "Failed");
 
-    await patchListingItem(listing, current => ({ ...current, platforms: { ...current.platforms, [pkey]: { status: "deleted" } }, updated_at: now() }));
+    await patchListingItem(listing, current => { const was = current.platforms?.[pkey] || {}; const oldId = was.listing_id || was.product_id; return { ...current, platforms: { ...current.platforms, [pkey]: { status: "deleted", ended_at: now(), ...(oldId ? { ended_id: String(oldId) } : {}) } }, updated_at: now() }; });
   };
 
   /* Take a sold unique piece down from one other platform it was live on —
