@@ -1218,6 +1218,14 @@ export default async function handler(req, res) {
       return res.json({ url: P[p].login(req, state, challenge) });
     }
 
+    // The Page's profile picture, from a public image link (needs pages_manage_posts on the Page token).
+    if (action === "fb_picture") {
+      const t = await getSecret("tok_facebook");
+      if (!t?.access_token) fail(400, "facebook isn't connected");
+      const d = await json(await fetch(`${FB}/${t.page_id}/picture`, { method: "POST", body: form({ picture: String(body.url || ""), access_token: t.access_token }) }));
+      if (d.error) fail(502, `Facebook: ${d.error.message}`);
+      return res.json({ ok: true, ...d });
+    }
     if (action === "fb_link") return res.json({ ok: true, page: (({ page_id, name }) => ({ page_id, name }))(await linkFacebookPage((await token("instagram")).access_token)) });
     if (action === "disconnect") { await setSecret(`tok_${p}`, null); return res.json({ ok: true }); }
 
