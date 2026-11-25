@@ -657,7 +657,22 @@ async function pinFeed() {
     account: { name: a.username, followers: num(a.follower_count), posts: num(a.pin_count), views: num(a.monthly_views), url: a.username ? `https://www.pinterest.com/${a.username}/` : "" },
     note: "Trial access: new pins go to Pinterest's sandbox until Standard access is granted." };
 }
-const FEED = { instagram: igFeed, tiktok: ttFeed, youtube: ytFeed, pinterest: pinFeed };
+// The Earth Editions Page: its own posts with reactions, comments and shares.
+async function fbFeed() {
+  const t = await getSecret("tok_facebook");
+  if (!t?.access_token) fail(400, "facebook isn't connected");
+  const at = encodeURIComponent(t.access_token);
+  const d = await json(await fetch(`${FB}/${t.page_id}/published_posts?fields=id,message,created_time,permalink_url,full_picture,attachments{media_type},shares,reactions.summary(total_count).limit(0),comments.summary(total_count).limit(0)&limit=25&access_token=${at}`));
+  if (d.error) fail(502, `Facebook: ${d.error.message}`);
+  const a = await json(await fetch(`${FB}/${t.page_id}?fields=name,link,followers_count,fan_count&access_token=${at}`));
+  const kind = x => { const m = x.attachments?.data?.[0]?.media_type || ""; return /video/i.test(m) ? "Video" : /album/i.test(m) ? "Album" : /photo/i.test(m) ? "Photo" : m ? "Link" : "Post"; };
+  return {
+    posts: (d.data || []).map(x => ({ id: x.id, url: x.permalink_url || `https://www.facebook.com/${x.id}`, thumb: x.full_picture || "", text: x.message || "", at: x.created_time, type: kind(x),
+      stats: { likes: num(x.reactions?.summary?.total_count), comments: num(x.comments?.summary?.total_count), shares: num(x.shares?.count ?? 0) }, canDelete: true })),
+    account: { name: a.name || t.name, followers: num(a.followers_count ?? a.fan_count), posts: (d.data || []).length, url: a.link || `https://www.facebook.com/${t.page_id}` },
+  };
+}
+const FEED = { instagram: igFeed, facebook: fbFeed, tiktok: ttFeed, youtube: ytFeed, pinterest: pinFeed };
 
 // Change a post where the platform lets apps: YouTube title/description/privacy, Pinterest title/description/link, Instagram comments on/off.
 async function editPost(p, id, f = {}) {
@@ -708,6 +723,13 @@ async function removePost(p, id) {
     const t = await token("pinterest");
     const r = await fetch(`https://api.pinterest.com/v5/pins/${id}`, { method: "DELETE", headers: { Authorization: `Bearer ${t.access_token}` } });
     if (!r.ok) fail(502, `Pinterest: ${(await json(r)).message || r.status}`);
+    return;
+  }
+  if (p === "facebook") {
+    const t = await getSecret("tok_facebook");
+    if (!t?.access_token) fail(400, "facebook isn't connected");
+    const d = await json(await fetch(`${FB}/${id}?access_token=${encodeURIComponent(t.access_token)}`, { method: "DELETE" }));
+    if (d.error) fail(502, `Facebook: ${d.error.message}`);
     return;
   }
   fail(400, `${p} doesn't let apps delete posts — delete it in the ${p} app`);

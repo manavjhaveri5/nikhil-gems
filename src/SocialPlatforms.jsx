@@ -10,7 +10,7 @@ import { C, mob } from "./lmTheme.js";
 
 const SocialReddit = lazy(() => import("./SocialReddit.jsx"));   // r/Crystals Sunday shop post — written here, posted by hand
 const REDDIT = { k: "reddit", icon: "👽", label: "Reddit" };
-const FEEDS = ["instagram", "tiktok", "youtube", "pinterest"];
+const FEEDS = ["instagram", "facebook", "tiktok", "youtube", "pinterest"];
 const card = { background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: "14px 16px" };
 const btn = (bg = C.surface, fg = C.ink) => ({ background: bg, color: fg, border: bg === C.surface ? `1px solid ${C.border}` : "none", borderRadius: 8, padding: "7px 13px", fontSize: 13, fontWeight: 650, cursor: "pointer", fontFamily: "inherit" });
 const n = v => v == null ? "—" : v >= 1e6 ? `${(v / 1e6).toFixed(1)}M` : v >= 1e4 ? `${Math.round(v / 1e3)}K` : v >= 1e3 ? `${(v / 1e3).toFixed(1)}K` : String(v);
