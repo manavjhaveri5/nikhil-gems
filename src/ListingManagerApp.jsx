@@ -5238,11 +5238,14 @@ const defaultNgDraft = o => ({ qty: String(o._ngAllocatedQty || o._ngDeductedQty
   // back to platform_order_id, so it doubles as the stable invoice key for these too.
   const isAtyahOrder  = o => o.platform === "shopify_aty";
   const isEbayOrder   = o => o.platform === "ebay" || String(o.order_number || "").startsWith("EBAY-");
-  const isFulfilOrder = o => isEtsyOrder(o) || isAtyahOrder(o) || isEbayOrder(o);
+  const isEeStoreOrder = o => o.platform === "store";
+  const isFulfilOrder = o => isEtsyOrder(o) || isAtyahOrder(o) || isEbayOrder(o) || isEeStoreOrder(o);
   // Marketplace label used on invoices and buyer records ("… via Etsy" / "… via eBay").
-  const orderChannel  = o => isEtsyOrder(o) ? "Etsy" : isEbayOrder(o) ? "eBay" : "";
+  const orderChannel  = o => isEtsyOrder(o) ? "Etsy" : isEbayOrder(o) ? "eBay" : isEeStoreOrder(o) ? "eartheditions.co" : "";
   // Per-platform step-1 wording and accent, so one set of panels serves all three.
-  const shipMeta = o => isAtyahOrder(o)
+  const shipMeta = o => isEeStoreOrder(o)
+    ? { name: "eartheditions.co", color: "#2F5D50", verb: "Ship & email buyer", done: "Shipped from eartheditions.co" }
+    : isAtyahOrder(o)
     ? { name: "Shopify", color: PLATFORMS.find(x => x.key === "shopify_aty")?.color || "#6B3FA0", verb: "Fulfil & notify buyer", done: "Fulfilled on Shopify" }
     : isEbayOrder(o)
       ? { name: "eBay", color: "#0064D2", verb: "Send to eBay & complete", done: "Shipped on eBay" }
@@ -6703,7 +6706,49 @@ const defaultNgDraft = o => ({ qty: String(o._ngAllocatedQty || o._ngDeductedQty
                         <button onClick={() => restoreOrder(order)} style={{ flexShrink: 0, background: C.surface, color: C.ink, border: `1px solid ${C.border}`, borderRadius: 8, padding: "8px 13px", fontSize: 12, fontWeight: 800, cursor: "pointer" }}>Restore order</button>
                       </div>
                     )}
-                    {!cancelled && isStoreOrder(order) && (() => {
+                    {!cancelled && isFulfilOrder(order) && (
+                      (() => {
+                        const ETSY = shipMeta(order).color;
+                        const stages = [
+                          [`Ship on ${shipMeta(order).name}`, "Send carrier + tracking", shipped],
+                          ["Allocate stock", "Choose item & quantity", !!order.linked_stock_id],
+                          ["Sales invoice", orderChannel(order) ? `Invoice the ${orderChannel(order)} buyer` : "Invoice the buyer", !!order._atInvoiceNo],
+                          ["NG invoice", "Record stock at cost", !!order._ngInvoiceNo],
+                        ];
+                        const firstOpen = stages.findIndex(stage => !stage[2]);
+                        const activeIndex = firstOpen === -1 ? stages.length - 1 : firstOpen;
+                        const doneCount = stages.filter(stage => stage[2]).length;
+                        const allDone = doneCount === stages.length;
+                        const sel = stepSel[order.id] != null ? stepSel[order.id] : activeIndex;
+                        const pct = Math.round((doneCount / stages.length) * 100);
+                        return <div style={{ marginBottom: 14 }}>
+                          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+                            <span style={{ fontSize: 10, fontWeight: 800, textTransform: "uppercase", letterSpacing: .7, color: C.inkFaint }}>Fulfilment</span>
+                            <span style={{ fontSize: 11, fontWeight: 850, color: allDone ? C.green : C.inkMid }}>{allDone ? "✓ Complete" : `${doneCount} of ${stages.length} done`}</span>
+                          </div>
+                          {/* segmented progress bar */}
+                          <div style={{ display: "grid", gridTemplateColumns: `repeat(${stages.length}, 1fr)`, gap: 4, marginBottom: 12 }}>
+                            {stages.map(([label], index) => (
+                              <div key={label} style={{ height: 6, borderRadius: 4, background: stages[index][2] ? C.green : index === activeIndex && !allDone ? ETSY : C.border, opacity: stages[index][2] || (index === activeIndex && !allDone) ? 1 : .5, transition: "background .2s" }} />
+                            ))}
+                          </div>
+                          <div style={{ display: "grid", gridTemplateColumns: mob() ? "1fr 1fr" : "repeat(4, minmax(0, 1fr))", gap: 8 }}>
+                            {stages.map(([label, note, complete], index) => {
+                              const selected = index === sel;
+                              const accent = complete ? C.green : index === activeIndex ? ETSY : C.border;
+                              return <button key={label} onClick={() => setStepSel(s => ({ ...s, [order.id]: index }))} style={{ textAlign: "left", cursor: "pointer", fontFamily: "inherit", minWidth: 0, padding: "10px 11px", borderRadius: 10, background: selected ? C.surface : complete ? C.greenBg : C.bg, border: `1.5px solid ${selected ? accent : complete ? C.green + "66" : C.border}`, boxShadow: selected ? `0 0 0 3px ${accent}22` : "none", opacity: complete || selected || index === activeIndex ? 1 : .62, transition: "box-shadow .15s, border-color .15s" }}>
+                                <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+                                  <span style={{ width: 22, height: 22, flexShrink: 0, display: "grid", placeItems: "center", borderRadius: "50%", background: complete ? C.green : index === activeIndex ? ETSY : C.card, color: complete || index === activeIndex ? "#fff" : C.inkFaint, fontSize: 11, fontWeight: 900 }}>{complete ? "✓" : index + 1}</span>
+                                  <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 12.5, fontWeight: 850, color: C.ink }}>{label}</span>
+                                </div>
+                                <div style={{ marginTop: 6, fontSize: 10.5, color: C.inkMid, lineHeight: 1.3 }}>{note}</div>
+                              </button>;
+                            })}
+                          </div>
+                        </div>;
+                      })()
+                    )}
+                    {!cancelled && isStoreOrder(order) && selStep === 0 && (() => {
                       const d = trackingDraft(order);
                       const inp = { ...FI(), width: "100%", fontSize: 13, padding: "8px 10px", marginTop: 4 };
                       const lbl = { fontSize: 11, fontWeight: 800, color: C.inkMid, minWidth: 150, flex: 1 };
@@ -6756,48 +6801,6 @@ const defaultNgDraft = o => ({ qty: String(o._ngAllocatedQty || o._ngDeductedQty
                         </div>
                       );
                     })()}
-                    {!cancelled && isFulfilOrder(order) && (
-                      (() => {
-                        const ETSY = shipMeta(order).color;
-                        const stages = [
-                          [`Ship on ${shipMeta(order).name}`, "Send carrier + tracking", shipped],
-                          ["Allocate stock", "Choose item & quantity", !!order.linked_stock_id],
-                          ["Sales invoice", orderChannel(order) ? `Invoice the ${orderChannel(order)} buyer` : "Invoice the buyer", !!order._atInvoiceNo],
-                          ["NG invoice", "Record stock at cost", !!order._ngInvoiceNo],
-                        ];
-                        const firstOpen = stages.findIndex(stage => !stage[2]);
-                        const activeIndex = firstOpen === -1 ? stages.length - 1 : firstOpen;
-                        const doneCount = stages.filter(stage => stage[2]).length;
-                        const allDone = doneCount === stages.length;
-                        const sel = stepSel[order.id] != null ? stepSel[order.id] : activeIndex;
-                        const pct = Math.round((doneCount / stages.length) * 100);
-                        return <div style={{ marginBottom: 14 }}>
-                          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
-                            <span style={{ fontSize: 10, fontWeight: 800, textTransform: "uppercase", letterSpacing: .7, color: C.inkFaint }}>Fulfilment</span>
-                            <span style={{ fontSize: 11, fontWeight: 850, color: allDone ? C.green : C.inkMid }}>{allDone ? "✓ Complete" : `${doneCount} of ${stages.length} done`}</span>
-                          </div>
-                          {/* segmented progress bar */}
-                          <div style={{ display: "grid", gridTemplateColumns: `repeat(${stages.length}, 1fr)`, gap: 4, marginBottom: 12 }}>
-                            {stages.map(([label], index) => (
-                              <div key={label} style={{ height: 6, borderRadius: 4, background: stages[index][2] ? C.green : index === activeIndex && !allDone ? ETSY : C.border, opacity: stages[index][2] || (index === activeIndex && !allDone) ? 1 : .5, transition: "background .2s" }} />
-                            ))}
-                          </div>
-                          <div style={{ display: "grid", gridTemplateColumns: mob() ? "1fr 1fr" : "repeat(4, minmax(0, 1fr))", gap: 8 }}>
-                            {stages.map(([label, note, complete], index) => {
-                              const selected = index === sel;
-                              const accent = complete ? C.green : index === activeIndex ? ETSY : C.border;
-                              return <button key={label} onClick={() => setStepSel(s => ({ ...s, [order.id]: index }))} style={{ textAlign: "left", cursor: "pointer", fontFamily: "inherit", minWidth: 0, padding: "10px 11px", borderRadius: 10, background: selected ? C.surface : complete ? C.greenBg : C.bg, border: `1.5px solid ${selected ? accent : complete ? C.green + "66" : C.border}`, boxShadow: selected ? `0 0 0 3px ${accent}22` : "none", opacity: complete || selected || index === activeIndex ? 1 : .62, transition: "box-shadow .15s, border-color .15s" }}>
-                                <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
-                                  <span style={{ width: 22, height: 22, flexShrink: 0, display: "grid", placeItems: "center", borderRadius: "50%", background: complete ? C.green : index === activeIndex ? ETSY : C.card, color: complete || index === activeIndex ? "#fff" : C.inkFaint, fontSize: 11, fontWeight: 900 }}>{complete ? "✓" : index + 1}</span>
-                                  <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 12.5, fontWeight: 850, color: C.ink }}>{label}</span>
-                                </div>
-                                <div style={{ marginTop: 6, fontSize: 10.5, color: C.inkMid, lineHeight: 1.3 }}>{note}</div>
-                              </button>;
-                            })}
-                          </div>
-                        </div>;
-                      })()
-                    )}
                     {!cancelled && order.platform === "store" && <div style={{ marginBottom: 12 }}>{renderDelist(order)}</div>}
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
                       {!cancelled ? <button onClick={() => cancelOrder(order)} style={{ border: "none", background: "transparent", color: C.red, fontSize: 11, fontWeight: 800, cursor: "pointer", padding: 0 }}>Cancel order</button> : <span />}
