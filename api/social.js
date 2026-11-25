@@ -1089,9 +1089,14 @@ async function runAutopilot() {
         if ((k === "tiktok" || k === "youtube") && !vid) continue;
         if (k === "pinterest" && vid) continue;
         const caption = m.caption || "";
-        const images = vid ? [] : m.media_type === "CAROUSEL_ALBUM" ? (m.children?.data || []).filter(c => c.media_type === "IMAGE").map(c => c.media_url) : [m.media_url];
+        let images = vid ? [] : m.media_type === "CAROUSEL_ALBUM" ? (m.children?.data || []).filter(c => c.media_type === "IMAGE").map(c => c.media_url) : [m.media_url];
+        // A Reel with licensed music comes without its video file: the Page gets its cover and a link to the Reel instead.
+        const coverOnly = vid && !m.media_url;
+        if (coverOnly && k !== "facebook") continue;
+        if (coverOnly) images = m.thumbnail_url ? [m.thumbnail_url] : [];
+        if (k === "facebook" && !images.length && !(vid && m.media_url)) continue; // never a bare text-and-link post
         try {
-          const out = await POST[k]({ text: k === "x" ? caption.slice(0, 270) : caption, title: caption.split("\n")[0].slice(0, 90), images, video: vid ? m.media_url : "", mode: k === "tiktok" ? "draft" : "", link: "https://eartheditions.co" });
+          const out = await POST[k]({ text: k === "x" ? caption.slice(0, 270) : coverOnly ? `${caption}\n\nWatch the Reel: ${m.permalink}` : caption, title: caption.split("\n")[0].slice(0, 90), images, video: vid && !coverOnly ? m.media_url : "", mode: k === "tiktok" ? "draft" : "", link: "https://eartheditions.co" });
           await addLog({ platform: k, source: `ig:${m.id}`, title: caption.split("\n")[0].slice(0, 80), url: out.url || "", note: `autopilot${out.note ? ` · ${out.note}` : ""}` });
           done.push(`${k}: Instagram ${m.id}`);
         } catch (e) { await addLog({ platform: k, source: `ig:${m.id}`, title: caption.split("\n")[0].slice(0, 80), note: `autopilot failed: ${e.message}` }); }
