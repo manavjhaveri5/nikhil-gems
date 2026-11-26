@@ -66,10 +66,19 @@ async function readLog() {
   if (old && typeof old === "object" && !out.some(e => e.legacy)) for (const [id, e] of Object.entries(old)) out.push({ legacy: true, source: `ig:${id}`, platform: "tiktok", ...e });
   return out;
 }
+/* Added in one step on the database: stories posting side by side (several
+   pieces going live together) each read the log and wrote it back, and the
+   last one wrote over the others. Trimmed back to 500 now and then. */
 async function addLog(entry) {
-  const log = (await appData(LOG_KEY)) || [];
   const e = { id: crypto.randomUUID(), at: new Date().toISOString(), ...entry };
-  await sb().from("app_data").upsert({ key: LOG_KEY, value: [e, ...log].slice(0, 500) });
+  const { error } = await sb().rpc("app_data_upsert_item", { p_key: LOG_KEY, p_item: e, p_prepend: true });
+  if (error) {
+    const log = (await appData(LOG_KEY)) || [];
+    await sb().from("app_data").upsert({ key: LOG_KEY, value: [e, ...log].slice(0, 500) });
+  } else if (Math.random() < 0.05) {
+    const log = (await appData(LOG_KEY)) || [];
+    if (log.length > 600) await sb().from("app_data").upsert({ key: LOG_KEY, value: log.slice(0, 500) });
+  }
   return e;
 }
 
@@ -328,14 +337,22 @@ async function postInstagram({ text, images = [], video, story = false, account 
     creation = (await g(`${user}/media`, { media_type: "CAROUSEL", children: kids.join(","), caption: text })).id;
   } else if (images[0]) creation = (await g(`${user}/media`, { image_url: images[0], caption: text })).id;
   else fail(400, "Instagram needs a photo or video");
-  // A video is processed before it can go up.
-  for (let i = 0; video && i < 40; i++) {
+  /* Instagram processes what it is sent before it can go up — a video for a
+     minute or two, a photo for a few seconds. Publishing a photo story the
+     moment it was sent was refused as "not ready" now and then, more often
+     with several pieces going live together: four Mesolites, two stories
+     (26 Nov 2026). Every kind is waited on, and the publish asked again. */
+  for (let i = 0; i < (video ? 40 : 12); i++) {
     const s = await json(await fetch(`${G}/${creation}?fields=status_code&access_token=${encodeURIComponent(t.access_token)}`));
     if (s.status_code === "FINISHED") break;
-    if (s.status_code === "ERROR") fail(502, "Instagram couldn't process the video");
-    await wait(5000);
+    if (s.status_code === "ERROR") fail(502, `Instagram couldn't process the ${video ? "video" : "photo"}`);
+    await wait(video ? 5000 : 2500);
   }
-  const pub = await g(`${user}/media_publish`, { creation_id: creation });
+  let pub;
+  for (let i = 1; ; i++) {
+    try { pub = await g(`${user}/media_publish`, { creation_id: creation }); break; }
+    catch (e) { if (i >= 4 || !/not ready|not available|try again|unexpected error|temporar/i.test(e.message)) throw e; await wait(5000 * i); }
+  }
   if (story) return { url: `https://www.instagram.com/stories/${(t.name || "@eartheditions_").slice(1)}/`, note: "Story is up for the next 24 hours", id: pub.id };
   const link = await json(await fetch(`${G}/${pub.id}?fields=permalink&access_token=${encodeURIComponent(t.access_token)}`));
   return { url: link.permalink || "" };
@@ -1065,10 +1082,18 @@ async function runAutopilot() {
   if (auto.stories.on && time() && await connected("instagram")) {
     const since = Date.parse(auto.stories.since || "") || Date.now();
     const storyDone = await storiesDone();
+    const storyUp = new Set(), storyFails = new Map();
+    for (const e of log) {
+      const id = /^story:(.+)$/.exec(e.source || "")?.[1];
+      if (!id) continue;
+      if (/^story \(/.test(e.note || "")) storyUp.add(id);
+      else if (/^story failed/.test(e.note || "")) storyFails.set(id, (storyFails.get(id) || 0) + 1);
+    }
     const ready = ((await appData("ng-listings-v1")) || [])
       .map(l => ({ l, at: storeLiveAt(l) }))
       .filter(({ l, at }) => l.type === "unique" && !l.deleted && at > since && Date.now() - at >= (+auto.stories.afterHours || 0) * 36e5
-        && !posted.has(`story:${l.id}|instagram`) && !storyDone.has(`listed:${l.id}`))
+        // Only a story that went up counts: a failed one is tried again, three times at most.
+        && !storyUp.has(l.id) && (storyFails.get(l.id) || 0) < 3 && !storyDone.has(`listed:${l.id}`))
       .sort((a, b) => a.at - b.at);
     for (const { l } of ready.slice(0, 3)) {
       if (!time()) break;
