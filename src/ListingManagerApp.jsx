@@ -5239,6 +5239,8 @@ const defaultNgDraft = o => ({ qty: String(o._ngAllocatedQty || o._ngDeductedQty
   const isAtyahOrder  = o => o.platform === "shopify_aty";
   const isEbayOrder   = o => o.platform === "ebay" || String(o.order_number || "").startsWith("EBAY-");
   const isEeStoreOrder = o => o.platform === "store";
+  // eartheditions.co sales are billed by Earth Editions (USD), not Atyahara.
+  const salesInvNo = o => isEeStoreOrder(o) ? o._eeInvoiceNo : o._atInvoiceNo;
   const isFulfilOrder = o => isEtsyOrder(o) || isAtyahOrder(o) || isEbayOrder(o) || isEeStoreOrder(o);
   // Marketplace label used on invoices and buyer records ("… via Etsy" / "… via eBay").
   const orderChannel  = o => isEtsyOrder(o) ? "Etsy" : isEbayOrder(o) ? "eBay" : isEeStoreOrder(o) ? "eartheditions.co" : "";
@@ -5576,6 +5578,7 @@ const defaultNgDraft = o => ({ qty: String(o._ngAllocatedQty || o._ngDeductedQty
      comes down. Nothing is removed automatically: this lists where it's live,
      and removes what's ticked when approved. */
   const [delistPick, setDelistPick] = useState({});
+  const [eeInvBusy, setEeInvBusy] = useState({});
   const [delistBusy, setDelistBusy] = useState({});
   const soldOnKey = o => o.platform === "store" ? "store" : isEtsyOrder(o) ? (o.etsy_shop === "earth" ? "etsy_ee" : "etsy") : isEbayOrder(o) ? "ebay" : isAtyahOrder(o) ? "shopify_aty" : o.platform || "";
   const findOrderListing = o => {
@@ -6146,7 +6149,7 @@ const defaultNgDraft = o => ({ qty: String(o._ngAllocatedQty || o._ngDeductedQty
   const groupSummary = g => {
     const first = g.orders[0] || {};
     const total = g.orders.reduce((s, o) => s + (isCancelled(o) ? 0 : +o.sale_price || 0), 0);
-    const stepsDone = o => [isShipped(o), !!o.linked_stock_id, !!o._atInvoiceNo, !!o._ngInvoiceNo].filter(Boolean).length;
+    const stepsDone = o => [isShipped(o), !!o.linked_stock_id, !!salesInvNo(o), !!o._ngInvoiceNo].filter(Boolean).length;
     return {
       buyer: first.buyer_name || "—",
       date: first.date || first.created_at || "",
@@ -6629,7 +6632,7 @@ const defaultNgDraft = o => ({ qty: String(o._ngAllocatedQty || o._ngDeductedQty
             const status = cancelled ? "cancelled" : shipped ? "shipped" : "unshipped";
             // Fulfilment step the panels show. Auto-advances to the first incomplete step,
             // but the stepper lets the user click any step to open it (nothing is blocked).
-            const etsyDone = [shipped, !!order.linked_stock_id, !!order._atInvoiceNo, !!order._ngInvoiceNo];
+            const etsyDone = [shipped, !!order.linked_stock_id, !!salesInvNo(order), !!order._ngInvoiceNo];
             const etsyFirstOpen = etsyDone.findIndex(d => !d);
             const selStep = stepSel[order.id] != null ? stepSel[order.id] : (etsyFirstOpen === -1 ? 3 : etsyFirstOpen);
             const addr = addressLines(order);
@@ -6677,7 +6680,7 @@ const defaultNgDraft = o => ({ qty: String(o._ngAllocatedQty || o._ngDeductedQty
                       const steps = [
                         ["🚚", `Shipped on ${shipMeta(order).name}`, shipped],
                         ["📦", "Stock allocated", !!order.linked_stock_id],
-                        ["🧾", "Sales invoice", !!order._atInvoiceNo],
+                        ["🧾", "Sales invoice", !!salesInvNo(order)],
                         ["🏷️", "NG invoice", !!order._ngInvoiceNo],
                       ];
                       const doneN = steps.filter(s => s[2]).length;
@@ -6719,7 +6722,7 @@ const defaultNgDraft = o => ({ qty: String(o._ngAllocatedQty || o._ngDeductedQty
                         const stages = [
                           [`Ship on ${shipMeta(order).name}`, "Send carrier + tracking", shipped],
                           ["Allocate stock", "Choose item & quantity", !!order.linked_stock_id],
-                          ["Sales invoice", orderChannel(order) ? `Invoice the ${orderChannel(order)} buyer` : "Invoice the buyer", !!order._atInvoiceNo],
+                          ["Sales invoice", isEeStoreOrder(order) ? "Earth Editions invoice (USD)" : orderChannel(order) ? `Invoice the ${orderChannel(order)} buyer` : "Invoice the buyer", !!salesInvNo(order)],
                           ["NG invoice", "Record stock at cost", !!order._ngInvoiceNo],
                         ];
                         const firstOpen = stages.findIndex(stage => !stage[2]);
@@ -6792,15 +6795,6 @@ const defaultNgDraft = o => ({ qty: String(o._ngAllocatedQty || o._ngDeductedQty
                               style={{ background: C.ink, color: "#fff", border: "none", borderRadius: 8, padding: "10px 16px", fontSize: 12.5, fontWeight: 850, cursor: d.loading ? "wait" : "pointer", opacity: d.loading ? .7 : 1, whiteSpace: "nowrap" }}>
                               {d.loading ? "Sending…" : done ? "Update & re-email" : "Ship & email buyer"}
                             </button>
-                          </div>
-                          <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 10, flexWrap: "wrap" }}>
-                            <button onClick={async () => {
-                              try {
-                                const { invoice, existed } = await createEeInvoiceFromOrder(String(order.platform_order_id || "").trim());
-                                showToast?.(existed ? `${invoice.invNo} already exists — opening it` : `Earth Editions invoice ${invoice.invNo} created`);
-                                onOpenInvoice?.({ company: "ee", id: invoice.id, invNo: invoice.invNo });
-                              } catch (e) { showToast?.("⚠ " + (e.message || "Couldn't make the invoice")); }
-                            }} style={{ background: C.surface, color: C.ink, border: `1px solid ${C.border}`, borderRadius: 8, padding: "8px 12px", fontSize: 12, fontWeight: 800, cursor: "pointer", whiteSpace: "nowrap" }}>📄 Create invoice (Earth Editions, USD)</button>
                           </div>
                           {d.error && <div style={{ marginTop: 10, fontSize: 12, color: C.red, background: C.redBg, border: `1px solid ${C.red}30`, borderRadius: 7, padding: "8px 10px" }}>{d.error}</div>}
                           {d.success && <div style={{ marginTop: 10, fontSize: 12, color: C.green, background: C.greenBg, border: `1px solid ${C.green}30`, borderRadius: 7, padding: "8px 10px" }}>✓ {d.success}</div>}
@@ -7135,7 +7129,38 @@ const defaultNgDraft = o => ({ qty: String(o._ngAllocatedQty || o._ngDeductedQty
                         {renderDelist(order)}
                       </div>
                     )}
-                    {!cancelled && isFulfilOrder(order) && selStep === 2 && (() => {
+                    {!cancelled && isEeStoreOrder(order) && selStep === 2 && (() => {
+                      const no = String(order.platform_order_id || "").trim();
+                      const st = eeInvBusy[order.id] || {};
+                      const make = async () => {
+                        setEeInvBusy(s => ({ ...s, [order.id]: { loading: true } }));
+                        try {
+                          const { invoice, existed } = await createEeInvoiceFromOrder(no);
+                          for (const row of (orders || []).filter(o => isEeStoreOrder(o) && String(o.platform_order_id || "") === no)) await patchOrder(row, { _eeInvoiceNo: invoice.invNo, _eeInvoiceId: invoice.id, _eeInvoicedAt: now() });
+                          setEeInvBusy(s => ({ ...s, [order.id]: { ok: `${existed ? "Linked" : "Created"} ${invoice.invNo}` } }));
+                        } catch (e) { setEeInvBusy(s => ({ ...s, [order.id]: { error: e.message || "Couldn't make the invoice" } })); }
+                      };
+                      const done = !!order._eeInvoiceNo;
+                      const b = (bg, fg, bd) => ({ background: bg, color: fg, border: bd ? `1px solid ${C.border}` : "none", borderRadius: 8, padding: "8px 13px", fontSize: 12, fontWeight: 850, cursor: "pointer", whiteSpace: "nowrap" });
+                      return (
+                        <div style={{ background: C.surface, border: `1.5px solid ${done ? C.green : shipMeta(order).color}`, borderLeft: `4px solid ${done ? C.green : shipMeta(order).color}`, borderRadius: 10, padding: 14, marginBottom: 10 }}>
+                          <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "flex-start" }}>
+                            <div style={{ minWidth: 0 }}>
+                              <div style={{ fontSize: 15, fontWeight: 850, color: C.ink }}>{done ? "Earth Editions invoice made" : "Create the Earth Editions invoice"}</div>
+                              <div style={{ fontSize: 12, color: C.inkMid, marginTop: 3, lineHeight: 1.4 }}>{done ? `${order._eeInvoiceNo} bills ${order.buyer_name || "the buyer"} for ${no}, in ${order.currency || "USD"}.` : `eartheditions.co sales are billed by Earth Editions, in ${order.currency || "USD"}, straight from the store order ${no}: items, shipping and discount as the buyer paid.`}</div>
+                            </div>
+                            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                              {done && <button onClick={() => onOpenInvoice?.({ company: "ee", id: order._eeInvoiceId || `ee-${no}`, invNo: order._eeInvoiceNo })} style={b(C.surface, C.ink, true)}>Open invoice</button>}
+                              {!done && <button onClick={make} disabled={!!st.loading} style={{ ...b(C.green, "#fff"), cursor: st.loading ? "wait" : "pointer", opacity: st.loading ? .7 : 1 }}>{st.loading ? "Creating…" : "📄 Create invoice (Earth Editions, USD)"}</button>}
+                            </div>
+                          </div>
+                          {done && <div style={{ marginTop: 8, fontSize: 11, color: C.green, fontWeight: 700 }}>Linked to {order._eeInvoiceNo} · <button onClick={() => patchOrder(order, { _eeInvoiceNo: "", _eeInvoiceId: "", _eeInvoicedAt: "" })} style={{ border: "none", background: "transparent", color: C.inkMid, fontSize: 11, cursor: "pointer", textDecoration: "underline", padding: 0 }}>unlink</button></div>}
+                          {st.error && <div style={{ marginTop: 10, fontSize: 12, color: C.red, background: C.redBg, borderRadius: 7, padding: "8px 10px" }}>{st.error}</div>}
+                          {st.ok && <div style={{ marginTop: 10, fontSize: 12, color: C.green, background: C.greenBg, borderRadius: 7, padding: "8px 10px" }}>✓ {st.ok}</div>}
+                        </div>
+                      );
+                    })()}
+                    {!cancelled && isFulfilOrder(order) && !isEeStoreOrder(order) && selStep === 2 && (() => {
                       const invFy = fiscalYearFull(orderDate(order));
                       const invNumVal = invNoDraft[order.id] != null ? invNoDraft[order.id] : String(maxAtyaharaInvoiceNo(atInvoices, orderDate(order)) + 1);
                       const composedInvNo = `ATY-${String(invNumVal).trim()}-${invFy}`;
@@ -7336,7 +7361,7 @@ const defaultNgDraft = o => ({ qty: String(o._ngAllocatedQty || o._ngDeductedQty
                       </div>
                       );
                     })()}
-                    {!cancelled && isFulfilOrder(order) && order._ngInvoiceNo && <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "13px 16px", borderRadius: 10, background: C.greenBg, border: `1.5px solid ${C.green}`, color: C.green, fontSize: 13, fontWeight: 800, marginBottom: 10 }}><span style={{ fontSize: 18, lineHeight: 1 }}>✓</span><span>Fulfilment complete · {shipMeta(order).done} · {order._atInvoiceNo || "Atyahara invoice"} · {order._ngInvoiceNo}</span></div>}
+                    {!cancelled && isFulfilOrder(order) && order._ngInvoiceNo && <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "13px 16px", borderRadius: 10, background: C.greenBg, border: `1.5px solid ${C.green}`, color: C.green, fontSize: 13, fontWeight: 800, marginBottom: 10 }}><span style={{ fontSize: 18, lineHeight: 1 }}>✓</span><span>Fulfilment complete · {shipMeta(order).done} · {salesInvNo(order) || "Sales invoice"} · {order._ngInvoiceNo}</span></div>}
                     {detailsOpen[order.id] && (() => {
                       const earnings = deriveEtsyEarnings(order);
                       return <div style={{ display: "grid", gridTemplateColumns: mob() ? "1fr 1fr" : "repeat(4,1fr)", gap: 10 }}>
