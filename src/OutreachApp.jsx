@@ -69,15 +69,14 @@ function Lead({ l, onSave, toast, today, open: open0 = false, picked, onPick }) 
   const markFollowup = () => { const n = (l.followups_sent || 0) + 1; const more = (l.followups || []).length > n;
     mark("followed_up", { followups_sent: n, next_followup: more ? addDays(today, 6) : null }, `followup ${n}`, l.sent_via || ""); };
   const email = l.email, ig = l.instagram;
-  // They replied "sign me up": on to Omnisend as a trade prospect (not "trade"/"approved", which are
-  // approved buyers who see prices), and no more cold follow-ups.
+  // They replied "sign me up": on to our Gmail list as a trade prospect (not "trade"/"approved", which are
+  // approved buyers who see prices), and no more cold follow-ups. Server: lib/outreach.js outreachJoinList.
   const addToList = async x => {
     try {
-      const r = await fetch("/api/omnisend", { method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "contact_tag", email: x.email, addTags: ["trade-prospect", "wholesale-outreach", `country-${String(x.country || "").toLowerCase()}`], createTags: ["trade-prospect"] }) });
+      const r = await fetch("/api/mail", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "gmail_outreach_join", id: x.id }) });
       const d = await r.json().catch(() => ({}));
-      if (!r.ok) throw new Error(d.error || `Omnisend ${r.status}`);
-      await onSave({ ...x, stage: "list", on_list: true, next_followup: null, history: [...(x.history || []), { day: today, what: "added to mailing list", via: "omnisend" }] });
+      if (!r.ok) throw new Error(d.error || `error ${r.status}`);
+      await onSave(d.lead);
       toast("Added to the mailing list");
     } catch (e) { toast(`Couldn't add: ${e.message}`); }
   };
@@ -199,7 +198,7 @@ export default function OutreachApp({ onHome }) {
   const go = t => { setTab(t); try { localStorage.setItem("outreach-tab", t); } catch {} };
   const refresh = () => load().then(setLeads).catch(e => setErr(e.message));
   // Opening the page reads Gmail for replies (at most every 10 minutes, server-side): sign-ups go onto
-  // Omnisend, "no thanks" stops for good, bounces are marked. Then the list reloads if anything changed.
+  // our Gmail list, "no thanks" stops for good, bounces are marked. Then the list reloads if anything changed.
   const [scan, setScan] = useState(null);
   useEffect(() => {
     refresh();

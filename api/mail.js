@@ -1,6 +1,6 @@
 import { requireUser, adminClient, cronKeyOk, hasStoreSecret } from "../lib/auth.js";
 import { runInboxScan, SCAN_KEY } from "../lib/inbox-scan.js";
-import { outreachSend, outreachCheck, outreachCounts, outreachScan, outreachTick, autoStatus, setAutoSettings } from "../lib/outreach.js";
+import { outreachSend, outreachCheck, outreachCounts, outreachScan, outreachTick, autoStatus, setAutoSettings, outreachJoinList } from "../lib/outreach.js";
 import { tradeApproved, checkoutFollowup, orderShipped } from "../lib/mailTemplates.js";
 import * as list from "../lib/mailList.js";
 import * as weekly from "../lib/weekly.js";
@@ -162,6 +162,7 @@ async function gmail(req, res) {
     if (b.action === "gmail_outreach_send") return res.json(await outreachSend({ bridge: call, id: String(b.id || "") }));
     if (b.action === "gmail_outreach_check") return res.json(await outreachCheck({ bridge: call, id: String(b.id || "") }));
     if (b.action === "gmail_outreach_counts") return res.json(await outreachCounts());
+    if (b.action === "gmail_outreach_join") return res.json(await outreachJoinList({ id: String(b.id || ""), by: req.user?.email || "" }));
     if (b.action === "gmail_outreach_auto") return res.json(await autoStatus());
     if (b.action === "gmail_outreach_auto_set") return res.json(await setAutoSettings(b.settings || {}, req.user?.email || ""));
     if (b.action === "gmail_outreach_auto_run") return res.json(await outreachTick({ bridge: call, budgetMs: 200_000 }));
