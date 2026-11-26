@@ -35,6 +35,9 @@ import { TradeProductsPanel, publishListingToTrade, hideTradeProduct, refreshTra
 import { StoreProductsPanel, publishListingToStore, hideStoreProduct, showStoreProduct, markStoreSold, markStoreRefreshed, loadStoreFacts, storeSettings, loadStoreProduct, storePriceFor, listStoreProducts, linkStoreProduct } from "./StoreApp.jsx";
 import ListingGrid from "./ListingGrid.jsx";
 import ListSteps from "./ListSteps.jsx";
+import { AtyStockStep, linkOrderToCategory } from "./AtyStock.jsx";
+import { requestAtyStockRebuild } from "./atyStockSync.js";
+import { makeCategorizer } from "./atyStock.js";
 import RenewalQueue from "./RenewalQueue.jsx";
 import EtsyQueuePanel, { enqueueEtsy, markQueueLive, chooseEtsyPublish, loadQueueSettings, queuesOnEtsy, whenLabel, QUEUE_KEY as ETSY_QUEUE_KEY } from "./etsyQueue.jsx";
 import { eeBestSection } from "../lib/eeSections.js";
@@ -5123,6 +5126,24 @@ const defaultNgDraft = o => ({ qty: String(o._ngAllocatedQty || o._ngDeductedQty
       if (added || failed) showToast?.(`${added ? `Added ${added} item${added !== 1 ? "s" : ""} to ${target}` : "No items added"}${failed ? ` · ${failed} failed — see the item rows in step 2` : ""}`);
     } finally { setGroupBusy(s => ({ ...s, [g.key]: "" })); }
   };
+  // Step 4 for a whole receipt: link every item to its suggested stock category.
+  const groupLinkStock = async g => {
+    const members = g.orders.filter(o => !isCancelled(o) && usesAtyStock(o) && !o._atStockCatId);
+    setGroupBusy(s => ({ ...s, [g.key]: "stock" }));
+    try {
+      const customs = await loadK(CUSTOMS_DESCS_KEY).catch(() => null);
+      const categorize = makeCategorizer(Array.isArray(customs) && customs.length ? customs : DEFAULT_CUSTOMS_DESCS);
+      const invs = (await loadKFresh(AT_INVOICES_KEY).catch(() => atInvoices)) || atInvoices;
+      let ok = 0; const errs = [];
+      for (const m of members) {
+        const inv = invs.find(i => String(i.invNo || "") === String(m._atInvoiceNo || ""));
+        const line = (inv?.items || []).find(it => [m.id, m.etsy_transaction_id, m.platform_order_id].filter(Boolean).some(k => String(it.id || "").includes(String(k)))) || (inv?.items?.length === 1 ? inv.items[0] : null);
+        const desc = categorize(line || {}, { shape: m.listing_shape, title: m.listing_title }).desc;
+        try { await linkOrderToCategory({ order: m, invNo: m._atInvoiceNo, desc, patchOrder }); ok++; } catch (e) { errs.push(e.message); }
+      }
+      showToast?.(`${ok} item${ok !== 1 ? "s" : ""} taken out of stock${errs.length ? ` · ${errs.length} need linking one by one: ${errs[0]}` : ""}`);
+    } finally { setGroupBusy(s => ({ ...s, [g.key]: "" })); }
+  };
   const saveNgInvoiceEdits = async order => {
     const stockItem = stock.find(s => s.id === order.linked_stock_id || s.id === order._ngStockId || s.id === order._ngAllocatedStockId);
     if (!stockItem) { updNg(order, { error: "Link a physical stock item first.", success: "" }); return; }
@@ -5241,6 +5262,12 @@ const defaultNgDraft = o => ({ qty: String(o._ngAllocatedQty || o._ngDeductedQty
   const isEeStoreOrder = o => o.platform === "store";
   // eartheditions.co sales are billed by Earth Editions (USD), not Atyahara.
   const salesInvNo = o => isEeStoreOrder(o) ? o._eeInvoiceNo : o._atInvoiceNo;
+  /* Step 4. Atyahara now buys from Nikhil Gems in bulk (Sir, 26 Nov 2026), so an
+     Atyahara sale no longer adds a line to an NG invoice: it is linked to a stock
+     category and comes out of Atyahara's accounting stock. Orders already on an NG
+     invoice keep it; Earth Editions store orders keep the NG step. */
+  const usesAtyStock = o => !isEeStoreOrder(o) && !o._ngInvoiceNo;
+  const stockStepDone = o => !!o._ngInvoiceNo || (usesAtyStock(o) && !!o._atStockCatId);
   const isFulfilOrder = o => isEtsyOrder(o) || isAtyahOrder(o) || isEbayOrder(o) || isEeStoreOrder(o);
   // Marketplace label used on invoices and buyer records ("… via Etsy" / "… via eBay").
   const orderChannel  = o => isEtsyOrder(o) ? "Etsy" : isEbayOrder(o) ? "eBay" : isEeStoreOrder(o) ? "eartheditions.co" : "";
@@ -5550,6 +5577,7 @@ const defaultNgDraft = o => ({ qty: String(o._ngAllocatedQty || o._ngDeductedQty
       // The invoice covers every line of the receipt, so mark step 3 done on all
       // sibling rows — one click completes the sales invoice for the whole order.
       for (const row of sourceRows) await patchOrder(row, { _atInvoiceNo: invoice.invNo, _atInvoicedAt: now(), _atProductDesc: productDesc });
+      requestAtyStockRebuild();
       // Refresh the local invoice list so the next order's suggested number increments.
       loadKFresh(AT_INVOICES_KEY).then(d => Array.isArray(d) && setAtInvoices(d)).catch(() => {});
       // Persist AI-inferred shapes back onto the order rows so the Shape field fills in
@@ -6149,7 +6177,7 @@ const defaultNgDraft = o => ({ qty: String(o._ngAllocatedQty || o._ngDeductedQty
   const groupSummary = g => {
     const first = g.orders[0] || {};
     const total = g.orders.reduce((s, o) => s + (isCancelled(o) ? 0 : +o.sale_price || 0), 0);
-    const stepsDone = o => [isShipped(o), !!o.linked_stock_id, !!salesInvNo(o), !!o._ngInvoiceNo].filter(Boolean).length;
+    const stepsDone = o => [isShipped(o), !!o.linked_stock_id, !!salesInvNo(o), stockStepDone(o)].filter(Boolean).length;
     return {
       buyer: first.buyer_name || "—",
       date: first.date || first.created_at || "",
@@ -6504,7 +6532,7 @@ const defaultNgDraft = o => ({ qty: String(o._ngAllocatedQty || o._ngDeductedQty
               const g1 = members.length > 0 && members.every(isShipped);
               const g2 = members.length > 0 && members.every(m => m.linked_stock_id && groupAllocSaved(m));
               const g3 = members.length > 0 && members.every(m => m._atInvoiceNo);
-              const g4 = members.length > 0 && members.every(m => m._ngInvoiceNo);
+              const g4 = members.length > 0 && members.every(stockStepDone);
               const invState = invoiceState[receiptId] || {};
               const GE = "#F56400";
               const stageIcon = done => <span style={{ width: 22, height: 22, flexShrink: 0, display: "grid", placeItems: "center", borderRadius: "50%", background: done ? C.green : C.card, color: done ? "#fff" : C.inkFaint, fontSize: 11, fontWeight: 900, border: done ? "none" : `1px solid ${C.border}` }}>{done ? "✓" : "•"}</span>;
@@ -6610,7 +6638,17 @@ const defaultNgDraft = o => ({ qty: String(o._ngAllocatedQty || o._ngDeductedQty
                         ? <button onClick={() => onViewInvoicePdf?.({ company: "at", invNo: members[0]._atInvoiceNo, receiptId })} style={gGhost}>View PDF</button>
                         : <button disabled={!!invState.loading} onClick={() => createAtyaharaInvoiceForOrder(members[0])} style={gBtn(C.green, !!invState.loading)}>{invState.loading ? "Creating…" : "Create sales invoice"}</button>}
                     </div>
-                    {/* 4 · One NG (purchase) invoice */}
+                    {/* 4 · Stock category for each item (Atyahara buys in bulk now) */}
+                    {members.some(usesAtyStock) ? (
+                    <div style={gRow}>
+                      {stageIcon(g4)}
+                      <div style={{ minWidth: 0, flex: 1 }}>
+                        <div style={stageTitle}>4 · Take the items out of Atyahara stock</div>
+                        <div style={stageNote}>{g4 ? members.map(m => m._atStockCat || m._ngInvoiceNo).filter(Boolean).filter((x, i, a) => a.indexOf(x) === i).join(" · ") : g3 ? "Links each item to its stock category, suggested from the invoice. Change one from the item's own step 4." : "Create the sales invoice first."}</div>
+                      </div>
+                      {!g4 && <button disabled={busy === "stock" || !g3} onClick={() => groupLinkStock(g)} style={gBtn(C.green, busy === "stock" || !g3)}>{busy === "stock" ? "Linking…" : "Link all to stock"}</button>}
+                    </div>
+                    ) : (
                     <div style={gRow}>
                       {stageIcon(g4)}
                       <div style={{ minWidth: 0, flex: 1 }}>
@@ -6619,6 +6657,7 @@ const defaultNgDraft = o => ({ qty: String(o._ngAllocatedQty || o._ngDeductedQty
                       </div>
                       {!g4 && <button disabled={busy === "ng" || !g2} onClick={() => groupCreateNgInvoice(g)} style={gBtn(C.green, busy === "ng" || !g2)}>{busy === "ng" ? "Adding…" : "Add all to NG invoice"}</button>}
                     </div>
+                    )}
                   </div>
                 )}
                 </div>
@@ -6632,7 +6671,7 @@ const defaultNgDraft = o => ({ qty: String(o._ngAllocatedQty || o._ngDeductedQty
             const status = cancelled ? "cancelled" : shipped ? "shipped" : "unshipped";
             // Fulfilment step the panels show. Auto-advances to the first incomplete step,
             // but the stepper lets the user click any step to open it (nothing is blocked).
-            const etsyDone = [shipped, !!order.linked_stock_id, !!salesInvNo(order), !!order._ngInvoiceNo];
+            const etsyDone = [shipped, !!order.linked_stock_id, !!salesInvNo(order), stockStepDone(order)];
             const etsyFirstOpen = etsyDone.findIndex(d => !d);
             const selStep = stepSel[order.id] != null ? stepSel[order.id] : (etsyFirstOpen === -1 ? 3 : etsyFirstOpen);
             const addr = addressLines(order);
@@ -6681,7 +6720,7 @@ const defaultNgDraft = o => ({ qty: String(o._ngAllocatedQty || o._ngDeductedQty
                         ["🚚", `Shipped on ${shipMeta(order).name}`, shipped],
                         ["📦", "Stock allocated", !!order.linked_stock_id],
                         ["🧾", "Sales invoice", !!salesInvNo(order)],
-                        ["🏷️", "NG invoice", !!order._ngInvoiceNo],
+                        [usesAtyStock(order) ? "📒" : "🏷️", usesAtyStock(order) ? "Stock category" : "NG invoice", stockStepDone(order)],
                       ];
                       const doneN = steps.filter(s => s[2]).length;
                       return (
@@ -6723,7 +6762,7 @@ const defaultNgDraft = o => ({ qty: String(o._ngAllocatedQty || o._ngDeductedQty
                           [`Ship on ${shipMeta(order).name}`, "Send carrier + tracking", shipped],
                           ["Allocate stock", "Choose item & quantity", !!order.linked_stock_id],
                           ["Sales invoice", isEeStoreOrder(order) ? "Earth Editions invoice (USD)" : orderChannel(order) ? `Invoice the ${orderChannel(order)} buyer` : "Invoice the buyer", !!salesInvNo(order)],
-                          ["NG invoice", "Record stock at cost", !!order._ngInvoiceNo],
+                          usesAtyStock(order) ? ["Stock category", "Take it out of Atyahara stock", stockStepDone(order)] : ["NG invoice", "Record stock at cost", !!order._ngInvoiceNo],
                         ];
                         const firstOpen = stages.findIndex(stage => !stage[2]);
                         const activeIndex = firstOpen === -1 ? stages.length - 1 : firstOpen;
@@ -7252,7 +7291,10 @@ const defaultNgDraft = o => ({ qty: String(o._ngAllocatedQty || o._ngDeductedQty
                       </div>
                       );
                     })()}
-                    {!cancelled && isFulfilOrder(order) && selStep === 3 && (() => {
+                    {!cancelled && isFulfilOrder(order) && selStep === 3 && usesAtyStock(order) && (
+                      <AtyStockStep order={order} invNo={order._atInvoiceNo} invoice={atInvoiceForOrder(order)} patchOrder={patchOrder} showToast={showToast} />
+                    )}
+                    {!cancelled && isFulfilOrder(order) && selStep === 3 && !usesAtyStock(order) && (() => {
                       const targetNg = latestAtyaharaNgDraft(orderDate(order));
                       const priorNg = latestAnyAtyaharaNgDraft();
                       const monthChanged = !targetNg && priorNg && monthKey(priorNg.date || priorNg.createdAt) !== monthKey(orderDate(order));

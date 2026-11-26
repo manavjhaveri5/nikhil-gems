@@ -26,6 +26,9 @@ import { runningBalances, monthOf } from "./src/monthClose.js";
 import { invRemitLinks, withRemitLink, NG_REMIT_KEY } from "./src/remittances.js";
 import { nextLocation } from "./src/listingChannels.js";
 import MonthPicker from "./src/MonthPicker.jsx";
+import AtyStockView from "./src/AtyStock.jsx";
+import { requestAtyStockRebuild } from "./src/atyStockSync.js";
+import { isToAtyahara } from "./src/atyStock.js";
 import GmailFinder from "./src/GmailFinder.jsx";
 import { loadLearnMemory, recordDecision, matchLearned, matchRecurring, loadEmbMap, embedAndStore, backfillEmbeddings } from "./src/classifyLearner.js";
 const FinanceApp        = React.lazy(() => import("./src/FinanceApp.jsx"));
@@ -8725,7 +8728,7 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
             );
           })()}
           <div style={{display:"inline-flex",gap:2,background:"rgba(118,118,128,0.12)",borderRadius:10,padding:3,marginBottom:16,overflowX:mob?"auto":"visible",WebkitOverflowScrolling:"touch",scrollbarWidth:"none",flexShrink:0,width:mob?"100%":undefined,maxWidth:mob?"100%":"fit-content"}}>
-            {(()=>{const unlocatedCount=stock.filter(s=>!s.location||s.location==="").length;return[["physical","Physical Stock"],["by-stone","By Stone"],["by-shape","By Shape"],["bins","By Location"],["unlocated",`No Location${unlocatedCount>0?` (${unlocatedCount})`:""}`],["accounting","Accounting Stock"],["insights","Insights"]].map(([id,label])=>(
+            {(()=>{const unlocatedCount=stock.filter(s=>!s.location||s.location==="").length;return[["physical","Physical Stock"],["by-stone","By Stone"],["by-shape","By Shape"],["bins","By Location"],["unlocated",`No Location${unlocatedCount>0?` (${unlocatedCount})`:""}`],["accounting","Accounting Stock"],["atyahara","Atyahara Stock"],["insights","Insights"]].map(([id,label])=>(
               <button key={id} onClick={()=>setTab(id)} style={{background:tab===id?C.surface:"transparent",boxShadow:tab===id?"0 1px 3px rgba(0,0,0,0.10)":"none",color:tab===id?C.ink:(id==="unlocated"&&unlocatedCount>0?C.amber:C.inkMid),border:"none",borderRadius:8,padding:mob?"7px 13px":"6px 15px",cursor:"pointer",fontSize:mob?13:12,fontWeight:tab===id?600:400,transition:"all .15s",whiteSpace:"nowrap",flexShrink:0,minHeight:mob?40:undefined}}>{label}</button>
             ));})()}
           </div>
@@ -9531,6 +9534,7 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
               </div>
             );
           })()}
+          {tab==="atyahara"&&<AtyStockView showToast={showToast}/>}
           {tab==="insights"&&<StockInsights stock={stock} purchases={purchases}/>}
         </div>
       )}
@@ -10216,7 +10220,7 @@ function PurchasesApp({onHome,startView,startBillId,onBillIdConsumed,onGoToVendo
     const updated=[savedItem,...purchases.filter(p=>p.id!==item.id)];
     setPurchases(updated);
     // Update accounting stock if the bill is confirmed and the line checkbox is ticked.
-    if(shouldPostStock&&savedItem.trackAccStock!==false){
+    if(shouldPostStock&&savedItem.trackAccStock!==false&&!isAt){
       const newAccStock=[...accStock];
       (savedItem.items||[]).forEach(it=>{
         if(it.addToAccountingStock===false)return;
@@ -10233,7 +10237,7 @@ function PurchasesApp({onHome,startView,startBillId,onBillIdConsumed,onGoToVendo
     }
     setView("list");setExpandBill(null);setDraft(null);setFileData(null);
     showToast(savedItem.status==="pending"?"Bill saved as pending":`Bill saved${newPhysicalItems.length?` · ${newPhysicalItems.length} physical item${newPhysicalItems.length!==1?"s":""} added`:""}`);
-    try{await savePurchasesK(updated);logActivity({user:"Admin",action:"created",module:"purchases",label:`Purchase bill: ${savedItem.supplier||"vendor"} · ${savedItem.billNumber||savedItem.id.slice(0,6)}`,targetId:savedItem.id,targetMod:"purchases"});}catch(e){showToast("⚠ Saved locally — sync failed: "+e.message);}
+    try{await savePurchasesK(updated);if(isAt)requestAtyStockRebuild();logActivity({user:"Admin",action:"created",module:"purchases",label:`Purchase bill: ${savedItem.supplier||"vendor"} · ${savedItem.billNumber||savedItem.id.slice(0,6)}`,targetId:savedItem.id,targetMod:"purchases"});}catch(e){showToast("⚠ Saved locally — sync failed: "+e.message);}
     onBillSaved?.(savedItem);
   },[purchases,vendors,upsertVendor,accStock,stock,onBillSaved]);
 
@@ -12917,6 +12921,8 @@ function InvoicesApp({onHome,startDraft,startInvoiceId,onInvoiceIdConsumed,onPic
     return `${invPrefix}-${String(maxNo+1).padStart(2,"0")}/${yr}`;
   },[invoices,company]);
 
+  // Atyahara's stock book rebuilds from invoices: its own sales, and NG invoices billed to it.
+  const touchAtyStock=inv=>{if(company==="at"||(company==="ng"&&isToAtyahara(inv)))requestAtyStockRebuild();};
   const saveInvoice=async (inv,{navigateAway=true}={})=>{
     // A cancelled invoice is locked — reinstate it first (that also re-deducts stock).
     if(invCancelled(invoices.find(i=>i.id===inv.id))&&invCancelled(inv)){showToast("This invoice is cancelled — reinstate it to make changes");return;}
@@ -12992,11 +12998,12 @@ function InvoicesApp({onHome,startDraft,startInvoiceId,onInvoiceIdConsumed,onPic
         }
       }
     });
-    if(accChanged){setAccStock(newAccStock);await saveK(KEYS.accStock,newAccStock);}
+    if(accChanged&&company!=="at"){setAccStock(newAccStock);await saveK(KEYS.accStock,newAccStock);}
     const wasExisting=!!latestInv||invoices.some(i=>i.id===inv.id);
     const list=await upsertVersionedItemK(INV_KEYS.invoices,inv,{prepend:!wasExisting,user:"Admin"});
     const savedInv=list.find(i=>i.id===inv.id)||inv;
     setInvoices(list);
+    touchAtyStock(savedInv);
     setDraft(d=>d?.id===inv.id?savedInv:d);
     // Auto outward journal movement — synced to this invoice (Nikhil Gems only; the
     // Accounting Journal is NG-scoped). Any invoice line linked to physical or accounting
@@ -13092,7 +13099,7 @@ function InvoicesApp({onHome,startDraft,startInvoiceId,onInvoiceIdConsumed,onPic
     // Accounting stock: qty back on the shelf and this invoice's outward movements dropped (or re-added)
     const acctLinks=(inv.items||[]).filter(it=>it.acctStockId&&acctLinkQty(it));
     const hasOuts=accStock.some(s=>(s.outs||[]).some(o=>o.invId===inv.id));
-    if(acctLinks.length||hasOuts){
+    if((acctLinks.length||hasOuts)&&company!=="at"){
       let newAccStock=accStock.map(s=>(s.outs||[]).some(o=>o.invId===inv.id)?{...s,outs:(s.outs||[]).filter(o=>o.invId!==inv.id)}:s);
       acctLinks.forEach(it=>{
         const i=newAccStock.findIndex(s=>s.id===it.acctStockId);if(i<0)return;
@@ -13114,6 +13121,7 @@ function InvoicesApp({onHome,startDraft,startInvoiceId,onInvoiceIdConsumed,onPic
   const persistInvoice=async inv=>{
     const list=await upsertVersionedItemK(INV_KEYS.invoices,inv,{prepend:false,user:"Admin"});
     setInvoices(list);
+    touchAtyStock(inv);
     const saved=list.find(i=>i.id===inv.id)||inv;
     setDraft(d=>d?.id===inv.id?saved:d);
     return saved;
@@ -13157,6 +13165,7 @@ function InvoicesApp({onHome,startDraft,startInvoiceId,onInvoiceIdConsumed,onPic
     const inv=invoices.find(i=>i.id===id);
     const list=await deleteVersionedItemK(INV_KEYS.invoices,inv||id,{user:"Admin"});
     setInvoices(list);
+    if(inv)touchAtyStock(inv);
     if(inv){
       if(company==="at"||company==="ng"){
         try{
@@ -13190,7 +13199,7 @@ function InvoicesApp({onHome,startDraft,startInvoiceId,onInvoiceIdConsumed,onPic
       // Restore accounting stock quantities + remove this invoice's outward movements
       const acctLinks=stockAlreadyBack?[]:inv.items.filter(it=>it.acctStockId&&acctLinkQty(it));
       const hasOuts=accStock.some(s=>(s.outs||[]).some(o=>o.invId===id));
-      if(acctLinks.length>0||hasOuts){
+      if((acctLinks.length>0||hasOuts)&&company!=="at"){
         let newAccStock=[...accStock];
         acctLinks.forEach(it=>{const i=newAccStock.findIndex(s=>s.id===it.acctStockId);if(i>=0)newAccStock[i]={...newAccStock[i],qty:(+(newAccStock[i].qty)||0)+acctLinkQty(it)};});
         newAccStock=newAccStock.map(s=>(s.outs||[]).some(o=>o.invId===id)?{...s,outs:s.outs.filter(o=>o.invId!==id)}:s);
