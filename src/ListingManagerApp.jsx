@@ -21,6 +21,27 @@ const lmJson = async r => {
   try { return JSON.parse(text); }
   catch { return { ok: false, error: r.status === 504 || /timed out|timeout/i.test(text) ? "The server ran out of time talking to the platform — it may have gone through; check the listing there, then try again." : `The server didn't answer properly (${r.status}). Try again in a minute.` }; }
 };
+/* A publish is one long request (photos, video). On an iPad or phone it can die
+   with no answer at all — Safari's bare "Load failed": the signal drops, the
+   screen locks, or the seller switches to the Etsy tab to look at the draft
+   while it runs. The server finds a piece already on the platform by its id or
+   SKU, so asking again updates that listing rather than making a second one.
+   It is asked again once the page is back in view, up to three times. An
+   answer from the server — even an error — is never retried. */
+const isDropped = e => e instanceof TypeError || /load failed|failed to fetch|network ?error|network connection was lost/i.test(e?.message || "");
+const whenVisible = () => typeof document === "undefined" || document.visibilityState !== "hidden" ? Promise.resolve()
+  : new Promise(ok => { const on = () => { if (document.visibilityState !== "hidden") { document.removeEventListener("visibilitychange", on); ok(); } }; document.addEventListener("visibilitychange", on); });
+const fetchRetry = async (url, init, tries = 3) => {
+  for (let attempt = 1; ; attempt++) {
+    try { return await fetch(url, init); }
+    catch (e) {
+      if (!isDropped(e)) throw e;
+      if (attempt >= tries) throw new Error("The connection dropped while publishing (the screen locked, the signal went, or another tab was open). It may have gone through — check the listing there, then press it again: it updates the same listing, never makes another.");
+      await whenVisible();
+      await new Promise(ok => setTimeout(ok, 2000 * attempt));
+    }
+  }
+};
 import { recommendCarriers, costVerdict, normalizeCarrier } from "./shipping.js";
 /* Etsy category / section / shape tables — shared with the Telegram listing bot,
    which files its drafts under exactly the same taxonomy. */
@@ -11696,7 +11717,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
       const existingItemId = listing.platforms?.ebay?.item_id;
       // eBay has no drafts — creating the item puts it on sale — so only a publish makes one.
       if (syncOnly && !existingItemId) throw new Error(allowCreate ? "eBay has no drafts, so it isn't listed there from a save. Use Publish on eBay when you're ready." : "Skipped eBay sync: no existing eBay item ID");
-      const r = await fetch("/api/ebay?action=publish_listing", {
+      const r = await fetchRetry("/api/ebay?action=publish_listing", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           // eBay cuts titles at 80 characters; its own title comes first.
@@ -11755,7 +11776,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
       else if (pkey === "shopify_earth"){ action = "publish_shopify"; storeKey = "earth"; }
       else throw new Error(`Platform ${pkey} not supported`);
 
-      const r = await fetch("/api/listing-manager", {
+      const r = await fetchRetry("/api/listing-manager", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action, listing: await withShopifyCreds({ ...listing, sku: listingMarketplaceSku(listing) }, storeKey), store_key: storeKey, etsy_shop: etsyShop, sync_only: syncOnly || queueIt, allow_create: allowCreate || queueIt, force_photos: forcePhotos }),
       });
