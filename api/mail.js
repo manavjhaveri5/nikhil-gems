@@ -1,6 +1,6 @@
 import { requireUser, adminClient, cronKeyOk, hasStoreSecret } from "../lib/auth.js";
 import { runInboxScan, SCAN_KEY } from "../lib/inbox-scan.js";
-import { outreachSend, outreachCheck, outreachCounts, outreachScan } from "../lib/outreach.js";
+import { outreachSend, outreachCheck, outreachCounts, outreachScan, outreachTick, autoStatus, setAutoSettings } from "../lib/outreach.js";
 import { tradeApproved, checkoutFollowup, orderShipped } from "../lib/mailTemplates.js";
 import * as list from "../lib/mailList.js";
 import * as weekly from "../lib/weekly.js";
@@ -31,8 +31,12 @@ export default async function handler(req, res) {
   // eartheditions.co's own emails (order confirmation, password reset), sent from our Gmail.
   if (req.body?.action === "store_mail" && hasStoreSecret(req)) return storeMail(req, res);
   if (req.body?.action === "weekly_tick" && await cronKeyOk(req, "raj")) {
-    try { return res.json(await weekly.tick({ bridge: bridgeCall() })); }
-    catch (e) { console.error("weekly tick", e.message); return res.status(502).json({ error: e.message }); }
+    // The same 15-minute job also drives the outreach autopilot (lib/outreach.js outreachTick),
+    // with whatever time the weekly email left.
+    const t0 = Date.now(), bridge = bridgeCall(), out = {};
+    try { out.weekly = await weekly.tick({ bridge }); } catch (e) { console.error("weekly tick", e.message); out.weekly = { error: e.message }; }
+    try { out.outreach = await outreachTick({ bridge, budgetMs: Math.max(0, 280_000 - (Date.now() - t0)) }); } catch (e) { console.error("outreach tick", e.message); out.outreach = { error: e.message }; }
+    return res.status(out.weekly?.error && out.outreach?.error ? 502 : 200).json(out);
   }
   const user = await requireUser(req, res);
   if (!user) return;
@@ -158,6 +162,9 @@ async function gmail(req, res) {
     if (b.action === "gmail_outreach_send") return res.json(await outreachSend({ bridge: call, id: String(b.id || "") }));
     if (b.action === "gmail_outreach_check") return res.json(await outreachCheck({ bridge: call, id: String(b.id || "") }));
     if (b.action === "gmail_outreach_counts") return res.json(await outreachCounts());
+    if (b.action === "gmail_outreach_auto") return res.json(await autoStatus());
+    if (b.action === "gmail_outreach_auto_set") return res.json(await setAutoSettings(b.settings || {}, req.user?.email || ""));
+    if (b.action === "gmail_outreach_auto_run") return res.json(await outreachTick({ bridge: call, budgetMs: 200_000 }));
     if (b.action === "gmail_outreach_scan") return res.json(await outreachScan({ bridge: call, trigger: b.force ? "manual" : "page" }));
     // Campaigns from our own Gmail (lib/mailList.js).
     if (b.action === "gmail_list_summary") {

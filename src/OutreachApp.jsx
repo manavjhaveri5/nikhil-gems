@@ -149,6 +149,34 @@ function Lead({ l, onSave, toast, today, open: open0 = false, picked, onPick }) 
   </div>;
 }
 
+function AutoCard({ onSent }) {
+  // The autopilot (lib/outreach.js outreachTick) sends from the server every 15 minutes; this card only shows and switches it.
+  const [a, setA] = useState(null), [busy, setBusy] = useState(false);
+  const call = (action, extra = {}) => fetch("/api/mail", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action, ...extra }) }).then(r => r.json());
+  const load = () => call("gmail_outreach_auto").then(setA).catch(() => {});
+  useEffect(() => { load(); const t = setInterval(load, 60_000); return () => clearInterval(t); }, []);
+  if (!a?.settings) return null;
+  const on = a.settings.on, last = a.last || {}, c = a.counts || {};
+  const hm = iso => iso ? new Date(iso).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Kolkata" }) : "";
+  const sentToday = last.day === istDay() ? last.today || [] : [];
+  const toggle = async () => { setBusy(true); try { await call("gmail_outreach_auto_set", { settings: { on: !on } }); await load(); } finally { setBusy(false); } };
+  const runNow = async () => { setBusy(true); try { const r = await call("gmail_outreach_auto_run"); await load(); if (r.sent?.length) onSent?.(); } finally { setBusy(false); } };
+  return <div style={{ ...card, marginBottom: 12, background: on ? C.greenBg : C.surface }}>
+    <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+      <div style={{ fontWeight: 700, fontSize: 14, flex: 1, minWidth: 220 }}>{on ? "🤖 Autopilot is on" : "⏸ Autopilot is paused"}</div>
+      <button disabled={busy} onClick={runNow} style={btn()} title="Run one round now (still only shops in their working hours)">Send a round now</button>
+      <button disabled={busy} onClick={toggle} style={on ? btn() : btn(C.ink, "#fff")}>{on ? "Pause" : "Turn on"}</button>
+    </div>
+    <div style={{ ...sub, marginTop: 6 }}>
+      {on ? "Emails go out from the server every 15 minutes, a few at a time, with no need to keep this page open. " : "Nothing goes out by itself until it's turned on. "}
+      Follow-ups first, then new shops (Japan and Taiwan first until the show). Weekdays 9–5 in each shop's own country. Today: {c.first || 0}/{c.cap?.first || 20} new shops, {c.total || 0}/{c.cap?.total || 60} emails.
+      {last.checked_at ? ` Last checked ${hm(last.checked_at)}${last.waiting != null ? `, ${last.waiting} in working hours now` : ""}.` : ""}
+    </div>
+    {sentToday.length > 0 && <div style={{ ...sub, marginTop: 6 }}>Sent today: {sentToday.map(x => `${hm(x.at)} ${x.what}`).join(" · ")}</div>}
+    {(last.errors || []).length > 0 && <div style={{ ...sub, marginTop: 6, color: C.red || "#a33" }}>Last round problems: {last.errors.slice(0, 4).join(" · ")}</div>}
+  </div>;
+}
+
 function ScanNote({ s }) {
   const r = s.last || s;
   if (!r?.at) return null;
@@ -261,7 +289,7 @@ export default function OutreachApp({ onHome }) {
     {busy ? <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
       <div style={{ flex: 1, minWidth: 200, fontSize: 13 }}>
         <b>{run.done} of {run.n}</b> done · {run.sent} sent{run.skipped ? ` · ${run.skipped} skipped` : ""} · {run.wait ? `next in ${run.wait}s` : `now: ${run.now}`}
-        <div style={sub}>Keep this page open. Emails go one at a time from the ERP's Gmail, a little apart.</div>
+        <div style={sub}>Keep this page open until this batch is done (the autopilot doesn't need it). Emails go one at a time from the ERP's Gmail, a little apart.</div>
       </div>
       <button onClick={() => { stopRef.current = true; setRun(r => ({ ...r, stopping: true })); }} disabled={run.stopping} style={btn(C.redBg, C.red)}>{run.stopping ? "Stopping…" : "Stop"}</button>
     </div> : <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
@@ -299,8 +327,9 @@ export default function OutreachApp({ onHome }) {
     const pickE = fresh.filter(l => l.email && l.channel !== "instagram" && !NO_COLD_EMAIL.includes(l.country)).slice(0, Math.max(0, CAP.email - usedE));
         return shell(<>
       {kpis}
+      <AutoCard onSent={refresh} />
       {scan && !scan.error && <ScanNote s={scan} />}
-      <div style={{ ...sub, marginBottom: 14 }}>Today: {usedE}/{CAP.email} new shops emailed. Follow-ups don't count toward the 20. Staying under this limit keeps the mailbox out of spam filters. Only shops with an email address are listed: no Instagram DMs, and no Germany/Austria. Tick shops and press Send, or open one and send it yourself. Reply to anyone who answers within a day.</div>
+      <div style={{ ...sub, marginBottom: 14 }}>Today: {usedE}/{CAP.email} new shops emailed. Follow-ups don't count toward the 20. Staying under this limit keeps the mailbox out of spam filters. Only shops with an email address are listed: no Instagram DMs, and no Germany/Austria. The autopilot above sends these by itself; tick shops and press Send only to send one sooner. Reply to anyone who answers within a day.</div>
       <div style={{ fontFamily: SERIF, fontSize: 18, fontWeight: 700, margin: "0 0 10px" }}>Follow-ups due <span style={{ ...sub, fontFamily: FONT }}>{due.length}</span>{selAll(due.filter(l => canEmail(l, today)))}</div>
       <div style={{ display: "grid", gap: 10, marginBottom: 22 }}>{due.map(l => row(l, { open: true }))}{!due.length && <div style={{ ...card, ...sub }}>None due today.</div>}</div>
       <div style={{ fontFamily: SERIF, fontSize: 18, fontWeight: 700, margin: "0 0 10px" }}>Send today by email <span style={{ ...sub, fontFamily: FONT }}>{pickE.length}</span>{selAll(pickE)}</div>
