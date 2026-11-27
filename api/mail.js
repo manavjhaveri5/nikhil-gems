@@ -30,6 +30,13 @@ export default async function handler(req, res) {
   if (req.body?.action === "gmail_scan" && await cronKeyOk(req, "raj")) return gmail(req, res);
   // eartheditions.co's own emails (order confirmation, password reset), sent from our Gmail.
   if (req.body?.action === "store_mail" && hasStoreSecret(req)) return storeMail(req, res);
+  // Read-only Gmail search for checking the outreach sweep's queries (Raj's key only): thread ids, subjects, senders.
+  if (req.body?.action === "gmail_probe" && await cronKeyOk(req, "raj")) {
+    try {
+      const d = await bridgeCall()({ action: "search", q: String(req.body.q || "").slice(0, 400), max: Math.min(+req.body.max || 10, 30) });
+      return res.json({ threads: (d.threads || []).map(t => ({ id: t.id, subject: t.subject, messages: (t.messages || []).map(m => ({ from: m.from, date: m.date, snippet: m.snippet })) })) });
+    } catch (e) { return res.status(502).json({ error: e.message }); }
+  }
   if (req.body?.action === "weekly_tick" && await cronKeyOk(req, "raj")) {
     // The same 15-minute job also drives the outreach autopilot (lib/outreach.js outreachTick),
     // with whatever time the weekly email left.
