@@ -1207,6 +1207,13 @@ export default async function handler(req, res) {
     if (!(await requireUser(req, res))) return;
     if (action === "story_now") return res.json(await storyNow(body.id, String(body.image || "")));
     if (action === "story_pending") return res.json({ pending: await storyPending() });
+    // The server-drawn "Just listed" image for a piece, without posting it.
+    if (action === "story_preview") {
+      const { data } = await sb().from("app_rows").select("data").eq("key", "ng-listings-v1").eq("id", String(body.id || "")).maybeSingle();
+      if (!data?.data) return res.status(404).json({ error: "Piece not found" });
+      try { return res.json({ image: await renderListedServer(data.data) || null }); }
+      catch (e) { return res.status(500).json({ error: e.message }); }
+    }
     /* A listing photo, passed through so the browser may save it (Etsy's image
        host sends no CORS headers). Only the hosts our listing photos live on. */
     if (action === "image") {

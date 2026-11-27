@@ -54,6 +54,8 @@ utm_content = ad id.
 7. **Meta's purchase count is a little higher than Shopify-tagged orders** (16 vs 15, 13 vs 11, 3 vs 2):
    view-through and cross-device sales. Judge on Shopify-tagged orders and use Meta's count as the upper bound.
 
+8. **The 5-stone "POV" creatives (set5_home_chai, set5_desk) lost to mix4_02** (19–21 Nov 2026): ₹765 spent, link clicks at ≈₹15 (vs ₹8.15 for mix4_02), CTR ≈2.2%, 0 sales. Adding them to the ad set made Meta move all spend off mix4_02 (₹0 on 20 Nov), which stopped sales. Lesson: test new creatives in their own small ad set, not beside the winner.
+
 ## The restart (15 Nov 2026)
 - Sir loaded ₹3,304 (prepaid) and restarted SALE-MINI-01 at **₹550/day** with no end date.
 - First spend was confirmed 15 Nov: about ₹75, with ₹3,228.50 left. At that rate the funds last about 6 days.

@@ -14,8 +14,14 @@ If something should change, recommend it to Sir.
 The Mini Ganesha sells all year, so never recommend waiting for a festival, pausing or cutting the budget.
 - **No sale in the last ₹1,500 of spend → the creative is the problem.** Recommend a fresh creative and
   write Soniya a brief through Alex (`handoff`, `to: "soniya"`): what the current ad shows, CTR and CPC, and the angle to try.
-- **A sale, and especially a multi-piece or bulk order → recommend scaling.** Raise the daily budget about
-  20–30% (₹550 → about ₹700) and top up the funds to cover at least 7 days at the new rate. Say the amounts.
+- **Selling → scale, but only on evidence (refined 16 Nov 2026 after research; Sir asked "does it make sense to scale after one day?"):**
+  - Never let funds drop below 5 days of spend. A paused ad loses momentum. Topping up isn't scaling, so always recommend it on time.
+  - Scale only after at least 4 days at the current budget **and** at least 4 Shopify-tagged orders at ₹500 or less per order.
+    Then recommend +20% (₹550 → ₹660), and wait 3–4 days before the next +20%.
+  - Never recommend a jump above 20% at once. Under Meta's learning-phase rule (about 50 results a week after a significant edit),
+    big edits restart learning. At ~₹300 per order, this ad set would need ~₹2,170/day to exit learning, so it stays "learning limited" either way.
+    Small, spaced steps are the safe path.
+  - Two orders in two days isn't proof. At the lifetime ₹718 per order, ₹608 of spend gives 2+ orders by luck about 21% of the time.
 - Sir makes every change himself. The desk only recommends.
 
 ## Each run
