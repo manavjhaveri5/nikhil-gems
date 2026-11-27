@@ -972,6 +972,39 @@ const storeLiveAt = l => { const st = l.platforms?.store; return st?.status === 
 const storiesDone = async () => new Set(((await appData("ng-stories-v1")) || []).map(r => r.id));
 // The piece's video when it has one (a story suits it best), else the cover
 // photo; a video Instagram refuses (too long, odd format) still gets the photo.
+/* The "Just listed" story drawn on the server, with the same code the Stories
+   module uses in the browser (lib/storyDraw.js), so a story goes up the
+   moment a piece goes live even with no ERP open. Needs @napi-rs/canvas;
+   without it this returns "" and the piece waits for an open ERP tab. */
+let storyFonts = null;
+async function renderListedServer(l) {
+  let C;
+  try { C = await import("@napi-rs/canvas"); } catch { return ""; }
+  const draw = await import("../lib/storyDraw.js");
+  draw.setCanvasFactory((w, h) => C.createCanvas(w, h));
+  storyFonts ||= Promise.all(["500", "600", "700"].map(async w => {
+    const r = await fetch(`https://studio.eartheditions.co/fonts/story/inter-tight-latin-${w}-normal.woff2`);
+    if (!r.ok) throw new Error(`font ${w}: ${r.status}`);
+    C.GlobalFonts.register(Buffer.from(await r.arrayBuffer()), draw.F.sans);
+  })).catch(e => { storyFonts = null; throw e; });
+  const src = (l.images || []).find(u => typeof u === "string" && /^https?:/.test(u));
+  if (!src) return "";
+  const id = String(l.id).replace(/[,()]/g, "");
+  const [{ data: rows }, photo] = await Promise.all([
+    sb().from("store_products").select("title").or(`id.eq.lm-${id},listing_id.eq.${id}`).limit(1),
+    fetch(src).then(r => { if (!r.ok) throw new Error(`photo ${r.status}`); return r.arrayBuffer(); }),
+    storyFonts,
+  ]);
+  const bmp = await C.loadImage(Buffer.from(photo));
+  const { frame, place, tone } = draw.listedLayout(bmp);
+  const cv = C.createCanvas(draw.W, draw.H);
+  draw.drawStory(cv.getContext("2d"), bmp, { kind: "listed", name: draw.storyName(l, rows?.[0]?.title || "") || " ", place, tone, frame });
+  const path = `social-stories/${Date.now().toString(36)}-${l.id}.jpg`;
+  const { error } = await sb().storage.from("ng-media").upload(path, await cv.encode("jpeg", 93), { contentType: "image/jpeg", upsert: true });
+  if (error) throw new Error(`upload: ${error.message}`);
+  return `${(process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL).replace(/\/+$/, "")}/storage/v1/object/public/ng-media/${path}`;
+}
+
 async function postStory(l, image = "") {
   // The "Just listed" image drawn by Listing Manager when there is one; else the plain cover photo, or the video.
   const ours = /^https:\/\/[a-z0-9]+\.supabase\.co\/storage\/v1\/object\/public\//.test(image || "") ? image : "";
@@ -1017,6 +1050,15 @@ async function storyPending(log) {
     .map(({ l }) => ({ id: l.id, title: l.title, images: l.images, type: l.type }));
 }
 
+/* Only ever with the "Just listed" lettering: the image the browser drew, else
+   drawn here. Never a plain photo; "" leaves the piece waiting. */
+const OUR_IMAGE = /^https:\/\/[a-z0-9]+\.supabase\.co\/storage\/v1\/object\/public\//;
+async function lettered(l, image) {
+  if (OUR_IMAGE.test(image || "")) return image;
+  try { return await renderListedServer(l); }
+  catch (e) { console.error("story render", e.message); return ""; }
+}
+
 /* Called by Listing Manager the moment a piece first goes live on the site.
    Answers at once; the post (a video takes a minute or two at Instagram)
    carries on after the reply. */
@@ -1031,13 +1073,11 @@ async function storyNow(id, image) {
   if (l.type !== "unique") return { skipped: "Not one of a kind" };
   if (!storeLiveAt(l)) return { skipped: "Not live on eartheditions.co" };
   if ((await storiesDone()).has(`listed:${l.id}`) || (await readLog()).some(e => e.source === `story:${l.id}` && /^story \(/.test(e.note || ""))) return { skipped: "Story already posted" };
-  // Only ever with the "Just listed" lettering: a plain photo waits for an open ERP tab to draw it.
-  if (!/^https:\/\/[a-z0-9]+\.supabase\.co\/storage\/v1\/object\/public\//.test(image)) return { skipped: "Waiting for the Just listed image" };
-  // Two open tabs could reach the same piece: the first one holds it for 5 minutes.
+  // Two callers could reach the same piece: the first one holds it for 5 minutes.
   const lock = await getSecret(`story_lock_${l.id}`);
   if (lock && Date.now() - lock.at < 5 * 6e4) return { skipped: "Already being posted" };
   await setSecret(`story_lock_${l.id}`, { at: Date.now() });
-  waitUntil(postStory(l, image).catch(e => console.error("story_now", e.message)));
+  waitUntil(lettered(l, image).then(img => img ? postStory(l, img) : setSecret(`story_lock_${l.id}`, { at: 0 })).catch(e => console.error("story_now", e.message)));
   return { posting: true };
 }
 
@@ -1097,8 +1137,15 @@ async function runAutopilot() {
     }
   }
 
-  // 3. Stories for new pieces are not posted here: they need the "Just listed"
-  // image, which only the browser draws. See storyPending / src/storyCatchup.js.
+  // 3. "Just listed" stories still waiting (went live where nothing called
+  // story_now, or the first try failed), drawn here with the Stories module's code.
+  if (auto.stories.on && time() && await connected("instagram")) {
+    for (const p of (await storyPending(log)).slice(0, 3)) {
+      if (!time()) break;
+      const r = await storyNow(p.id, "");
+      if (!r.skipped) done.push(`story: ${p.title}`);
+    }
+  }
 
   // 4. New Instagram posts, sent on.
   if (auto.instagram.on && time() && await connected("instagram")) {
