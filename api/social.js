@@ -328,14 +328,20 @@ async function postInstagram({ text, images = [], video, story = false, account 
     creation = (await g(`${user}/media`, { media_type: "CAROUSEL", children: kids.join(","), caption: text })).id;
   } else if (images[0]) creation = (await g(`${user}/media`, { image_url: images[0], caption: text })).id;
   else fail(400, "Instagram needs a photo or video");
-  // A video is processed before it can go up.
-  for (let i = 0; video && i < 40; i++) {
+  // Instagram processes the media before it can go up: a video for minutes, a
+  // story photo for a few seconds (publishing too soon gave "Media ID is not
+  // available" / "The requested resource does not exist", Nov 2026).
+  for (let i = 0; (video || story) && i < (video ? 40 : 10); i++) {
     const s = await json(await fetch(`${G}/${creation}?fields=status_code&access_token=${encodeURIComponent(t.access_token)}`));
     if (s.status_code === "FINISHED") break;
-    if (s.status_code === "ERROR") fail(502, "Instagram couldn't process the video");
-    await wait(5000);
+    if (s.status_code === "ERROR") fail(502, `Instagram couldn't process the ${video ? "video" : "photo"}`);
+    await wait(video ? 5000 : 2000);
   }
-  const pub = await g(`${user}/media_publish`, { creation_id: creation });
+  let pub;
+  for (let i = 0; ; i++) {
+    try { pub = await g(`${user}/media_publish`, { creation_id: creation }); break; }
+    catch (e) { if (i >= 2 || !/not available|does not exist|not ready/i.test(e.message)) throw e; await wait(4000); }
+  }
   if (story) return { url: `https://www.instagram.com/stories/${(t.name || "@eartheditions_").slice(1)}/`, note: "Story is up for the next 24 hours", id: pub.id };
   const link = await json(await fetch(`${G}/${pub.id}?fields=permalink&access_token=${encodeURIComponent(t.access_token)}`));
   return { url: link.permalink || "" };
@@ -1065,10 +1071,18 @@ async function runAutopilot() {
   if (auto.stories.on && time() && await connected("instagram")) {
     const since = Date.parse(auto.stories.since || "") || Date.now();
     const storyDone = await storiesDone();
+    const storyOk = new Set(), storyFails = new Map();
+    for (const e of log) {
+      if (!String(e.source || "").startsWith("story:") || e.platform !== "instagram") continue;
+      const id = e.source.slice(6);
+      if (/^story \(|Story is up/.test(e.note || "")) storyOk.add(id);
+      else if (/story failed/.test(e.note || "")) storyFails.set(id, (storyFails.get(id) || 0) + 1);
+    }
     const ready = ((await appData("ng-listings-v1")) || [])
       .map(l => ({ l, at: storeLiveAt(l) }))
       .filter(({ l, at }) => l.type === "unique" && !l.deleted && at > since && Date.now() - at >= (+auto.stories.afterHours || 0) * 36e5
-        && !posted.has(`story:${l.id}|instagram`) && !storyDone.has(`listed:${l.id}`))
+        && !storyOk.has(l.id) && (storyFails.get(l.id) || 0) < 3 && !storyDone.has(`listed:${l.id}`)
+        && (!storyFails.get(l.id) || Date.now() - at < 3 * 864e5)) // a failed one is tried again, up to 3 times, while it's still new
       .sort((a, b) => a.at - b.at);
     for (const { l } of ready.slice(0, 3)) {
       if (!time()) break;
