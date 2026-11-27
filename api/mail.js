@@ -37,6 +37,19 @@ export default async function handler(req, res) {
       return res.json({ threads: (d.threads || []).map(t => ({ id: t.id, subject: t.subject, messages: (t.messages || []).map(m => ({ from: m.from, date: m.date, snippet: m.snippet })) })) });
     } catch (e) { return res.status(502).json({ error: e.message }); }
   }
+  // A one-off reply from Sejal to a shop that already wrote back to cold outreach (Raj key only;
+  // the address must belong to an outreach lead, so this can't mail anyone new).
+  if (req.body?.action === "gmail_reply" && await cronKeyOk(req, "raj")) {
+    try {
+      const to = String(req.body.to || "").trim().toLowerCase(), id = String(req.body.lead || "");
+      const { data: row } = await adminClient().from("app_rows").select("data").eq("key", "outreach-leads-v1").eq("id", id).eq("deleted", false).maybeSingle();
+      const l = row?.data;
+      const mine = l && [l.email, l.reply_email, ...(l.also_emails || [])].filter(Boolean).map(x => String(x).toLowerCase()).includes(to);
+      if (!mine || !["replied", "talking", "list"].includes(l.stage)) return res.status(400).json({ error: "not a lead that replied" });
+      const r = await bridgeCall()({ action: "send", to, subject: String(req.body.subject || "").slice(0, 200), body: String(req.body.body || "").slice(0, 8000), name: "Sejal · Earth Editions" });
+      return res.json({ ok: true, messageId: r.messageId, threadId: r.threadId });
+    } catch (e) { return res.status(502).json({ error: e.message }); }
+  }
   if (req.body?.action === "weekly_tick" && await cronKeyOk(req, "raj")) {
     // The same 15-minute job also drives the outreach autopilot (lib/outreach.js outreachTick),
     // with whatever time the weekly email left.
