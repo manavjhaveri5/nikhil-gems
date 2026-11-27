@@ -12,6 +12,7 @@ if (STUDIO) { document.title = STUDIO_NAME; document.querySelector('meta[name="a
 import { warmCache, DEMO_MODE, syncOfflineQueue, getOfflineQueueCount, logActivity } from "./utils.js";
 import { inject as injectAnalytics } from "@vercel/analytics";
 import { watchModals } from "./modalWatch.js";
+import { startStoryCatchup } from "./storyCatchup.js";
 
 const clearAppShellAndReload = async () => {
   try {
@@ -103,11 +104,11 @@ function App() {
     if (DEMO_MODE) return; // skip auth entirely in demo
     supabase.auth.getSession().then(({ data: { session } }) => {
       setSession(session);
-      if (session) warmCache();
+      if (session) { warmCache(); startStoryCatchup(); }
     });
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_, session) => {
       setSession(session);
-      if (session) warmCache();
+      if (session) { warmCache(); startStoryCatchup(); }
     });
     return () => subscription.unsubscribe();
   }, []);

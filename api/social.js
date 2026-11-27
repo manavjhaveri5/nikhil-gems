@@ -991,6 +991,32 @@ async function postStory(l, image = "") {
   try { await sb().rpc("app_data_upsert_item", { p_key: "ng-stories-v1", p_item: { id: `listed:${l.id}`, kind: "listed", listing_id: l.id, how: "auto", at: new Date().toISOString() }, p_prepend: true }); } catch {}
   return { ok: true, how, url: out.url };
 }
+/* New one-of-a-kind pieces still waiting for their "Just listed" story: live on
+   eartheditions.co since the job was switched on, under 3 days old, no story
+   up yet, fewer than 3 failed tries. The story image itself is drawn in the
+   browser by the Stories module (renderListedStory), never by the server, so
+   an open ERP tab picks these up (src/storyCatchup.js) and posts each one. */
+async function storyPending(log) {
+  const auto = await autoSettings();
+  if (!auto.stories.on) return [];
+  const since = Date.parse(auto.stories.since || "") || Date.now();
+  const storyDone = await storiesDone();
+  const ok = new Set(), fails = new Map();
+  for (const e of log || await readLog()) {
+    if (!String(e.source || "").startsWith("story:") || e.platform !== "instagram") continue;
+    const id = e.source.slice(6);
+    if (/^story \(|Story is up/.test(e.note || "")) ok.add(id);
+    else if (/story failed/.test(e.note || "")) fails.set(id, (fails.get(id) || 0) + 1);
+  }
+  return ((await appData("ng-listings-v1")) || [])
+    .map(l => ({ l, at: storeLiveAt(l) }))
+    .filter(({ l, at }) => l.type === "unique" && !l.deleted && at > since && Date.now() - at < 3 * 864e5
+      && Date.now() - at >= (+auto.stories.afterHours || 0) * 36e5
+      && !ok.has(l.id) && (fails.get(l.id) || 0) < 3 && !storyDone.has(`listed:${l.id}`))
+    .sort((a, b) => a.at - b.at)
+    .map(({ l }) => ({ id: l.id, title: l.title, images: l.images, type: l.type }));
+}
+
 /* Called by Listing Manager the moment a piece first goes live on the site.
    Answers at once; the post (a video takes a minute or two at Instagram)
    carries on after the reply. */
@@ -1005,6 +1031,12 @@ async function storyNow(id, image) {
   if (l.type !== "unique") return { skipped: "Not one of a kind" };
   if (!storeLiveAt(l)) return { skipped: "Not live on eartheditions.co" };
   if ((await storiesDone()).has(`listed:${l.id}`) || (await readLog()).some(e => e.source === `story:${l.id}` && /^story \(/.test(e.note || ""))) return { skipped: "Story already posted" };
+  // Only ever with the "Just listed" lettering: a plain photo waits for an open ERP tab to draw it.
+  if (!/^https:\/\/[a-z0-9]+\.supabase\.co\/storage\/v1\/object\/public\//.test(image)) return { skipped: "Waiting for the Just listed image" };
+  // Two open tabs could reach the same piece: the first one holds it for 5 minutes.
+  const lock = await getSecret(`story_lock_${l.id}`);
+  if (lock && Date.now() - lock.at < 5 * 6e4) return { skipped: "Already being posted" };
+  await setSecret(`story_lock_${l.id}`, { at: Date.now() });
   waitUntil(postStory(l, image).catch(e => console.error("story_now", e.message)));
   return { posting: true };
 }
@@ -1065,31 +1097,8 @@ async function runAutopilot() {
     }
   }
 
-  // 3. New one-of-a-kind pieces on eartheditions.co as stories. Normally posted
-  // the moment the piece goes live (action "story_now"); this hourly pass
-  // catches any that went live some other way, or whose post failed.
-  if (auto.stories.on && time() && await connected("instagram")) {
-    const since = Date.parse(auto.stories.since || "") || Date.now();
-    const storyDone = await storiesDone();
-    const storyOk = new Set(), storyFails = new Map();
-    for (const e of log) {
-      if (!String(e.source || "").startsWith("story:") || e.platform !== "instagram") continue;
-      const id = e.source.slice(6);
-      if (/^story \(|Story is up/.test(e.note || "")) storyOk.add(id);
-      else if (/story failed/.test(e.note || "")) storyFails.set(id, (storyFails.get(id) || 0) + 1);
-    }
-    const ready = ((await appData("ng-listings-v1")) || [])
-      .map(l => ({ l, at: storeLiveAt(l) }))
-      .filter(({ l, at }) => l.type === "unique" && !l.deleted && at > since && Date.now() - at >= (+auto.stories.afterHours || 0) * 36e5
-        && !storyOk.has(l.id) && (storyFails.get(l.id) || 0) < 3 && !storyDone.has(`listed:${l.id}`)
-        && (!storyFails.get(l.id) || Date.now() - at < 3 * 864e5)) // a failed one is tried again, up to 3 times, while it's still new
-      .sort((a, b) => a.at - b.at);
-    for (const { l } of ready.slice(0, 3)) {
-      if (!time()) break;
-      const r = await postStory(l);
-      done.push(r.ok ? `story: ${l.title}` : `story failed: ${r.error}`);
-    }
-  }
+  // 3. Stories for new pieces are not posted here: they need the "Just listed"
+  // image, which only the browser draws. See storyPending / src/storyCatchup.js.
 
   // 4. New Instagram posts, sent on.
   if (auto.instagram.on && time() && await connected("instagram")) {
@@ -1150,6 +1159,7 @@ export default async function handler(req, res) {
 
     if (!(await requireUser(req, res))) return;
     if (action === "story_now") return res.json(await storyNow(body.id, String(body.image || "")));
+    if (action === "story_pending") return res.json({ pending: await storyPending() });
     /* A listing photo, passed through so the browser may save it (Etsy's image
        host sends no CORS headers). Only the hosts our listing photos live on. */
     if (action === "image") {
