@@ -126,7 +126,8 @@ function PersonPicker({ people, value = [], onChange, me }) {
 
 /* ─── A card on the board ──────────────────────────────────────── */
 function BoardCard({ it, info, col, people, me, isNew, onOpen, onToggle, onDragStart, onAdvance, dragging }) {
-  const assignees = (it.assignees || []).map(k => people.find(p => p.key === k) || { key: k, name: k, color: "#999" });
+  // Only the people this viewer may see: staff see themselves, never their colleagues' names.
+  const assignees = (it.assignees || []).map(k => people.find(p => p.key === k)).filter(Boolean);
   const due = it.status === "done" || info?.stage === "listed" ? null : dueTone(it.dueDate);
   const shoot = it.kind === "shoot";
   const img = shoot ? (info?.listingImg || info?.photo || it.stockPhoto) : (it.photos || [])[0];
@@ -184,10 +185,12 @@ function BoardCard({ it, info, col, people, me, isNew, onOpen, onToggle, onDragS
 /* ─── The board ───────────────────────────────────────────────── */
 export default function TeamBoard({ onHome, currentUser, isAdmin, allUsers = [], onOpenModule, onOpenStock }) {
   const me = isAdmin ? "admin" : String(currentUser?.email || "").toLowerCase();
-  const people = useMemo(() => [
+  const allPeople = useMemo(() => [
     { key: "admin", name: "Admin", color: PALETTE[0] },
     ...allUsers.filter(u => u?.email).map((u, i) => ({ key: u.email.toLowerCase(), name: u.name || u.email, color: PALETTE[(i + 1) % PALETTE.length] })),
   ], [allUsers]);
+  // Staff never see who else is on the team: only themselves (and "Common").
+  const people = useMemo(() => isAdmin ? allPeople : allPeople.filter(p => p.key === me), [allPeople, isAdmin, me]);
   const rawItems = useLiveK(BOARD_KEY, []);
   const rawStock = useLiveK(KEYS.stock, []);
   const rawListings = useLiveK(LISTINGS_KEY, []);
@@ -214,7 +217,8 @@ export default function TeamBoard({ onHome, currentUser, isAdmin, allUsers = [],
   useEffect(() => { const t = setTimeout(() => { try { localStorage.setItem(seenKey, iso()); } catch {} }, 4000); return () => clearTimeout(t); }, [seenKey]);
   const isNew = it => !!seenAt && (it.assignees || []).includes(me) && it.createdBy !== me && it.createdAt > seenAt;
 
-  const canSee = it => isAdmin || it.shared || !(it.assignees || []).length || (it.assignees || []).includes(me) || it.createdBy === me;
+  // Staff see only what is assigned to them, and common items (visible to all).
+  const canSee = it => isAdmin || it.shared || !(it.assignees || []).length || (it.assignees || []).includes(me);
   const visible = items.filter(canSee);
 
   // Stock and listings, for the photography plan.
@@ -386,8 +390,8 @@ export default function TeamBoard({ onHome, currentUser, isAdmin, allUsers = [],
           <Chip on={who === "all"} onClick={() => setWho("all")}>{isAdmin ? "Everyone" : "All I can see"}</Chip>
           <Chip on={who === "mine"} onClick={() => setWho("mine")}>Mine <span style={{ opacity: .7 }}>{openOf(me)}</span></Chip>
           <Chip on={who === "common"} onClick={() => setWho("common")} color="#1A6A6A">Common <span style={{ opacity: .7 }}>{commonOpen}</span></Chip>
-          <span style={{ width: 1, height: 20, background: C.border, margin: "0 4px", flexShrink: 0 }} />
-          {people.filter(p => p.key !== me).map(p => (
+          {isAdmin && <span style={{ width: 1, height: 20, background: C.border, margin: "0 4px", flexShrink: 0 }} />}
+          {isAdmin && people.filter(p => p.key !== me).map(p => (
             <button key={p.key} onClick={() => setWho(who === p.key ? "all" : p.key)}
               style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "3px 11px 3px 3px", borderRadius: 20, border: `1px solid ${who === p.key ? p.color : C.border}`, background: who === p.key ? p.color : C.surface, color: who === p.key ? "#FAF0DC" : C.inkMid, fontSize: 12, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap", fontFamily: "inherit", flexShrink: 0 }}>
               <Avatar p={p} size={22} />{p.name.split(" ")[0]} <span style={{ opacity: .7 }}>{openOf(p.key)}</span>
@@ -506,7 +510,7 @@ function DetailPanel({ it, info, stage, people, me, isAdmin, onClose, onSave, on
   const [sending, setSending] = useState(false);
   useEffect(() => { setTitle(it.title || ""); setNotes(it.notes || ""); }, [it.id]);
   const cols = shoot ? SHOOT_COLS : TASK_COLS;
-  const by = k => people.find(p => p.key === k) || { key: k, name: k === "admin" ? "Admin" : (k || "Someone"), color: "#999" };
+  const by = k => people.find(p => p.key === k) || { key: k, name: k === "admin" ? "Admin" : isAdmin ? (k || "Someone") : "Teammate", color: "#999" };
   const canDelete = isAdmin || it.createdBy === me;
   const commit = patch => onSave(it, patch);
   const addComment = async () => {
@@ -563,7 +567,7 @@ function DetailPanel({ it, info, stage, people, me, isAdmin, onClose, onSave, on
           <div style={section}>
             <div style={label}>Assigned to</div>
             <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-              <PersonPicker people={people} value={it.assignees || []} onChange={v => commit({ assignees: v, shared: !v.length ? true : !!it.shared })} me={me} />
+              <PersonPicker people={people} value={it.assignees || []} onChange={v => { const next = isAdmin ? v : [...(it.assignees || []).filter(k => k !== me), ...v]; commit({ assignees: next, shared: !next.length ? true : !!it.shared }); }} me={me} />
               <Chip on={!!it.shared || !(it.assignees || []).length} onClick={() => commit({ shared: !(it.shared || !(it.assignees || []).length) })} color="#1A6A6A" title="Common items are visible to the whole team">Common</Chip>
             </div>
           </div>
