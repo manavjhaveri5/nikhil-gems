@@ -36,6 +36,7 @@ const AccountingApp     = React.lazy(() => import("./src/AccountingApp.jsx"));
 const ListingManagerApp = React.lazy(() => import("./src/ListingManagerApp.jsx"));
 const EarthEditionsInvoices = React.lazy(() => import("./src/EarthEditionsInvoices.jsx"));
 const DatasetsApp       = React.lazy(() => import("./src/DatasetsApp.jsx"));
+const TeamBoard         = React.lazy(() => import("./src/TeamBoard.jsx"));
 const ImageLibraryApp   = React.lazy(() => import("./src/ImageLibraryApp.jsx"));
 const ExportReconciliationApp = React.lazy(() => import("./src/ExportReconciliationApp.jsx"));
 const BgRemoveSandbox   = React.lazy(() => import("./src/BgRemoveSandbox.jsx"));
@@ -603,6 +604,7 @@ function TodoWidget({todoKey="ng-todos-v1",isAdmin=true,allUsers=[],currentUser=
         <div style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:mob?16:15,fontWeight:600,color:C.ink,lineHeight:1}}>To-Do</div>
         {pending>0&&<span style={{background:C.amber,color:"#fff",borderRadius:10,padding:"1px 8px",fontSize:9,fontWeight:700,lineHeight:1.6,flexShrink:0}}>{pending}</span>}
         <div style={{flex:1}}/>
+        <button onClick={()=>window.dispatchEvent(new CustomEvent("ng-open-module",{detail:"team"}))} title="The full-screen team board: tasks for everyone and the photography plan" style={{background:C.ink,border:"none",borderRadius:5,padding:"3px 9px",fontSize:11,cursor:"pointer",color:"#FAF0DC",lineHeight:1.4,fontWeight:600}}>Team Board ⤢</button>
         {assignees.length>0&&<button onClick={()=>{setAssignOpen(true);setAssignTargetId("");setAssignText("");setAssignDue("");setAssignPhotos([]);}} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:5,padding:"3px 9px",fontSize:11,cursor:"pointer",color:C.inkMid,lineHeight:1.4}}>Assign →</button>}
         {doneCount>0&&<button onClick={()=>setShowDone(v=>!v)} style={{background:"none",border:"none",cursor:"pointer",fontSize:11,color:C.inkFaint,padding:0}}>{showDone?`Hide completed`:`${doneCount} completed`}</button>}
       </div>
@@ -727,6 +729,7 @@ const groupsOf=mods=>GROUPS
 const ungrouped=mods=>(mods||[]).filter(m=>!m.group);
 
 const MODS=[
+  {id:"team",icon:"🗂️",title:"Team Board",desc:"Tasks, photography plan and listings to make — shared with the team",ready:true},
   {id:"ledger",icon:"📒",title:"Ledger",desc:"Classify bank and cash, attach bills, settle inter-company",group:"accounting",ready:true},
   {id:"purchases",icon:"📦",title:"Purchases",desc:"Orders, bills, expand to stock",group:"accounting",ready:true},
   {id:"vendors",icon:"🏢",title:"Vendors",desc:"Suppliers, GST, history",group:"accounting",ready:true},
@@ -838,13 +841,21 @@ const STANDUP_SEEN_KEY="ng-standup-seen-v1";
 /* The to-do list one tap away on every screen: a button that floats in the
    corner with the count still open, and the list itself in a drawer. On the
    home page, where the list already is, it scrolls to it instead. */
-function TodoFab({todoKey="ng-todos-v1",isAdmin,allUsers,currentUser,onHome,refreshKey}){
+function TodoFab({todoKey="ng-todos-v1",isAdmin,allUsers,currentUser,onHome,refreshKey,onOpenBoard}){
   const [open,setOpen]=useState(false);
   const [pending,setPending]=useState(0);
-  const count=useCallback(()=>{loadK(todoKey).then(d=>setPending(Array.isArray(d)?d.filter(x=>!x.done).length:0)).catch(()=>{});},[todoKey]);
+  // The old personal list plus the team board's open cards for this person.
+  const me=isAdmin?"admin":String(currentUser?.email||"").toLowerCase();
+  const count=useCallback(()=>{
+    Promise.all([loadK(todoKey).catch(()=>[]),loadK("ng-team-board-v1").catch(()=>[])]).then(([d,b])=>{
+      const own=Array.isArray(d)?d.filter(x=>!x.done).length:0;
+      const board=Array.isArray(b)?b.filter(x=>x&&(x.assignees||[]).includes(me)&&(x.kind==="shoot"?x.stage!=="listed":x.status!=="done")).length:0;
+      setPending(own+board);
+    });
+  },[todoKey,me]);
   // Counted again on every change of screen, so edits made on the home page show.
   useEffect(()=>{count();},[count,refreshKey]);
-  useEffect(()=>onCacheRefresh(keys=>{if(keys.includes(todoKey))count();}),[todoKey,count]);
+  useEffect(()=>onCacheRefresh(keys=>{if(keys.includes(todoKey)||keys.includes("ng-team-board-v1"))count();}),[todoKey,count]);
   useEffect(()=>{
     if(!open)return;
     const k=e=>{if(e.key==="Escape")setOpen(false);};
@@ -853,6 +864,7 @@ function TodoFab({todoKey="ng-todos-v1",isAdmin,allUsers,currentUser,onHome,refr
   },[open]);
   useEffect(()=>{if(!open)count();},[open,count]);
   const tap=()=>{
+    if(onOpenBoard){onOpenBoard();return;}
     const el=onHome&&document.getElementById("ng-todo-input");
     if(!el){setOpen(true);return;}
     el.scrollIntoView({behavior:"smooth",block:"center"});
@@ -860,7 +872,7 @@ function TodoFab({todoKey="ng-todos-v1",isAdmin,allUsers,currentUser,onHome,refr
   };
   return(
     <>
-      <button onClick={tap} title="To-do list" aria-label={`To-do list, ${pending} open`}
+      <button onClick={tap} title="Team Board" aria-label={`Team Board, ${pending} open`}
         style={{position:"fixed",right:mob?14:24,bottom:mob?"calc(78px + env(safe-area-inset-bottom))":24,zIndex:650,width:52,height:52,borderRadius:26,border:"none",background:C.ink,color:"#FAF0DC",fontSize:22,cursor:"pointer",boxShadow:"0 6px 20px rgba(26,19,8,.28)",display:"flex",alignItems:"center",justifyContent:"center",padding:0}}>
         📝
         {pending>0&&<span style={{position:"absolute",top:-4,right:-4,minWidth:21,height:21,padding:"0 5px",borderRadius:11,background:C.gold,color:"#fff",fontSize:11,fontWeight:700,lineHeight:"17px",textAlign:"center",border:`2px solid ${C.bg}`,boxSizing:"border-box"}}>{pending>99?"99+":pending}</span>}
@@ -26568,7 +26580,7 @@ export default function Root({onSignOut}){
   const isAdmin=userProfile===false;
   const todoKey=isAdmin?"ng-todos-v1":TODO_KEY_FOR(currentEmail);
   const currentUser=isAdmin?{name:"Admin",email:currentEmail,role:"admin"}:userProfile||null;
-  const allowedMods=isAdmin?[...MODS,{id:"users",icon:"👥",title:"Users",desc:"Manage staff and permissions",group:"admin",ready:true},{id:"datasets",icon:"🗂️",title:"Datasets",desc:"Manage shapes, categories, markets and more",group:"admin",ready:true}]:MODS.filter(m=>(userProfile?.allowedModules||[]).includes(m.id)||(m.id==="orders"&&(userProfile?.allowedModules||[]).includes("etsy")));
+  const allowedMods=isAdmin?[...MODS,{id:"users",icon:"👥",title:"Users",desc:"Manage staff and permissions",group:"admin",ready:true},{id:"datasets",icon:"🗂️",title:"Datasets",desc:"Manage shapes, categories, markets and more",group:"admin",ready:true}]:MODS.filter(m=>m.id==="team"||(userProfile?.allowedModules||[]).includes(m.id)||(m.id==="orders"&&(userProfile?.allowedModules||[]).includes("etsy")));
 
   // Handle Shopify OAuth redirect — token arrives in URL hash
   useEffect(()=>{
@@ -26787,6 +26799,7 @@ export default function Root({onSignOut}){
     else if(mod==="soniya")content=<React.Suspense fallback={null}><SoniyaApp onHome={goHome}/></React.Suspense>;
     else if(mod==="alex")content=<React.Suspense fallback={null}><AlexApp onHome={goHome}/></React.Suspense>;
     else if(mod==="outreach")content=<React.Suspense fallback={null}><OutreachApp onHome={goHome}/></React.Suspense>;
+    else if(mod==="team")content=<React.Suspense fallback={<div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",color:"#8C7E66",fontSize:13}}>Loading…</div>}><TeamBoard onHome={goHome} currentUser={currentUser} isAdmin={isAdmin} allUsers={allUsers} onOpenModule={id=>go(id)} onOpenStock={allowedMods.some(m=>m.id==="stock")?id=>{setStartStockId(id);setMod("stock");setScreen("app");rememberMod("stock");}:null}/></React.Suspense>;
     else if(mod==="ai")content=<AIAssistantApp onHome={goHome}/>;
     else if(mod==="users"&&isAdmin)content=<UsersApp onHome={goHome}/>;
     else if(mod==="datasets"&&isAdmin)content=<React.Suspense fallback={<div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",color:"#8C7E66",fontSize:13}}>Loading…</div>}><DatasetsApp onHome={goHome}/></React.Suspense>;
@@ -26887,7 +26900,7 @@ export default function Root({onSignOut}){
         </div>
       )}
       {content}
-      <TodoFab todoKey={todoKey} isAdmin={isAdmin} allUsers={allUsers} currentUser={currentUser} onHome={screen==="welcome"} refreshKey={`${screen}:${mod}`}/>
+      {!(screen==="app"&&mod==="team")&&<TodoFab todoKey={todoKey} isAdmin={isAdmin} allUsers={allUsers} currentUser={currentUser} onHome={screen==="welcome"} refreshKey={`${screen}:${mod}`} onOpenBoard={()=>go("team")}/>}
       {mob&&(
         <div className="mob-tabbar" style={{position:"fixed",bottom:0,left:0,right:0,zIndex:600,background:C.surface,borderTop:`1px solid ${C.border}`,display:"flex",alignItems:"stretch",paddingBottom:"env(safe-area-inset-bottom)",boxShadow:"0 -2px 12px rgba(26,19,8,.07)"}}>
           {[{id:null,icon:"🏠",label:"Home"},{id:"stock",icon:"💎",label:"Stock"},{id:"purchases",icon:"📦",label:"Purchases"},{id:"shows",icon:"🌐",label:"Shows"},{id:"finance",icon:"💰",label:"Finance"}].filter(item=>!item.id||allowedMods.find(m=>m.id===item.id)).map(item=>{
