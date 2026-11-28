@@ -215,6 +215,7 @@ const seen = new Set(), outL = [];
 let dropped = { known: 0, dup: 0, nocontact: 0 };
 for (const f of ins) for (const l of JSON.parse(readFileSync(f, "utf8"))) {
   if (l.drop) continue;
+  if (l.email) l.email = String(l.email).trim().replace(/^www\./i, "").replace(/[.,;:]+$/, "");
   const h = host(l.website), em = String(l.email || "").toLowerCase();
   if ((em && known.has(em)) || (h && known.has(h)) || (em && known.has(em.split("@")[1])) || (l.instagram && known.has(l.instagram.toLowerCase())) || known.has(`name:${normName(l.display || l.name)}`)) { dropped.known++; continue; }
   const k = h || (l.instagram || "").toLowerCase() || l.etsy_url || l.name.toLowerCase();
