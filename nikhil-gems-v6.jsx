@@ -27,6 +27,7 @@ import { invRemitLinks, withRemitLink, NG_REMIT_KEY } from "./src/remittances.js
 import { nextLocation } from "./src/listingChannels.js";
 import MonthPicker from "./src/MonthPicker.jsx";
 import AtyStockView from "./src/AtyStock.jsx";
+import NgStockBook from "./src/NgStockBook.jsx";
 import { requestAtyStockRebuild } from "./src/atyStockSync.js";
 import { isToAtyahara } from "./src/atyStock.js";
 import GmailFinder from "./src/GmailFinder.jsx";
@@ -9536,8 +9537,10 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
             }).sort((a,b)=>a.cat.localeCompare(b.cat));
             return(
               <div>
+                <NgStockBook purchases={purchases} invoices={invoices} onViewBill={onViewBill}/>
+                <div style={{fontSize:14,fontWeight:800,margin:"4px 0 4px"}}>Category store</div>
                 <div style={{fontSize:12,color:C.inkMid,marginBottom:11}}>
-                  Qty updates automatically: increases when a bill is confirmed (if "Track accounting stock" is ticked), decreases when an invoice deducts from it.
+                  The categories the invoice form picks from. Qty here rises when a bill is confirmed and falls only when an invoice line is linked to a category, so it is not the stock book.
                 </div>
                 {acctRows.length===0
                   ?<div style={{background:C.surface,border:`1.5px solid ${C.border}`,borderRadius:9,boxShadow:"0 1px 4px rgba(26,19,8,.04)",padding:"48px 0",textAlign:"center"}}><div style={{fontSize:28,opacity:.2,marginBottom:8}}>📦</div><p style={{fontSize:13,color:C.inkMid}}>No accounting stock yet</p><p style={{fontSize:11,color:C.inkFaint,marginTop:4}}>Confirm a purchase bill with "Track accounting stock" ticked to create entries here</p></div>
