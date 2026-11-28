@@ -684,7 +684,9 @@ function StockPicker({ stock, listingsByStock, planned, people, me, isAdmin, onC
   const shown = useMemo(() => physical.filter(s => {
     if (filter === "nophoto" && photosOf(s).length) return false;
     if (filter === "unlisted" && (listed(s) || s.postedEtsy)) return false;
-    if (filter === "photographed" && (!photosOf(s).length || listed(s))) return false;
+    if (filter === "photographed" && (!photosOf(s).length || listed(s) || s.postedEtsy)) return false;
+    // Nothing left on the card: only under "All cards".
+    if (filter !== "all" && !(+s.qty > 0) && !(+s.qty2 > 0)) return false;
     if (!ql) return true;
     return [s.material, s.shape, s.size, s.location, s.sku, s.notes, s.vendor, s.origin].some(v => String(v || "").toLowerCase().includes(ql));
   }).sort((a, b) => String(b.addedDate || b.createdAt || "").localeCompare(String(a.addedDate || a.createdAt || ""))), [physical, filter, ql, listingsByStock]);
