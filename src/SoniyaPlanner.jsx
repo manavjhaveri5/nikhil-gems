@@ -60,6 +60,9 @@ const STAGES = [
   ["caption", "5 · Caption", "The Instagram caption and hashtags.", ["caption", "hashtags"]],
 ];
 const STATUS = { idea: ["Idea", C.inkMid, C.card], draft: ["Working", C.blue, C.blueBg], approved: ["Approved", C.green, C.greenBg], scheduled: ["Scheduled", C.purple, C.purpleBg], published: ["Published", C.inkMid, C.card], skipped: ["Skipped", C.inkFaint, C.card] };
+/* A finished image that is posted as it is: a Canva export, or a file supplied ready-made (source "file"). */
+const fixedFinal = p => !!p?.final?.url && ["canva", "file"].includes(p.final.source);
+const finalName = p => p.final?.source === "file" ? "Finished file" : "Canva version";
 const Tag = ({ c = C.inkMid, bg = C.card, children }) => <span style={{ fontSize: 9.5, fontWeight: 700, textTransform: "uppercase", letterSpacing: .4, background: bg, color: c, borderRadius: 4, padding: "2px 6px", whiteSpace: "nowrap" }}>{children}</span>;
 
 /* ── storage ─────────────────────────────────────────────────────────── */
@@ -305,7 +308,7 @@ function Publish({ post, no, onSave, ig }) {
     await onSave({ ...post, final: { url, source: "canva", at: new Date().toISOString() } });
   });
   const imageForPost = async () => {
-    if (post.final?.url && post.final.source === "canva") return post.final;
+    if (fixedFinal(post)) return post.final;
     const jpg = await inFrame(data, "soniyaJpeg");
     return { url: await store(b64Blob(jpg, "image/jpeg"), `${post.id}-final.jpg`), source: "erp", at: new Date().toISOString() };
   };
@@ -345,9 +348,9 @@ function Publish({ post, no, onSave, ig }) {
       {post.canva && <button disabled={!!busy} onClick={fromCanva} style={btn(C.ink, "#fff")}>{busy === "back" ? "Bringing it back…" : "Bring back from Canva"}</button>}
     </div>
     <div style={{ ...sub, marginBottom: 10 }}>{post.canva ? `In Canva since ${new Date(post.canva.at).toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}. Each line of text, photo and the stamp are separate elements; fonts are Canva's own copies, so check spacing once.` : "Sends this post to your Canva as an editable design."}</div>
-    {post.final?.source === "canva" && <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 10 }}>
+    {fixedFinal(post) && <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 10 }}>
       <img src={post.final.url} alt="" style={{ width: 64, borderRadius: 4, border: `1px solid ${C.border}` }} />
-      <div style={{ fontSize: 12.5, flex: 1 }}>The Canva version will be posted.{stale && <div style={{ color: C.amber }}>You've changed the post here since; bring it back again or use the ERP version.</div>}</div>
+      <div style={{ fontSize: 12.5, flex: 1 }}>The {finalName(post).toLowerCase()} will be posted.{stale && <div style={{ color: C.amber }}>You've changed the post here since; bring it back again or use the ERP version.</div>}</div>
       <button onClick={() => onSave({ ...post, final: null })} style={btn()}>Use the ERP version</button>
     </div>}
 
@@ -400,7 +403,7 @@ function PostStudio({ post, no, onSave, onBack, ctx, library }) {
   const [err, setErr] = useState("");
   const [view, setView] = useState("work");
   const [ver, setVer] = useState(null);
-  const [showFinal, setShowFinal] = useState(false);
+  const [showFinal, setShowFinal] = useState(post.final?.source === "file");
   const cur = post.cur;
   const version = (p, by, stage, note) => [...(p.versions || []), { n: (p.versions?.length || 0) + 1, at: new Date().toISOString(), by, stage, note: note || "", snap: p.cur }].slice(-40);
   const save = async (p) => { try { await onSave(p); } catch (e) { setErr(e.message); } };
@@ -489,8 +492,8 @@ function PostStudio({ post, no, onSave, onBack, ctx, library }) {
     </div> : view === "compare" ? <Compare post={post} no={no} /> :
     <div style={{ display: "grid", gridTemplateColumns: mob() ? "minmax(0,1fr)" : `${pw}px minmax(0,1fr)`, gap: 16, alignItems: "start" }}>
       <div style={{ position: mob() ? "static" : "sticky", top: 120 }}>
-        {post.final?.source === "canva" && !ver && <div style={{ display: "flex", gap: 4, marginBottom: 6 }}>{[["live", "Live render"], ["canva", "Canva version"]].map(([k, l]) => <button key={k} onClick={() => setShowFinal(k === "canva")} style={(k === "canva") === showFinal ? btn(C.ink, "#fff") : btn()}>{l}</button>)}</div>}
-        {showFinal && post.final?.source === "canva" && !ver ? <img src={post.final.url} alt="" style={{ width: pw, display: "block", borderRadius: 4 }} /> : <Preview data={ver ? ver.snap : cur} width={pw} no={no} />}
+        {fixedFinal(post) && !ver && <div style={{ display: "flex", gap: 4, marginBottom: 6 }}>{[["live", "Live render"], ["canva", finalName(post)]].map(([k, l]) => <button key={k} onClick={() => setShowFinal(k === "canva")} style={(k === "canva") === showFinal ? btn(C.ink, "#fff") : btn()}>{l}</button>)}</div>}
+        {showFinal && fixedFinal(post) && !ver ? <img src={post.final.url} alt="" style={{ width: pw, display: "block", borderRadius: 4 }} /> : <Preview data={ver ? ver.snap : cur} width={pw} no={no} />}
         {ver && <div style={{ display: "flex", gap: 6, marginTop: 8 }}><span style={{ ...sub, flex: 1 }}>Viewing version {ver.n}</span><button onClick={() => restore(ver)} style={btn(C.ink, "#fff")}>Go back to this</button><button onClick={() => setVer(null)} style={btn()}>Close</button></div>}
         <div style={{ ...card, marginTop: 10, padding: "10px 12px" }}>
           <span style={lab}>Versions</span>
@@ -666,7 +669,8 @@ export default function SoniyaPlanner({ brief, brand, notes, onNotesChanged }) {
 function GridCell({ p, no, onOpen }) {
   const [sl, sc, sbg] = STATUS[p.status] || STATUS.idea;
   return <div onClick={onOpen} style={{ cursor: "pointer", position: "relative" }}>
-    {p.cur ? <AutoPreview data={p.cur} no={no} style={{ borderRadius: 0 }} />
+    {p.final?.source === "file" && p.final.url ? <img src={p.final.url} alt="" style={{ width: "100%", aspectRatio: "4 / 5", objectFit: "cover", display: "block" }} />
+      : p.cur ? <AutoPreview data={p.cur} no={no} style={{ borderRadius: 0 }} />
       : <div style={{ width: "100%", aspectRatio: "4 / 5", background: TILES[p.idea?.tile] || C.card, display: "flex", alignItems: "center", justifyContent: "center", padding: 10, textAlign: "center", fontSize: 12, color: DARK.has(p.idea?.tile) ? "#F7F0E6" : "#3A2A23" }}>{p.idea?.subject}<br />(not drafted)</div>}
     <div style={{ position: "absolute", left: 4, bottom: 4 }}><Tag c={sc} bg={sbg}>{fmtDay(p.date)} · {sl}</Tag></div>
   </div>;
